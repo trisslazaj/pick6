@@ -2,7 +2,10 @@
 // arithmetic, roster filling, cliff and run detection. No I/O, no rendering.
 package engine
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 // Player is the engine's view of a draftable player.
 type Player struct {
@@ -159,6 +162,59 @@ func (s *State) Draft(playerID string) {
 	s.PickNo++
 }
 
+// ApplyRemote records a pick reported by a live feed, trusting the feed's own
+// slot and pick number rather than inferring them from the clock.
+//
+// It also cross-checks our snake math against reality: the feed says which slot
+// made pick N, and so do we. A mismatch means our model of the draft order is
+// wrong — a reversal round, a non-snake type that slipped past validation, a
+// custom order — and every survival number downstream would be quietly bogus.
+// Better to surface it than to keep drawing a confident board.
+func (s *State) ApplyRemote(pickNo, round, slot int, playerID string) error {
+	if s.Taken[playerID] {
+		return nil // already applied; polling returns the full list every time
+	}
+	if want := s.SlotAt(pickNo); want != slot {
+		return fmt.Errorf("draft order desync at pick %d: feed says slot %d, snake math says %d",
+			pickNo, slot, want)
+	}
+	s.Taken[playerID] = true
+	s.Rosters[slot] = append(s.Rosters[slot], playerID)
+	s.Picks = append(s.Picks, Pick{PickNo: pickNo, Round: round, Slot: slot, PlayerID: playerID})
+	if pickNo >= s.PickNo {
+		s.PickNo = pickNo + 1
+	}
+	return nil
+}
+
+// EnsurePlayer registers a player we didn't know about, keeping whatever the
+// caller knows (name, position, team) and leaving value and tier at zero.
+//
+// A live draft will absolutely pick players outside our board: it runs 192 picks
+// against a 201-player ADP list, and people reach for handcuffs and rookies that
+// never appear in ADP at all. Without this they'd render as blank roster rows.
+// Zero value means they're untiered, so cliff logic ignores them — correct, since
+// we have no basis to tier someone no source ranked.
+func (s *State) EnsurePlayer(p Player) {
+	if p.ID == "" {
+		return
+	}
+	if _, known := s.Players[p.ID]; known {
+		return
+	}
+	if p.Name == "" {
+		p.Name = "unknown player"
+	}
+	s.Players[p.ID] = p
+}
+
+// SetRoster replaces the assumed lineup, e.g. with one read from Sleeper.
+func (s *State) SetRoster(r Roster) {
+	if len(r.Slots) > 0 {
+		s.Roster = r
+	}
+}
+
 // Undo reverses the most recent pick.
 func (s *State) Undo() {
 	if len(s.Picks) == 0 {
@@ -224,10 +280,10 @@ func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
 	filled = make([]string, len(s.Roster.Slots))
 	used := map[string]bool{}
 
-	// Dedicated slots first, so a flex-eligible player never squats on FLEX
-	// while his own position sits open.
+	// Dedicated slots first, so a flex-eligible player never squats on a flex
+	// slot while his own position sits open.
 	for i, want := range s.Roster.Slots {
-		if want == "FLEX" {
+		if isFlexSlot(want) {
 			continue
 		}
 		for _, id := range s.Rosters[slot] {
@@ -242,11 +298,11 @@ func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
 		}
 	}
 	for i, want := range s.Roster.Slots {
-		if want != "FLEX" {
+		if !isFlexSlot(want) {
 			continue
 		}
 		for _, id := range s.Rosters[slot] {
-			if used[id] || !FlexEligible[s.Players[id].Pos] {
+			if used[id] || !EligibleFor(want, s.Players[id].Pos) {
 				continue
 			}
 			filled[i] = id
@@ -339,12 +395,27 @@ func (s *State) Need(pos string) float64 {
 			return NeedStarter
 		}
 	}
-	if FlexEligible[pos] {
-		for i, want := range s.Roster.Slots {
-			if want == "FLEX" && filled[i] == "" {
-				return NeedFlex
-			}
+	for i, want := range s.Roster.Slots {
+		if isFlexSlot(want) && filled[i] == "" && EligibleFor(want, pos) {
+			return NeedFlex
 		}
 	}
 	return NeedBench
+}
+
+// isFlexSlot reports whether a lineup slot takes more than one position.
+func isFlexSlot(slot string) bool {
+	return slot == "FLEX" || slot == "SUPERFLEX"
+}
+
+// EligibleFor reports whether a position can fill a lineup slot.
+func EligibleFor(slot, pos string) bool {
+	switch slot {
+	case "FLEX":
+		return FlexEligible[pos]
+	case "SUPERFLEX":
+		return SuperFlexEligible[pos]
+	default:
+		return slot == pos
+	}
 }

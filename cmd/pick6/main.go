@@ -12,7 +12,7 @@ usage:
   pick6 fetch   download and cache player data + adp, build the mapping
   pick6 tiers   print the current tier board (run fetch first)
   pick6 mock    replay a scripted draft against the real ui
-  pick6 live    poll a sleeper draft and render the board (not built yet)
+  pick6 live    poll a sleeper draft and render the board
   pick6 board   static best-available board, manual mark-taken (not built yet)
 `
 
@@ -38,7 +38,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "mock failed: %v\n", err)
 			os.Exit(1)
 		}
-	case "live", "board":
+	case "live":
+		if err := runLive(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "live failed: %v\n", err)
+			os.Exit(1)
+		}
+	case "board":
 		fmt.Fprintf(os.Stderr, "%s isn't built yet — milestone %s\n", os.Args[1], milestoneOf(os.Args[1]))
 		os.Exit(1)
 	case "-h", "--help", "help":

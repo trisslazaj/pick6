@@ -1,0 +1,191 @@
+package ui
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/trisslazaj/pick6/internal/engine"
+	"github.com/trisslazaj/pick6/internal/sleeper"
+)
+
+// fakeFeed serves canned snapshots so the live path is testable offline.
+type fakeFeed struct {
+	snaps []sleeper.Snapshot
+	errs  []error
+	calls int
+}
+
+func (f *fakeFeed) Poll() (sleeper.Snapshot, error) {
+	i := f.calls
+	f.calls++
+	if i < len(f.errs) && f.errs[i] != nil {
+		return sleeper.Snapshot{}, f.errs[i]
+	}
+	if i >= len(f.snaps) {
+		i = len(f.snaps) - 1
+	}
+	return f.snaps[i], nil
+}
+
+// pick builds a feed pick landing on whichever slot the snake says owns it, so
+// tests describe intent rather than recomputing draft order by hand.
+func pick(s *engine.State, pickNo int, playerID, pos string) sleeper.DraftPick {
+	p := sleeper.DraftPick{
+		PickNo:    pickNo,
+		Round:     s.Round(pickNo),
+		DraftSlot: s.SlotAt(pickNo),
+		PlayerID:  playerID,
+	}
+	p.Metadata.FirstName = "fake"
+	p.Metadata.LastName = playerID
+	p.Metadata.Position = pos
+	p.Metadata.Team = "AAA"
+	return p
+}
+
+func liveModel(s *engine.State, f sleeper.Feed) LiveModel {
+	return NewLiveModel(s, f, 2, false)
+}
+
+func sendLive(m LiveModel, msg tea.Msg) LiveModel {
+	next, _ := m.Update(msg)
+	return next.(LiveModel)
+}
+
+func TestLiveAppliesPicks(t *testing.T) {
+	s := testState()
+	feed := &fakeFeed{snaps: []sleeper.Snapshot{{
+		Status: "drafting",
+		Picks: []sleeper.DraftPick{
+			pick(s, 1, "RB00", "RB"),
+			pick(s, 2, "WR00", "WR"),
+		},
+	}}}
+	m := liveModel(s, feed)
+	snap, _ := feed.Poll()
+	m = sendLive(m, pollMsg{snap: snap})
+
+	if got := len(s.Picks); got != 2 {
+		t.Fatalf("applied %d picks, want 2", got)
+	}
+	if s.PickNo != 3 {
+		t.Errorf("pick number = %d, want 3", s.PickNo)
+	}
+	if !s.Taken["RB00"] || !s.Taken["WR00"] {
+		t.Error("drafted players should be marked taken")
+	}
+}
+
+// Polling returns the whole pick list every time, so re-applying must be a no-op.
+func TestLivePollingIsIdempotent(t *testing.T) {
+	s := testState()
+	snap := sleeper.Snapshot{Status: "drafting", Picks: []sleeper.DraftPick{
+		pick(s, 1, "RB00", "RB"),
+		pick(s, 2, "WR00", "WR"),
+	}}
+	m := liveModel(s, &fakeFeed{snaps: []sleeper.Snapshot{snap}})
+
+	m = sendLive(m, pollMsg{snap: snap})
+	m = sendLive(m, pollMsg{snap: snap})
+	m = sendLive(m, pollMsg{snap: snap})
+
+	if got := len(s.Picks); got != 2 {
+		t.Errorf("after 3 identical polls, %d picks recorded; want 2", got)
+	}
+	if got := len(s.Rosters[s.SlotAt(1)]); got != 1 {
+		t.Errorf("slot roster grew to %d on repeat polls; want 1", got)
+	}
+}
+
+// If the feed's draft order disagrees with our snake math, every survival number
+// downstream is wrong. The board must say so rather than keep drawing.
+func TestLiveDetectsDesync(t *testing.T) {
+	s := testState()
+	bad := pick(s, 1, "RB00", "RB")
+	bad.DraftSlot = bad.DraftSlot%s.Teams + 1 // deliberately the wrong seat
+
+	m := liveModel(s, &fakeFeed{})
+	m = sendLive(m, pollMsg{snap: sleeper.Snapshot{
+		Status: "drafting", Picks: []sleeper.DraftPick{bad},
+	}})
+
+	if m.desync == "" {
+		t.Fatal("a draft-order mismatch should be reported")
+	}
+	if !strings.Contains(m.View(), "not trustworthy") {
+		t.Error("the view should warn that the board can't be trusted")
+	}
+	if len(s.Picks) != 0 {
+		t.Error("no picks should be applied once desync is detected")
+	}
+}
+
+// Flaky wifi at a draft party is normal. A failed poll must keep the last good
+// board on screen and retry, not crash or blank out.
+func TestLiveSurvivesPollErrors(t *testing.T) {
+	s := testState()
+	good := sleeper.Snapshot{Status: "drafting", Picks: []sleeper.DraftPick{
+		pick(s, 1, "RB00", "RB"),
+	}}
+	m := liveModel(s, &fakeFeed{})
+	m = sendLive(m, pollMsg{snap: good})
+
+	m = sendLive(m, pollMsg{err: errors.New("dial tcp: no route to host")})
+	if m.pollErr == "" {
+		t.Error("poll error should be recorded")
+	}
+	if len(s.Picks) != 1 {
+		t.Error("the previously applied pick should survive a failed poll")
+	}
+	if !strings.Contains(m.View(), "best available") {
+		t.Error("the last good board should stay on screen")
+	}
+
+	// A later success clears the error.
+	m = sendLive(m, pollMsg{snap: good})
+	if m.pollErr != "" {
+		t.Errorf("a successful poll should clear the error, got %q", m.pollErr)
+	}
+}
+
+// A live draft picks players outside our ADP board constantly — 192 picks against
+// a 201-player list. They must render, not appear as blank rows.
+func TestLiveRegistersUnknownPlayers(t *testing.T) {
+	s := testState()
+	p := pick(s, 1, "nobody-we-know", "RB")
+	m := liveModel(s, &fakeFeed{})
+	m = sendLive(m, pollMsg{snap: sleeper.Snapshot{
+		Status: "drafting", Picks: []sleeper.DraftPick{p},
+	}})
+
+	got, ok := s.Players["nobody-we-know"]
+	if !ok {
+		t.Fatal("an unknown drafted player should be registered")
+	}
+	if got.Name == "" {
+		t.Error("registered player should carry a name from the feed metadata")
+	}
+	if got.Tier != 0 || got.Value != 0 {
+		t.Error("an unranked player must stay untiered, so cliff logic ignores him")
+	}
+}
+
+func TestLiveStopsPollingWhenComplete(t *testing.T) {
+	s := testState()
+	m := liveModel(s, &fakeFeed{})
+	next, cmd := m.Update(pollMsg{snap: sleeper.Snapshot{Status: "complete"}})
+	lm := next.(LiveModel)
+
+	if !lm.complete {
+		t.Error("a complete status should be recorded")
+	}
+	if cmd != nil {
+		t.Error("polling should stop once the draft is complete")
+	}
+	if !strings.Contains(lm.View(), "polling stopped") {
+		t.Error("the view should say polling has stopped")
+	}
+}
