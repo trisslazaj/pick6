@@ -273,6 +273,21 @@ func (s *State) TierRemaining(pos string, tier int) int {
 	return n
 }
 
+// TierSize counts every player in a position's tier, drafted or not. Used to
+// tell a tier that is emptying from one that was always small.
+func (s *State) TierSize(pos string, tier int) int {
+	if tier == 0 {
+		return 0
+	}
+	n := 0
+	for _, p := range s.Players {
+		if p.Pos == pos && p.Tier == tier {
+			n++
+		}
+	}
+	return n
+}
+
 // FilledSlots assigns a team's drafted players to starting slots, dedicated
 // first and flex last, and returns one entry per slot (empty string if unfilled)
 // plus whatever spilled onto the bench.
