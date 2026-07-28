@@ -24,25 +24,105 @@ type Board struct {
 	Status string // transient message shown in the footer
 }
 
-func (b Board) View() string {
-	w := b.Width
-	if w < 80 {
-		w = 80
-	}
-	rightW := 34
-	leftW := w - rightW - 3
+// Layout bounds. The board has a natural width — a player row is about 46
+// columns and a roster row about 34 — so stretching to fill a wide terminal just
+// manufactures a gulf between the panes. Cap it and centre instead; extra height
+// is spent showing more players, which is the thing you actually want more of.
+const (
+	MinWidth   = 80
+	MaxWidth   = 92
+	SidebarW   = 34
+	MinDepth   = 3 // players shown per position group
+	MaxDepth   = 8
+	MinTickerN = 4
+	MaxTickerN = 10
+)
 
-	var out []string
-	out = append(out, b.header(w))
-	if banner := b.banner(w); banner != "" {
-		out = append(out, banner)
+func (b Board) View() string {
+	content := b.Width
+	if content > MaxWidth {
+		content = MaxWidth
 	}
-	panes := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(leftW).Render(b.bestAvailable(leftW)),
-		lipgloss.NewStyle().Width(rightW).MarginLeft(2).Render(b.sidebar(rightW)),
+	if content < MinWidth {
+		content = MinWidth
+	}
+	leftW := content - SidebarW - 3
+
+	left := b.bestAvailable(leftW)
+	right := b.sidebar(SidebarW)
+
+	body := lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().Width(leftW).Render(left),
+		b.divider(maxLines(left, right)),
+		lipgloss.NewStyle().Width(SidebarW).PaddingLeft(2).Render(right),
 	)
-	out = append(out, panes, b.footer(w))
-	return strings.Join(out, "\n")
+
+	block := strings.Join([]string{
+		b.header(content),
+		b.banner(content), // "" when nothing is active; filtered below
+		body,
+		b.footer(content),
+	}, "\n")
+	block = strings.ReplaceAll(block, "\n\n\n", "\n\n")
+
+	// Centre the board when the terminal is wider than it needs to be, rather
+	// than letting the panes drift to opposite edges.
+	if pad := (b.Width - content) / 2; pad > 0 {
+		block = lipgloss.NewStyle().MarginLeft(pad).Render(block)
+	}
+	return block
+}
+
+// divider is the vertical rule between the panes.
+func (b Board) divider(h int) string {
+	if h < 1 {
+		h = 1
+	}
+	rows := make([]string, h)
+	for i := range rows {
+		rows[i] = Dim.Render("│")
+	}
+	return lipgloss.NewStyle().Width(1).PaddingLeft(1).Render(strings.Join(rows, "\n"))
+}
+
+func maxLines(a, b string) int {
+	la, lb := strings.Count(a, "\n")+1, strings.Count(b, "\n")+1
+	if la > lb {
+		return la
+	}
+	return lb
+}
+
+// depth decides how many players to show per position group, from the height we
+// actually have. Each group costs a header plus its rows plus a blank line.
+func (b Board) depth(groups int) int {
+	if b.Height <= 0 || groups == 0 {
+		return 4
+	}
+	avail := b.Height - 8 // header, banner, footer, breathing room
+	perGroup := avail/groups - 2
+	if perGroup < MinDepth {
+		return MinDepth
+	}
+	if perGroup > MaxDepth {
+		return MaxDepth
+	}
+	return perGroup
+}
+
+func (b Board) tickerRows() int {
+	if b.Height <= 0 {
+		return MinTickerN + 2
+	}
+	// The sidebar's fixed chrome is roughly 20 rows before the ticker starts.
+	n := b.Height - 22
+	if n < MinTickerN {
+		return MinTickerN
+	}
+	if n > MaxTickerN {
+		return MaxTickerN
+	}
+	return n
 }
 
 // ---- header ----
@@ -195,15 +275,16 @@ func (b Board) bestAvailable(w int) string {
 	}
 	sort.SliceStable(groups, func(i, j int) bool { return groups[i].score > groups[j].score })
 
+	depth := b.depth(len(groups))
 	var sb strings.Builder
-	sb.WriteString(Dim.Render("  best available") + "\n")
+	sb.WriteString(sectionHead("best available", w-2) + "\n")
 	for gi, g := range groups {
-		sb.WriteString(b.groupBlock(g.pos, g.players, gi == 0, w))
+		sb.WriteString(b.groupBlock(g.pos, g.players, gi == 0, w, depth))
 	}
 	return sb.String()
 }
 
-func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w int) string {
+func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w, depth int) string {
 	s := b.State
 	suppressed := s.Need(pos) == 0
 	style := Pos(pos, suppressed)
@@ -231,7 +312,7 @@ func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w int) st
 	var sb strings.Builder
 	sb.WriteString("\n" + edge + head + "\n")
 	for i, p := range avail {
-		if i >= 4 {
+		if i >= depth {
 			break
 		}
 		sb.WriteString(edge + "  " + b.playerLine(p, style, w-6) + "\n")
@@ -239,9 +320,20 @@ func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w int) st
 	return sb.String()
 }
 
+// playerLine drops columns rather than wrapping when the pane is tight. A row
+// that wraps costs two lines and reads as broken; a row missing the bye week
+// still tells you who and when.
 func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
-	name := style.Render(fmt.Sprintf("%-22s", trunc(strings.ToLower(p.Name), 22)))
+	nameW := 22
+	if w < 38 {
+		nameW = 16
+	}
+	name := style.Render(fmt.Sprintf("%-*s", nameW, trunc(strings.ToLower(p.Name), nameW)))
 	meta := Dim.Render(fmt.Sprintf("%-4s adp %5.1f", p.Team, p.ADP))
+
+	if w < nameW+24 { // no room for the bye column
+		return fmt.Sprintf("%s %s", name, meta)
+	}
 	bye := Dim.Render(fmt.Sprintf("bye %2d", p.Bye))
 	if p.Bye == 0 {
 		bye = Dim.Render("      ")
@@ -253,10 +345,10 @@ func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
 
 func (b Board) sidebar(w int) string {
 	var sb strings.Builder
-	sb.WriteString(Dim.Render("your roster") + "\n")
+	sb.WriteString(sectionHead("your roster", w-2) + "\n")
 	sb.WriteString(b.roster())
 	sb.WriteString(b.insight())
-	sb.WriteString("\n" + Dim.Render("recent picks") + "\n")
+	sb.WriteString("\n" + sectionHead("recent picks", w-2) + "\n")
 	sb.WriteString(b.ticker())
 	return sb.String()
 }
@@ -343,8 +435,8 @@ func (b Board) roster() string {
 func (b Board) ticker() string {
 	s := b.State
 	picks := s.Picks
-	if len(picks) > 6 {
-		picks = picks[len(picks)-6:]
+	if n := b.tickerRows(); len(picks) > n {
+		picks = picks[len(picks)-n:]
 	}
 	if len(picks) == 0 {
 		return Dim.Render("  nothing yet") + "\n"
@@ -409,4 +501,13 @@ func trunc(s string, n int) string {
 		return s
 	}
 	return string([]rune(s)[:n-1]) + "…"
+}
+
+// sectionHead is a dim label with a rule under it, so each pane reads as a block
+// rather than rows floating in space.
+func sectionHead(label string, w int) string {
+	if w < len(label)+2 {
+		w = len(label) + 2
+	}
+	return Dim.Render(label) + " " + Dim.Render(strings.Repeat("─", w-len(label)-1))
 }

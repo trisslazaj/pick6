@@ -25,6 +25,8 @@ func runMock(args []string) error {
 	seed := fs.Int64("seed", 6, "rng seed; same seed replays the same draft")
 	auto := fs.Bool("auto", true, "auto-advance picks")
 	snapshot := fs.Int("snapshot", -1, "advance N picks, print one frame, exit (no tui)")
+	width := fs.Int("width", 100, "terminal width for snapshot mode")
+	height := fs.Int("height", 40, "terminal height for snapshot mode")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -50,7 +52,7 @@ func runMock(args []string) error {
 			}
 			s.Draft(id)
 		}
-		b := ui.Board{State: s, Width: 100, Synced: time.Now()}
+		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now()}
 		fmt.Println(b.View())
 		return nil
 	}

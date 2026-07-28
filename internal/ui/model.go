@@ -27,7 +27,7 @@ type tickMsg time.Time
 // NewModel builds the Bubble Tea model.
 func NewModel(s *engine.State, pick Autopicker, auto bool) Model {
 	return Model{
-		board:    Board{State: s, Width: 100, Synced: time.Now()},
+		board:    Board{State: s, Width: 92, Height: 32, Synced: time.Now()},
 		pick:     pick,
 		auto:     auto,
 		interval: 550 * time.Millisecond,

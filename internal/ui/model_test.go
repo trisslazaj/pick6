@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -149,5 +150,75 @@ func TestChromeIsLowercase(t *testing.T) {
 		if strings.Contains(m.View(), notWant) {
 			t.Errorf("found capitalised chrome %q", notWant)
 		}
+	}
+}
+
+// ansi strips escape sequences so we can measure real rendered width.
+var ansi = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// The board must never emit a line wider than the terminal, at any size. A line
+// that overflows wraps, and a wrapped row reads as a broken layout.
+func TestNoLineExceedsTerminalWidth(t *testing.T) {
+	for _, size := range []struct{ w, h int }{
+		{80, 24}, {92, 30}, {100, 40}, {140, 50}, {200, 60},
+	} {
+		m := NewModel(testState(), firstAvailable, false)
+		m = send(m, tea.WindowSizeMsg{Width: size.w, Height: size.h})
+		for i := 0; i < 40; i++ {
+			m.step()
+		}
+		for i, line := range strings.Split(m.View(), "\n") {
+			if n := len([]rune(ansi.ReplaceAllString(line, ""))); n > size.w {
+				t.Errorf("%dx%d: line %d is %d runes, exceeds width", size.w, size.h, i, n)
+			}
+		}
+	}
+}
+
+// Widening the terminal must not just add whitespace between the panes — that
+// was the original complaint. The board caps and centres instead.
+func TestWideTerminalCapsAndCentres(t *testing.T) {
+	widths := []int{100, 160, 240}
+	var gaps []int
+	for _, w := range widths {
+		m := NewModel(testState(), firstAvailable, false)
+		m = send(m, tea.WindowSizeMsg{Width: w, Height: 40})
+		for i := 0; i < 40; i++ {
+			m.step()
+		}
+		// Measure the widest content line; it must stay bounded by MaxWidth
+		// regardless of how wide the terminal gets.
+		widest := 0
+		for _, line := range strings.Split(m.View(), "\n") {
+			plain := strings.TrimRight(ansi.ReplaceAllString(line, ""), " ")
+			trimmed := strings.TrimLeft(plain, " ")
+			if n := len([]rune(trimmed)); n > widest {
+				widest = n
+			}
+		}
+		if widest > MaxWidth {
+			t.Errorf("width %d: content is %d runes, exceeds MaxWidth %d", w, widest, MaxWidth)
+		}
+		gaps = append(gaps, widest)
+	}
+	// Content width must be stable as the terminal grows, not proportional to it.
+	if gaps[0] != gaps[len(gaps)-1] {
+		t.Errorf("content width drifted with terminal size: %v", gaps)
+	}
+}
+
+// More vertical space should buy more players, not more blank rows.
+func TestTallerTerminalShowsMorePlayers(t *testing.T) {
+	count := func(h int) int {
+		m := NewModel(testState(), firstAvailable, false)
+		m = send(m, tea.WindowSizeMsg{Width: 92, Height: h})
+		for i := 0; i < 40; i++ {
+			m.step()
+		}
+		return strings.Count(m.View(), "adp ")
+	}
+	short, tall := count(24), count(60)
+	if tall <= short {
+		t.Errorf("tall terminal showed %d players, short showed %d; expected more", tall, short)
 	}
 }
