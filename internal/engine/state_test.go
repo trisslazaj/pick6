@@ -203,3 +203,97 @@ func TestNeed(t *testing.T) {
 		t.Errorf("late need(k) = %v, want %v", got, NeedStarter)
 	}
 }
+
+func TestUnfilledStarters(t *testing.T) {
+	s := New(map[string]Player{
+		"qb": {ID: "qb", Pos: "QB"},
+		"rb": {ID: "rb", Pos: "RB"},
+	}, 12, 15, 1)
+
+	if got := len(s.UnfilledStarters(1)); got != len(s.Roster.Slots) {
+		t.Errorf("empty roster: %d unfilled, want %d", got, len(s.Roster.Slots))
+	}
+
+	s.Rosters[1] = []string{"qb", "rb"}
+	got := s.UnfilledStarters(1)
+	for _, slot := range got {
+		if slot == "QB" {
+			t.Error("qb slot is filled but still reported unfilled")
+		}
+	}
+	// One RB is filled; the second RB slot and FLEX both remain.
+	rbs := 0
+	for _, slot := range got {
+		if slot == "RB" {
+			rbs++
+		}
+	}
+	if rbs != 1 {
+		t.Errorf("expected 1 rb slot still open, got %d", rbs)
+	}
+}
+
+func TestByeLoadCountsStartersOnly(t *testing.T) {
+	// Four RBs all on bye 11: two start, one takes flex, one rides the bench.
+	// The bench player must not count — a bench bye is not a problem.
+	s := New(map[string]Player{
+		"r1": {ID: "r1", Pos: "RB", Bye: 11, Value: 100},
+		"r2": {ID: "r2", Pos: "RB", Bye: 11, Value: 90},
+		"r3": {ID: "r3", Pos: "RB", Bye: 11, Value: 80},
+		"r4": {ID: "r4", Pos: "RB", Bye: 11, Value: 70},
+	}, 12, 15, 1)
+	s.Rosters[1] = []string{"r1", "r2", "r3", "r4"}
+
+	if got := len(s.ByeLoad(1)[11]); got != 3 {
+		t.Errorf("week 11 load = %d, want 3 (two rb slots + flex, bench excluded)", got)
+	}
+}
+
+func TestByeConflictsThreshold(t *testing.T) {
+	mk := func(bye int) map[string]Player {
+		return map[string]Player{
+			"qb": {ID: "qb", Pos: "QB", Bye: bye},
+			"r1": {ID: "r1", Pos: "RB", Bye: bye},
+			"w1": {ID: "w1", Pos: "WR", Bye: 5},
+		}
+	}
+	// Two starters sharing a bye is unremarkable and must stay quiet.
+	s := New(mk(11), 12, 15, 1)
+	s.Rosters[1] = []string{"qb", "r1", "w1"}
+	if c := s.ByeConflicts(1); len(c) != 0 {
+		t.Errorf("2 starters on a bye should not warn, got %+v", c)
+	}
+
+	// A third tips it over.
+	s.Players["w1"] = Player{ID: "w1", Pos: "WR", Bye: 11}
+	c := s.ByeConflicts(1)
+	if len(c) != 1 || c[0].Week != 11 || len(c[0].Players) != 3 {
+		t.Fatalf("3 starters on a bye should warn, got %+v", c)
+	}
+}
+
+func TestMyUpcomingPicks(t *testing.T) {
+	s := newTestState(12, 15, 3)
+	got := s.MyUpcomingPicks(3)
+	want := []int{3, 22, 27}
+	if len(got) != 3 {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("upcoming[%d] = %d, want %d", i, got[i], want[i])
+		}
+	}
+
+	// Past my round-1 pick, it must not be offered again.
+	s.PickNo = 10
+	if got := s.MyUpcomingPicks(2); got[0] != 22 {
+		t.Errorf("after pick 10, next = %d, want 22", got[0])
+	}
+
+	// Near the end there may be fewer than n left; that's not an error.
+	s.PickNo = 12*15 - 1
+	if got := s.MyUpcomingPicks(3); len(got) > 1 {
+		t.Errorf("at the end of the draft got %v, want at most 1", got)
+	}
+}

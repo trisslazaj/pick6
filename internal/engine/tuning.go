@@ -20,6 +20,11 @@ const (
 	TierMaxSize  = 8
 	TierMinSize  = 2
 
+	// ByeConflictThreshold is how many starters must share a bye week before it's
+	// worth saying anything. Two is unremarkable across a nine-slot lineup; three
+	// is a week you cannot field a legal team without scrambling.
+	ByeConflictThreshold = 3
+
 	// Cliffs and runs.
 	CliffWarn    = 2 // players left in tier for amber
 	RunWindow    = 6 // sliding window of recent picks

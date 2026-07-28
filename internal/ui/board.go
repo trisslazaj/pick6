@@ -255,8 +255,60 @@ func (b Board) sidebar(w int) string {
 	var sb strings.Builder
 	sb.WriteString(Dim.Render("your roster") + "\n")
 	sb.WriteString(b.roster())
+	sb.WriteString(b.insight())
 	sb.WriteString("\n" + Dim.Render("recent picks") + "\n")
 	sb.WriteString(b.ticker())
+	return sb.String()
+}
+
+// insight is the "so what" under the roster: what's still open, which bye week
+// is quietly stacking up, and when you're up again. Everything here is derivable
+// from the roster, but nobody derives it mid-draft with a clock running.
+func (b Board) insight() string {
+	s := b.State
+	var sb strings.Builder
+
+	if need := s.UnfilledStarters(s.MySlot); len(need) > 0 {
+		parts := make([]string, len(need))
+		for i, n := range need {
+			// Colour each slot by position, and keep K/DEF faint while the engine
+			// is suppressing them. Otherwise "need k def" in round 9 reads as an
+			// instruction, contradicting the board that just hid every kicker.
+			if n == "FLEX" {
+				parts[i] = FG.Render("flex")
+				continue
+			}
+			parts[i] = Pos(n, s.Need(n) == 0).Render(strings.ToLower(n))
+		}
+		sb.WriteString(fmt.Sprintf("\n  %s %s\n",
+			Dim.Render("need "), strings.Join(parts, " ")))
+	} else {
+		sb.WriteString("\n  " + Dim.Render("need ") + " " +
+			Wait.Render("lineup complete") + "\n")
+	}
+
+	// Only the worst bye week is worth the line; listing every collision turns
+	// a warning into wallpaper.
+	if conflicts := s.ByeConflicts(s.MySlot); len(conflicts) > 0 {
+		c := conflicts[0]
+		msg := fmt.Sprintf("week %d — %d starters out", c.Week, len(c.Players))
+		if len(conflicts) > 1 {
+			msg += fmt.Sprintf(" (+%d more)", len(conflicts)-1)
+		}
+		sb.WriteString(fmt.Sprintf("  %s %s\n", Dim.Render("byes "), Run.Render(msg)))
+	}
+
+	if !s.Done() {
+		if picks := s.MyUpcomingPicks(2); len(picks) > 0 {
+			parts := make([]string, len(picks))
+			for i, p := range picks {
+				parts[i] = fmt.Sprintf("%d.%02d", s.Round(p), s.IndexInRound(p))
+			}
+			sb.WriteString(fmt.Sprintf("  %s %s\n",
+				Dim.Render("up   "),
+				Accent.Render(strings.Join(parts, ", then "))))
+		}
+	}
 	return sb.String()
 }
 
@@ -301,14 +353,24 @@ func (b Board) ticker() string {
 	for i := len(picks) - 1; i >= 0; i-- {
 		pk := picks[i]
 		p := s.Players[pk.PlayerID]
-		who := Dim.Render(fmt.Sprintf("%d.%02d", pk.Round, ((pk.PickNo-1)%s.Teams)+1))
-		mine := " "
+		label := fmt.Sprintf("%d.%02d", pk.Round, ((pk.PickNo-1)%s.Teams)+1)
+		pos := fmt.Sprintf("%-3s", strings.ToLower(p.Pos))
+		name := trunc(strings.ToLower(p.Name), 17)
+
+		// Your own picks are the thing you scan for, so they get a green bar and
+		// their own label rather than a dot you have to hunt for.
 		if pk.Slot == s.MySlot {
-			mine = Wait.Render("•")
+			sb.WriteString(fmt.Sprintf("%s %s %s %s\n",
+				Wait.Bold(true).Render("▌you"),
+				Dim.Render(label),
+				Pos(p.Pos, false).Render(pos),
+				Bold.Foreground(lipgloss.Color(ColFG)).Render(name)))
+			continue
 		}
-		sb.WriteString(fmt.Sprintf(" %s %s %s %s\n", mine, who,
-			Pos(p.Pos, false).Render(fmt.Sprintf("%-3s", strings.ToLower(p.Pos))),
-			FG.Render(trunc(strings.ToLower(p.Name), 17))))
+		sb.WriteString(fmt.Sprintf("     %s %s %s\n",
+			Dim.Render(label),
+			Pos(p.Pos, false).Render(pos),
+			Dim.Render(name)))
 	}
 	return sb.String()
 }

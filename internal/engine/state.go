@@ -262,6 +262,71 @@ func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
 	return filled, bench
 }
 
+// UnfilledStarters lists the starting slots a team still has open, in lineup
+// order. This is the "what do I actually still need" read.
+func (s *State) UnfilledStarters(slot int) []string {
+	filled, _ := s.FilledSlots(slot)
+	var out []string
+	for i, want := range s.Roster.Slots {
+		if filled[i] == "" {
+			out = append(out, want)
+		}
+	}
+	return out
+}
+
+// ByeLoad counts a team's filled *starters* by bye week. Bench players are
+// excluded — a bench bye is not a problem, a starting bye is.
+func (s *State) ByeLoad(slot int) map[int][]string {
+	filled, _ := s.FilledSlots(slot)
+	out := map[int][]string{}
+	for _, id := range filled {
+		if id == "" {
+			continue
+		}
+		if bye := s.Players[id].Bye; bye > 0 {
+			out[bye] = append(out[bye], id)
+		}
+	}
+	return out
+}
+
+// ByeConflicts returns only the weeks where a team has ByeConflictThreshold or
+// more starters idle at once, worst week first. Two starters sharing a bye is
+// unremarkable across a nine-slot lineup; three is a week you can't field.
+func (s *State) ByeConflicts(slot int) []ByeConflict {
+	var out []ByeConflict
+	for week, ids := range s.ByeLoad(slot) {
+		if len(ids) >= ByeConflictThreshold {
+			out = append(out, ByeConflict{Week: week, Players: ids})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if len(out[i].Players) != len(out[j].Players) {
+			return len(out[i].Players) > len(out[j].Players)
+		}
+		return out[i].Week < out[j].Week
+	})
+	return out
+}
+
+// ByeConflict is a week where too many starters are idle at once.
+type ByeConflict struct {
+	Week    int
+	Players []string
+}
+
+// MyUpcomingPicks returns my next N pick numbers from the current pick onward.
+func (s *State) MyUpcomingPicks(n int) []int {
+	var out []int
+	for r := 1; r <= s.Rounds && len(out) < n; r++ {
+		if p := s.MyPick(r); p >= s.PickNo {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // Need returns the urgency weight for a position given my roster.
 func (s *State) Need(pos string) float64 {
 	// Nobody needs a tool to tell them to draft a kicker in round 6.
