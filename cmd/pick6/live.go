@@ -90,7 +90,10 @@ func runLive(args []string) error {
 				Pos:  p.Metadata.Position,
 				Team: p.Metadata.Team,
 			})
-			if err := s.ApplyRemote(p.PickNo, p.Round, p.DraftSlot, p.PlayerID); err != nil {
+			if err := s.ApplyRemote(engine.RemotePick{
+				PickNo: p.PickNo, Round: p.Round, Slot: p.DraftSlot,
+				OwnerSlot: draft.OwnerSlot(p), PlayerID: p.PlayerID,
+			}); err != nil {
 				return fmt.Errorf("%w\n(this means our draft-order model disagrees with sleeper; "+
 					"the board would be wrong, so it is not shown)", err)
 			}
@@ -102,7 +105,7 @@ func runLive(args []string) error {
 	}
 
 	p := tea.NewProgram(
-		ui.NewLiveModel(s, feed, interval, false),
+		ui.NewLiveModel(s, feed, interval, false).WithDraft(draft),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()

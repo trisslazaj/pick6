@@ -48,7 +48,10 @@ func TestReplayRealDraft(t *testing.T) {
 	// The headline assertion: our SlotAt must agree with the feed's draft_slot
 	// on every single pick, or ApplyRemote refuses.
 	for _, p := range picks {
-		if err := s.ApplyRemote(p.PickNo, p.Round, p.DraftSlot, p.PlayerID); err != nil {
+		if err := s.ApplyRemote(engine.RemotePick{
+			PickNo: p.PickNo, Round: p.Round, Slot: p.DraftSlot,
+			OwnerSlot: d.OwnerSlot(p), PlayerID: p.PlayerID,
+		}); err != nil {
 			t.Fatalf("snake math disagrees with a real draft: %v", err)
 		}
 	}
@@ -86,4 +89,61 @@ func TestReplayRealDraft(t *testing.T) {
 	}
 	t.Logf("replayed %d picks, %d teams, %d rounds, lineup %v — no desync",
 		len(picks), d.Settings.Teams, d.Settings.Rounds, s.Roster.Slots)
+}
+
+// Draft picks get traded, and when they do the player goes to a roster other
+// than the one owning that draft slot. This user's real 2025 draft has 9 such
+// picks out of 192, so attributing by draft slot alone silently puts players on
+// the wrong team — including picks you traded for never showing on your board.
+func TestReplayHandlesTradedPicks(t *testing.T) {
+	const draftID = "1261824503076360192"
+
+	d, err := sleeper.GetDraft(draftID)
+	if err != nil {
+		t.Skipf("network unavailable: %v", err)
+	}
+	picks, err := sleeper.GetPicks(draftID)
+	if err != nil {
+		t.Skipf("network unavailable: %v", err)
+	}
+
+	traded := 0
+	for _, p := range picks {
+		if d.OwnerSlot(p) != p.DraftSlot {
+			traded++
+		}
+	}
+	if traded == 0 {
+		t.Fatal("expected this draft to contain traded picks; the fixture may have changed")
+	}
+	t.Logf("%d of %d picks went to a roster other than their draft slot", traded, len(picks))
+
+	// Every pick must still resolve to a real seat.
+	for _, p := range picks {
+		if got := d.OwnerSlot(p); got < 1 || got > d.Settings.Teams {
+			t.Errorf("pick %d resolved to slot %d, outside 1..%d", p.PickNo, got, d.Settings.Teams)
+		}
+	}
+
+	// And rosters must stay conserved: total players placed equals total picks.
+	players := map[string]engine.Player{}
+	for _, p := range picks {
+		players[p.PlayerID] = engine.Player{ID: p.PlayerID, Pos: p.Metadata.Position}
+	}
+	s := engine.New(players, d.Settings.Teams, d.Settings.Rounds, 1)
+	for _, p := range picks {
+		if err := s.ApplyRemote(engine.RemotePick{
+			PickNo: p.PickNo, Round: p.Round, Slot: p.DraftSlot,
+			OwnerSlot: d.OwnerSlot(p), PlayerID: p.PlayerID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	total := 0
+	for slot := 1; slot <= d.Settings.Teams; slot++ {
+		total += len(s.Rosters[slot])
+	}
+	if total != len(picks) {
+		t.Errorf("rosters hold %d players, draft made %d picks", total, len(picks))
+	}
 }

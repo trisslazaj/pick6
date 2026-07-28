@@ -28,10 +28,11 @@ type Roster struct {
 
 // Pick is one completed selection.
 type Pick struct {
-	PickNo   int
-	Round    int
-	Slot     int // 1-indexed draft slot that made the pick
-	PlayerID string
+	PickNo    int
+	Round     int
+	Slot      int // 1-indexed draft slot that made the pick
+	OwnerSlot int // slot whose roster received the player; differs when traded
+	PlayerID  string
 }
 
 // State is everything the board needs. Recomputed from scratch on every pick
@@ -154,10 +155,11 @@ func (s *State) Draft(playerID string) {
 	s.Taken[playerID] = true
 	s.Rosters[slot] = append(s.Rosters[slot], playerID)
 	s.Picks = append(s.Picks, Pick{
-		PickNo:   s.PickNo,
-		Round:    s.Round(s.PickNo),
-		Slot:     slot,
-		PlayerID: playerID,
+		PickNo:    s.PickNo,
+		Round:     s.Round(s.PickNo),
+		Slot:      slot,
+		OwnerSlot: slot,
+		PlayerID:  playerID,
 	})
 	s.PickNo++
 }
@@ -170,21 +172,40 @@ func (s *State) Draft(playerID string) {
 // wrong — a reversal round, a non-snake type that slipped past validation, a
 // custom order — and every survival number downstream would be quietly bogus.
 // Better to surface it than to keep drawing a confident board.
-func (s *State) ApplyRemote(pickNo, round, slot int, playerID string) error {
-	if s.Taken[playerID] {
+func (s *State) ApplyRemote(r RemotePick) error {
+	if s.Taken[r.PlayerID] {
 		return nil // already applied; polling returns the full list every time
 	}
-	if want := s.SlotAt(pickNo); want != slot {
+	if want := s.SlotAt(r.PickNo); want != r.Slot {
 		return fmt.Errorf("draft order desync at pick %d: feed says slot %d, snake math says %d",
-			pickNo, slot, want)
+			r.PickNo, r.Slot, want)
 	}
-	s.Taken[playerID] = true
-	s.Rosters[slot] = append(s.Rosters[slot], playerID)
-	s.Picks = append(s.Picks, Pick{PickNo: pickNo, Round: round, Slot: slot, PlayerID: playerID})
-	if pickNo >= s.PickNo {
-		s.PickNo = pickNo + 1
+	// The slot that picks and the roster that receives are usually the same, but
+	// diverge when a draft pick has been traded. Attribute the player to whoever
+	// actually gets him, or a pick you traded for never lands on your board.
+	owner := r.OwnerSlot
+	if owner == 0 {
+		owner = r.Slot
+	}
+	s.Taken[r.PlayerID] = true
+	s.Rosters[owner] = append(s.Rosters[owner], r.PlayerID)
+	s.Picks = append(s.Picks, Pick{
+		PickNo: r.PickNo, Round: r.Round, Slot: r.Slot,
+		OwnerSlot: owner, PlayerID: r.PlayerID,
+	})
+	if r.PickNo >= s.PickNo {
+		s.PickNo = r.PickNo + 1
 	}
 	return nil
+}
+
+// RemotePick is one pick as reported by a live feed.
+type RemotePick struct {
+	PickNo    int
+	Round     int
+	Slot      int // the seat that picked, used to verify the snake order
+	OwnerSlot int // the seat whose roster receives the player (differs if traded)
+	PlayerID  string
 }
 
 // EnsurePlayer registers a player we didn't know about, keeping whatever the
@@ -223,9 +244,12 @@ func (s *State) Undo() {
 	last := s.Picks[len(s.Picks)-1]
 	s.Picks = s.Picks[:len(s.Picks)-1]
 	delete(s.Taken, last.PlayerID)
-	r := s.Rosters[last.Slot]
-	if len(r) > 0 {
-		s.Rosters[last.Slot] = r[:len(r)-1]
+	owner := last.OwnerSlot
+	if owner == 0 {
+		owner = last.Slot
+	}
+	if r := s.Rosters[owner]; len(r) > 0 {
+		s.Rosters[owner] = r[:len(r)-1]
 	}
 	s.PickNo = last.PickNo
 }

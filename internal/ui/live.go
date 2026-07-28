@@ -14,6 +14,7 @@ import (
 type LiveModel struct {
 	board    Board
 	feed     sleeper.Feed
+	draft    *sleeper.Draft // for resolving traded picks to their owning roster
 	interval time.Duration
 	once     bool // load one snapshot and stop (replay of a finished draft)
 
@@ -98,7 +99,10 @@ func (m LiveModel) handlePoll(msg pollMsg) (tea.Model, tea.Cmd) {
 			continue
 		}
 		m.board.State.EnsurePlayer(pickToPlayer(p))
-		if err := m.board.State.ApplyRemote(p.PickNo, p.Round, p.DraftSlot, p.PlayerID); err != nil {
+		if err := m.board.State.ApplyRemote(engine.RemotePick{
+			PickNo: p.PickNo, Round: p.Round, Slot: p.DraftSlot,
+			OwnerSlot: m.ownerSlot(p), PlayerID: p.PlayerID,
+		}); err != nil {
 			// Our model of the draft order disagrees with Sleeper's. Every survival
 			// number downstream would be wrong, so say so loudly and stop applying.
 			m.desync = err.Error()
@@ -154,4 +158,18 @@ func pickToPlayer(p sleeper.DraftPick) engine.Player {
 		Pos:  p.Metadata.Position,
 		Team: p.Metadata.Team,
 	}
+}
+
+// WithDraft attaches draft metadata so traded picks resolve to the roster that
+// actually receives the player.
+func (m LiveModel) WithDraft(d *sleeper.Draft) LiveModel {
+	m.draft = d
+	return m
+}
+
+func (m LiveModel) ownerSlot(p sleeper.DraftPick) int {
+	if m.draft == nil {
+		return p.DraftSlot
+	}
+	return m.draft.OwnerSlot(p)
 }

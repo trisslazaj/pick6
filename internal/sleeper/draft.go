@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -34,16 +35,21 @@ type Draft struct {
 	// DraftOrder maps user_id -> draft slot (1-indexed). Null before a draft
 	// is seeded, so callers must cope with it being empty.
 	DraftOrder map[string]int `json:"draft_order"`
+	// SlotToRosterID maps draft slot -> roster id. Keys are strings.
+	SlotToRosterID map[string]int `json:"slot_to_roster_id"`
 }
 
 // DraftPick is one selection from the live feed.
 type DraftPick struct {
-	PickNo    int    `json:"pick_no"`
-	Round     int    `json:"round"`
-	DraftSlot int    `json:"draft_slot"`
-	PlayerID  string `json:"player_id"`
-	PickedBy  string `json:"picked_by"`
-	Metadata  struct {
+	PickNo    int `json:"pick_no"`
+	Round     int `json:"round"`
+	DraftSlot int `json:"draft_slot"`
+	// RosterID is who actually receives the player. It differs from the roster
+	// that owns DraftSlot whenever the pick has been traded.
+	RosterID int    `json:"roster_id"`
+	PlayerID string `json:"player_id"`
+	PickedBy string `json:"picked_by"`
+	Metadata struct {
 		FirstName string `json:"first_name"`
 		LastName  string `json:"last_name"`
 		Position  string `json:"position"`
@@ -155,6 +161,27 @@ func (d *Draft) RosterSlots() []string {
 	add("K", s.SlotsK)
 	add("DEF", s.SlotsDEF)
 	return out
+}
+
+// OwnerSlot returns the draft slot whose roster receives this pick.
+//
+// Normally that's just DraftSlot, but draft picks get traded: in one of this
+// user's real 2025 drafts, 9 of 192 picks went to a roster other than the one
+// owning that slot. Attributing by DraftSlot alone puts those players on the
+// wrong team — including yours, so a pick you traded for would never appear on
+// your roster. Falls back to DraftSlot when the mapping is unavailable.
+func (d *Draft) OwnerSlot(p DraftPick) int {
+	if p.RosterID == 0 || len(d.SlotToRosterID) == 0 {
+		return p.DraftSlot
+	}
+	for slot, roster := range d.SlotToRosterID {
+		if roster == p.RosterID {
+			if n, err := strconv.Atoi(slot); err == nil {
+				return n
+			}
+		}
+	}
+	return p.DraftSlot
 }
 
 // SlotOf returns a user's draft slot. Ok is false before the order is seeded.
