@@ -10,12 +10,22 @@ const (
 )
 
 // Cliff reports the tier state of the best available player at a position.
+//
+// A cliff means a tier is *emptying*, not that it happens to be small. A tier
+// that started with one player — Josh Allen alone at QB1, which is the rankings
+// file's own statement about the position — is not a cliff, and treating it as
+// one would put "last one, take him or lose the tier" on screen at pick 1.01 of
+// an empty draft. So a cliff requires that somebody has actually been drafted
+// out of the tier.
 func (s *State) Cliff(pos string) (level CliffLevel, tier, remaining int) {
 	best, ok := s.BestNow(pos)
 	if !ok || best.Tier == 0 {
 		return CliffNone, 0, 0
 	}
 	n := s.TierRemaining(pos, best.Tier)
+	if n >= s.TierSize(pos, best.Tier) {
+		return CliffNone, best.Tier, n // untouched
+	}
 	switch {
 	case n == 1:
 		return CliffLast, best.Tier, n

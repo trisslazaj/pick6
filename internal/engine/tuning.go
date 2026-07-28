@@ -50,3 +50,8 @@ var DefaultRoster = Roster{
 
 // FlexEligible positions, for filling the FLEX slot.
 var FlexEligible = map[string]bool{"RB": true, "WR": true, "TE": true}
+
+// SuperFlexEligible adds quarterbacks. Sleeper reports superflex as its own slot
+// count, so a league that uses it gets modelled correctly rather than having its
+// second QB spill onto the bench.
+var SuperFlexEligible = map[string]bool{"QB": true, "RB": true, "WR": true, "TE": true}

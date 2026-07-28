@@ -48,8 +48,10 @@ func TestCliffRollsIntoNextTierWhenOneEmpties(t *testing.T) {
 	}
 	s := New(players, 12, 15, 1)
 
-	if level, tier, n := s.Cliff("RB"); level != CliffLast || tier != 1 || n != 1 {
-		t.Fatalf("tier 1 has one player: got level=%v tier=%d n=%d", level, tier, n)
+	// Tier 1 holds one player and nobody has been drafted, so it is not a cliff —
+	// it is simply a tier of one.
+	if level, tier, n := s.Cliff("RB"); level != CliffNone || tier != 1 || n != 1 {
+		t.Fatalf("untouched one-player tier: got level=%v tier=%d n=%d, want none/1/1", level, tier, n)
 	}
 	s.Draft("a")
 	if level, tier, n := s.Cliff("RB"); level != CliffNone || tier != 2 || n != 3 {
@@ -141,5 +143,31 @@ func TestDetectRunIsDeterministicOnTies(t *testing.T) {
 	}
 	if _, ok := s.DetectRun(); ok {
 		t.Error("a 3-3 split should not be a run")
+	}
+}
+
+// A cliff means a tier is emptying, not that it is small. Without this, a tier
+// the rankings file drew with one player in it — Josh Allen alone at QB1 — puts
+// "last one, take him or lose the tier" on screen at pick 1.01 of an empty draft.
+func TestSmallButUntouchedTierIsNotACliff(t *testing.T) {
+	// A genuine singleton tier.
+	s := New(map[string]Player{
+		"solo": {ID: "solo", Pos: "QB", Tier: 1, Value: 100},
+		"next": {ID: "next", Pos: "QB", Tier: 2, Value: 50},
+	}, 12, 15, 1)
+	if level, _, _ := s.Cliff("QB"); level != CliffNone {
+		t.Errorf("untouched singleton tier reported %v, want none", level)
+	}
+
+	// A two-player tier with nobody taken is not "ending" either.
+	s2 := New(board("RB", 1, 2, 100), 12, 15, 1)
+	if level, _, n := s2.Cliff("RB"); level != CliffNone || n != 2 {
+		t.Errorf("untouched two-player tier reported %v (n=%d), want none", level, n)
+	}
+
+	// Draft one and it becomes a real cliff.
+	s2.Draft("RB0")
+	if level, _, n := s2.Cliff("RB"); level != CliffLast || n != 1 {
+		t.Errorf("after depletion got %v (n=%d), want last/1", level, n)
 	}
 }

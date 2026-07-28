@@ -176,6 +176,11 @@ func untilLabel(n int) string {
 // reserves an empty row — an always-present bar reads as broken.
 func (b Board) banner(w int) string {
 	s := b.State
+	// A finished draft has no runs and no cliffs to act on. Anything urgent-
+	// sounding here is stale by definition.
+	if s.Done() {
+		return ""
+	}
 	if run, ok := s.DetectRun(); ok {
 		return b.runBanner(run, w)
 	}
@@ -383,9 +388,11 @@ func (b Board) insight() string {
 	// a warning into wallpaper.
 	if conflicts := s.ByeConflicts(s.MySlot); len(conflicts) > 0 {
 		c := conflicts[0]
-		msg := fmt.Sprintf("week %d — %d starters out", c.Week, len(c.Players))
+		// The sidebar is narrow; a longer phrasing wraps onto its own line and
+		// reads as a rendering fault rather than a warning.
+		msg := fmt.Sprintf("wk %d — %d out", c.Week, len(c.Players))
 		if len(conflicts) > 1 {
-			msg += fmt.Sprintf(" (+%d more)", len(conflicts)-1)
+			msg += fmt.Sprintf(", +%d wk", len(conflicts)-1)
 		}
 		sb.WriteString(fmt.Sprintf("  %s %s\n", Dim.Render("byes "), Run.Render(msg)))
 	}

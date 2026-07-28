@@ -2,7 +2,10 @@
 // arithmetic, roster filling, cliff and run detection. No I/O, no rendering.
 package engine
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 // Player is the engine's view of a draftable player.
 type Player struct {
@@ -25,10 +28,11 @@ type Roster struct {
 
 // Pick is one completed selection.
 type Pick struct {
-	PickNo   int
-	Round    int
-	Slot     int // 1-indexed draft slot that made the pick
-	PlayerID string
+	PickNo    int
+	Round     int
+	Slot      int // 1-indexed draft slot that made the pick
+	OwnerSlot int // slot whose roster received the player; differs when traded
+	PlayerID  string
 }
 
 // State is everything the board needs. Recomputed from scratch on every pick
@@ -151,12 +155,85 @@ func (s *State) Draft(playerID string) {
 	s.Taken[playerID] = true
 	s.Rosters[slot] = append(s.Rosters[slot], playerID)
 	s.Picks = append(s.Picks, Pick{
-		PickNo:   s.PickNo,
-		Round:    s.Round(s.PickNo),
-		Slot:     slot,
-		PlayerID: playerID,
+		PickNo:    s.PickNo,
+		Round:     s.Round(s.PickNo),
+		Slot:      slot,
+		OwnerSlot: slot,
+		PlayerID:  playerID,
 	})
 	s.PickNo++
+}
+
+// ApplyRemote records a pick reported by a live feed, trusting the feed's own
+// slot and pick number rather than inferring them from the clock.
+//
+// It also cross-checks our snake math against reality: the feed says which slot
+// made pick N, and so do we. A mismatch means our model of the draft order is
+// wrong — a reversal round, a non-snake type that slipped past validation, a
+// custom order — and every survival number downstream would be quietly bogus.
+// Better to surface it than to keep drawing a confident board.
+func (s *State) ApplyRemote(r RemotePick) error {
+	if s.Taken[r.PlayerID] {
+		return nil // already applied; polling returns the full list every time
+	}
+	if want := s.SlotAt(r.PickNo); want != r.Slot {
+		return fmt.Errorf("draft order desync at pick %d: feed says slot %d, snake math says %d",
+			r.PickNo, r.Slot, want)
+	}
+	// The slot that picks and the roster that receives are usually the same, but
+	// diverge when a draft pick has been traded. Attribute the player to whoever
+	// actually gets him, or a pick you traded for never lands on your board.
+	owner := r.OwnerSlot
+	if owner == 0 {
+		owner = r.Slot
+	}
+	s.Taken[r.PlayerID] = true
+	s.Rosters[owner] = append(s.Rosters[owner], r.PlayerID)
+	s.Picks = append(s.Picks, Pick{
+		PickNo: r.PickNo, Round: r.Round, Slot: r.Slot,
+		OwnerSlot: owner, PlayerID: r.PlayerID,
+	})
+	if r.PickNo >= s.PickNo {
+		s.PickNo = r.PickNo + 1
+	}
+	return nil
+}
+
+// RemotePick is one pick as reported by a live feed.
+type RemotePick struct {
+	PickNo    int
+	Round     int
+	Slot      int // the seat that picked, used to verify the snake order
+	OwnerSlot int // the seat whose roster receives the player (differs if traded)
+	PlayerID  string
+}
+
+// EnsurePlayer registers a player we didn't know about, keeping whatever the
+// caller knows (name, position, team) and leaving value and tier at zero.
+//
+// A live draft will absolutely pick players outside our board: it runs 192 picks
+// against a 201-player ADP list, and people reach for handcuffs and rookies that
+// never appear in ADP at all. Without this they'd render as blank roster rows.
+// Zero value means they're untiered, so cliff logic ignores them — correct, since
+// we have no basis to tier someone no source ranked.
+func (s *State) EnsurePlayer(p Player) {
+	if p.ID == "" {
+		return
+	}
+	if _, known := s.Players[p.ID]; known {
+		return
+	}
+	if p.Name == "" {
+		p.Name = "unknown player"
+	}
+	s.Players[p.ID] = p
+}
+
+// SetRoster replaces the assumed lineup, e.g. with one read from Sleeper.
+func (s *State) SetRoster(r Roster) {
+	if len(r.Slots) > 0 {
+		s.Roster = r
+	}
 }
 
 // Undo reverses the most recent pick.
@@ -167,9 +244,12 @@ func (s *State) Undo() {
 	last := s.Picks[len(s.Picks)-1]
 	s.Picks = s.Picks[:len(s.Picks)-1]
 	delete(s.Taken, last.PlayerID)
-	r := s.Rosters[last.Slot]
-	if len(r) > 0 {
-		s.Rosters[last.Slot] = r[:len(r)-1]
+	owner := last.OwnerSlot
+	if owner == 0 {
+		owner = last.Slot
+	}
+	if r := s.Rosters[owner]; len(r) > 0 {
+		s.Rosters[owner] = r[:len(r)-1]
 	}
 	s.PickNo = last.PickNo
 }
@@ -217,6 +297,21 @@ func (s *State) TierRemaining(pos string, tier int) int {
 	return n
 }
 
+// TierSize counts every player in a position's tier, drafted or not. Used to
+// tell a tier that is emptying from one that was always small.
+func (s *State) TierSize(pos string, tier int) int {
+	if tier == 0 {
+		return 0
+	}
+	n := 0
+	for _, p := range s.Players {
+		if p.Pos == pos && p.Tier == tier {
+			n++
+		}
+	}
+	return n
+}
+
 // FilledSlots assigns a team's drafted players to starting slots, dedicated
 // first and flex last, and returns one entry per slot (empty string if unfilled)
 // plus whatever spilled onto the bench.
@@ -224,10 +319,10 @@ func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
 	filled = make([]string, len(s.Roster.Slots))
 	used := map[string]bool{}
 
-	// Dedicated slots first, so a flex-eligible player never squats on FLEX
-	// while his own position sits open.
+	// Dedicated slots first, so a flex-eligible player never squats on a flex
+	// slot while his own position sits open.
 	for i, want := range s.Roster.Slots {
-		if want == "FLEX" {
+		if isFlexSlot(want) {
 			continue
 		}
 		for _, id := range s.Rosters[slot] {
@@ -242,11 +337,11 @@ func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
 		}
 	}
 	for i, want := range s.Roster.Slots {
-		if want != "FLEX" {
+		if !isFlexSlot(want) {
 			continue
 		}
 		for _, id := range s.Rosters[slot] {
-			if used[id] || !FlexEligible[s.Players[id].Pos] {
+			if used[id] || !EligibleFor(want, s.Players[id].Pos) {
 				continue
 			}
 			filled[i] = id
@@ -339,12 +434,27 @@ func (s *State) Need(pos string) float64 {
 			return NeedStarter
 		}
 	}
-	if FlexEligible[pos] {
-		for i, want := range s.Roster.Slots {
-			if want == "FLEX" && filled[i] == "" {
-				return NeedFlex
-			}
+	for i, want := range s.Roster.Slots {
+		if isFlexSlot(want) && filled[i] == "" && EligibleFor(want, pos) {
+			return NeedFlex
 		}
 	}
 	return NeedBench
+}
+
+// isFlexSlot reports whether a lineup slot takes more than one position.
+func isFlexSlot(slot string) bool {
+	return slot == "FLEX" || slot == "SUPERFLEX"
+}
+
+// EligibleFor reports whether a position can fill a lineup slot.
+func EligibleFor(slot, pos string) bool {
+	switch slot {
+	case "FLEX":
+		return FlexEligible[pos]
+	case "SUPERFLEX":
+		return SuperFlexEligible[pos]
+	default:
+		return slot == pos
+	}
 }
