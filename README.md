@@ -4,7 +4,13 @@ Terminal war room for fantasy football drafts. Live-syncs Sleeper, tracks tiers,
 
 ## status
 
-Milestone 1 of 6. `pick6 fetch` works; the board doesn't exist yet.
+Milestone 2 of 6. The board renders; live Sleeper sync isn't wired up yet.
+
+```
+pick6 fetch                  # pull data (do this first)
+pick6 mock                   # watch a scripted draft play out on the real board
+pick6 tiers                  # print the current tier board
+```
 
 ```
 go run ./cmd/pick6 fetch

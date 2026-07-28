@@ -1,0 +1,350 @@
+package ui
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/trisslazaj/pick6/internal/engine"
+)
+
+// Positions in display order when nothing else separates them.
+var positions = []string{"RB", "WR", "TE", "QB", "K", "DEF"}
+
+// Board renders the whole screen. Everything it emits is lowercase; only team
+// abbreviations stay uppercase.
+type Board struct {
+	State  *engine.State
+	Width  int
+	Height int
+	Synced time.Time
+	Status string // transient message shown in the footer
+}
+
+func (b Board) View() string {
+	w := b.Width
+	if w < 80 {
+		w = 80
+	}
+	rightW := 34
+	leftW := w - rightW - 3
+
+	var out []string
+	out = append(out, b.header(w))
+	if banner := b.banner(w); banner != "" {
+		out = append(out, banner)
+	}
+	panes := lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().Width(leftW).Render(b.bestAvailable(leftW)),
+		lipgloss.NewStyle().Width(rightW).MarginLeft(2).Render(b.sidebar(rightW)),
+	)
+	out = append(out, panes, b.footer(w))
+	return strings.Join(out, "\n")
+}
+
+// ---- header ----
+
+func (b Board) header(w int) string {
+	s := b.State
+	if s.Done() {
+		return Bold.Foreground(lipgloss.Color(ColAccent)).Render("  draft complete") + "\n"
+	}
+	onClock := s.OnTheClock()
+	until := s.PicksUntilMine()
+
+	who := fmt.Sprintf("team %d", onClock)
+	whoStyled := Dim.Render(who)
+	if onClock == s.MySlot {
+		whoStyled = Wait.Bold(true).Render("you")
+	}
+
+	left := fmt.Sprintf("  %s  %s  %s",
+		Bold.Foreground(lipgloss.Color(ColAccent)).Render(
+			fmt.Sprintf("round %d", s.Round(s.PickNo))),
+		Dim.Render(fmt.Sprintf("pick %d.%02d", s.Round(s.PickNo), s.IndexInRound(s.PickNo))),
+		Dim.Render(fmt.Sprintf("overall %d", s.PickNo)),
+	)
+
+	right := fmt.Sprintf("on the clock %s   %s", whoStyled, untilLabel(until))
+	pad := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
+	if pad < 1 {
+		pad = 1
+	}
+	return left + strings.Repeat(" ", pad) + right + "\n" +
+		Dim.Render("  "+strings.Repeat("─", w-4))
+}
+
+func untilLabel(n int) string {
+	switch {
+	case n == 0:
+		return Wait.Bold(true).Render("your pick")
+	case n == 1:
+		return Run.Render("1 pick until yours")
+	case n <= 3:
+		return Run.Render(fmt.Sprintf("%d picks until yours", n))
+	default:
+		return Dim.Render(fmt.Sprintf("%d picks until yours", n))
+	}
+}
+
+// ---- alert banner ----
+
+// banner renders the run/cliff line, or "" when nothing is active. It never
+// reserves an empty row — an always-present bar reads as broken.
+func (b Board) banner(w int) string {
+	s := b.State
+	if run, ok := s.DetectRun(); ok {
+		return b.runBanner(run, w)
+	}
+	// No run: surface the most urgent cliff, if any.
+	type c struct {
+		pos, msg string
+	}
+	var worst *c
+	for _, pos := range positions {
+		if s.Need(pos) == 0 {
+			continue
+		}
+		level, tier, _ := s.Cliff(pos)
+		if level == CliffLastLevel {
+			worst = &c{pos, fmt.Sprintf("%s tier %d — last one. take him or lose the tier.",
+				strings.ToLower(pos), tier)}
+			break
+		}
+	}
+	if worst == nil {
+		return ""
+	}
+	return bar(w, ColCliff, "cliff", worst.msg)
+}
+
+// CliffLastLevel aliases the engine constant so callers here read cleanly.
+const CliffLastLevel = engine.CliffLast
+
+func (b Board) runBanner(run engine.Run, w int) string {
+	pos := strings.ToLower(run.Pos)
+	if run.TierBroke {
+		alt := b.bestOtherPosition(run.Pos)
+		msg := fmt.Sprintf("%s run — tier broke, no value left.", pos)
+		if alt != "" {
+			msg += fmt.Sprintf(" best value now: %s.", alt)
+		}
+		return bar(w, ColCliff, "run", msg)
+	}
+	return bar(w, ColRun, "run", fmt.Sprintf(
+		"%s run in progress — %d of the last %d picks. %d left in tier %d. act now or lose it.",
+		pos, run.Count, engine.RunWindow, run.TierLeft, run.Tier))
+}
+
+func (b Board) bestOtherPosition(exclude string) string {
+	best, bestScore := "", 0.0
+	for _, pos := range positions {
+		if pos == exclude {
+			continue
+		}
+		p, ok := b.State.BestNow(pos)
+		if !ok {
+			continue
+		}
+		if score := float64(p.Value) * b.State.Need(pos); score > bestScore {
+			best, bestScore = strings.ToLower(pos), score
+		}
+	}
+	return best
+}
+
+func bar(w int, color, tag, msg string) string {
+	body := fmt.Sprintf(" %s  %s ", strings.ToUpper(tag), msg)
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#1A1B26")).
+		Background(lipgloss.Color(color)).
+		Bold(true).
+		Width(w - 4).
+		MarginLeft(2).
+		Render(strings.ToLower(body))
+}
+
+// ---- left pane: best available ----
+
+func (b Board) bestAvailable(w int) string {
+	s := b.State
+	type group struct {
+		pos     string
+		players []engine.Player
+		score   float64
+	}
+	var groups []group
+	for _, pos := range positions {
+		// A suppressed position (K and DEF before the last rounds) is hidden
+		// outright, not just sorted last. The tool must never imply you should be
+		// thinking about kickers in round 3, and eight rows of them is exactly
+		// that implication.
+		if s.Need(pos) == 0 {
+			continue
+		}
+		avail := s.Available(pos)
+		if len(avail) == 0 {
+			continue
+		}
+		// Milestone 2 orders by need-weighted best value. True urgency — the
+		// value *drop* between now and my next pick — arrives in milestone 4.
+		groups = append(groups, group{pos, avail, float64(avail[0].Value) * s.Need(pos)})
+	}
+	sort.SliceStable(groups, func(i, j int) bool { return groups[i].score > groups[j].score })
+
+	var sb strings.Builder
+	sb.WriteString(Dim.Render("  best available") + "\n")
+	for gi, g := range groups {
+		sb.WriteString(b.groupBlock(g.pos, g.players, gi == 0, w))
+	}
+	return sb.String()
+}
+
+func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w int) string {
+	s := b.State
+	suppressed := s.Need(pos) == 0
+	style := Pos(pos, suppressed)
+
+	level, tier, remaining := s.Cliff(pos)
+	count := Dim.Render(fmt.Sprintf("%d left in tier %d", remaining, tier))
+	switch level {
+	case engine.CliffLast:
+		count = Cliff.Bold(true).Render("last one in tier " + fmt.Sprint(tier))
+	case engine.CliffWarning:
+		count = Run.Render(fmt.Sprintf("%d left in tier %d — ending", remaining, tier))
+	}
+	if tier == 0 {
+		count = Dim.Render("untiered")
+	}
+
+	head := fmt.Sprintf("%s  %s", style.Bold(true).Render(strings.ToLower(pos)), count)
+
+	// One accent, not five: only the top group gets a left border.
+	edge := "  "
+	if top {
+		edge = style.Render("▏") + " "
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n" + edge + head + "\n")
+	for i, p := range avail {
+		if i >= 4 {
+			break
+		}
+		sb.WriteString(edge + "  " + b.playerLine(p, style, w-6) + "\n")
+	}
+	return sb.String()
+}
+
+func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
+	name := style.Render(fmt.Sprintf("%-22s", trunc(strings.ToLower(p.Name), 22)))
+	meta := Dim.Render(fmt.Sprintf("%-4s adp %5.1f", p.Team, p.ADP))
+	bye := Dim.Render(fmt.Sprintf("bye %2d", p.Bye))
+	if p.Bye == 0 {
+		bye = Dim.Render("      ")
+	}
+	return fmt.Sprintf("%s %s  %s", name, meta, bye)
+}
+
+// ---- right pane: roster + ticker ----
+
+func (b Board) sidebar(w int) string {
+	var sb strings.Builder
+	sb.WriteString(Dim.Render("your roster") + "\n")
+	sb.WriteString(b.roster())
+	sb.WriteString("\n" + Dim.Render("recent picks") + "\n")
+	sb.WriteString(b.ticker())
+	return sb.String()
+}
+
+func (b Board) roster() string {
+	s := b.State
+	filled, bench := s.FilledSlots(s.MySlot)
+
+	var sb strings.Builder
+	for i, slot := range s.Roster.Slots {
+		label := Dim.Render(fmt.Sprintf("%-5s", strings.ToLower(slot)))
+		if filled[i] == "" {
+			sb.WriteString(fmt.Sprintf("  %s %s\n", label, Dim.Render("—")))
+			continue
+		}
+		p := s.Players[filled[i]]
+		byeNote := ""
+		if p.Bye > 0 {
+			byeNote = Dim.Render(fmt.Sprintf("  bye %d", p.Bye))
+		}
+		sb.WriteString(fmt.Sprintf("  %s %s%s\n", label,
+			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), 18)), byeNote))
+	}
+	for i, id := range bench {
+		p := s.Players[id]
+		sb.WriteString(fmt.Sprintf("  %s %s\n",
+			Dim.Render(fmt.Sprintf("bn%-3d", i+1)),
+			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), 18))))
+	}
+	return sb.String()
+}
+
+func (b Board) ticker() string {
+	s := b.State
+	picks := s.Picks
+	if len(picks) > 6 {
+		picks = picks[len(picks)-6:]
+	}
+	if len(picks) == 0 {
+		return Dim.Render("  nothing yet") + "\n"
+	}
+	var sb strings.Builder
+	for i := len(picks) - 1; i >= 0; i-- {
+		pk := picks[i]
+		p := s.Players[pk.PlayerID]
+		who := Dim.Render(fmt.Sprintf("%d.%02d", pk.Round, ((pk.PickNo-1)%s.Teams)+1))
+		mine := " "
+		if pk.Slot == s.MySlot {
+			mine = Wait.Render("•")
+		}
+		sb.WriteString(fmt.Sprintf(" %s %s %s %s\n", mine, who,
+			Pos(p.Pos, false).Render(fmt.Sprintf("%-3s", strings.ToLower(p.Pos))),
+			FG.Render(trunc(strings.ToLower(p.Name), 17))))
+	}
+	return sb.String()
+}
+
+// ---- footer ----
+
+func (b Board) footer(w int) string {
+	keys := []string{"space step", "a auto", "u undo", "q quit"}
+	left := "  " + Dim.Render(strings.Join(keys, "   "))
+
+	right := Dim.Render(fmt.Sprintf("synced %s ago", since(b.Synced)))
+	if b.Status != "" {
+		right = Accent.Render(strings.ToLower(b.Status))
+	}
+	pad := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
+	if pad < 1 {
+		pad = 1
+	}
+	return Dim.Render("  "+strings.Repeat("─", w-4)) + "\n" +
+		left + strings.Repeat(" ", pad) + right
+}
+
+func since(t time.Time) string {
+	if t.IsZero() {
+		return "0s"
+	}
+	d := time.Since(t).Round(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	return fmt.Sprintf("%dm", int(d.Minutes()))
+}
+
+func trunc(s string, n int) string {
+	if len([]rune(s)) <= n {
+		return s
+	}
+	return string([]rune(s)[:n-1]) + "…"
+}
