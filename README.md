@@ -4,7 +4,33 @@ Terminal war room for fantasy football drafts. Live-syncs Sleeper, tracks tiers,
 
 ## status
 
-Milestone 1 of 6. `pick6 fetch` works; the board doesn't exist yet.
+Milestone 2 of 6. The board renders; live Sleeper sync isn't wired up yet.
+
+## install
+
+```
+go install github.com/trisslazaj/pick6/cmd/pick6@latest
+```
+
+That puts the binary in `go env GOPATH`/bin, which is **not** on most people's
+PATH by default. Either add it, or install somewhere that already is:
+
+```
+GOBIN=$HOME/bin go install ./cmd/pick6
+```
+
+Working on the code instead? `go run ./cmd/pick6 <cmd>` always runs current
+source, with nothing to reinstall.
+
+## use
+
+```
+pick6 fetch                  # pull data (do this first)
+pick6 mock                   # watch a scripted draft play out on the real board
+pick6 mock -auto=false       # step through it yourself with space
+pick6 tiers                  # print the current tier board
+pick6 mock -snapshot 26      # print one frame, no tui (for screenshots)
+```
 
 ```
 go run ./cmd/pick6 fetch

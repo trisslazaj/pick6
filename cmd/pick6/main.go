@@ -11,7 +11,7 @@ const usage = `pick6 — terminal draft war room
 usage:
   pick6 fetch   download and cache player data + adp, build the mapping
   pick6 tiers   print the current tier board (run fetch first)
-  pick6 mock    replay a scripted draft against the real ui (not built yet)
+  pick6 mock    replay a scripted draft against the real ui
   pick6 live    poll a sleeper draft and render the board (not built yet)
   pick6 board   static best-available board, manual mark-taken (not built yet)
 `
@@ -33,7 +33,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "tiers failed: %v\n", err)
 			os.Exit(1)
 		}
-	case "mock", "live", "board":
+	case "mock":
+		if err := runMock(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "mock failed: %v\n", err)
+			os.Exit(1)
+		}
+	case "live", "board":
 		fmt.Fprintf(os.Stderr, "%s isn't built yet — milestone %s\n", os.Args[1], milestoneOf(os.Args[1]))
 		os.Exit(1)
 	case "-h", "--help", "help":
