@@ -76,8 +76,29 @@ func GetDraft(id string) (*Draft, error) {
 // pick-application path assumes it — a single out-of-order pick would corrupt
 // the roster it lands on.
 func GetPicks(id string) ([]DraftPick, error) {
+	return getPicks(apiBase + "/draft/" + id + "/picks")
+}
+
+// GetPicksFresh bypasses the CDN cache, for use during a running draft.
+//
+// The picks endpoint sits behind Cloudflare with
+// `cache-control: public, s-maxage=15, stale-while-revalidate=300`, so a plain
+// request can return data 15+ seconds old no matter how fast you poll — measured
+// at `age: 26` with `cf-cache-status: HIT`. A `Cache-Control: no-cache` request
+// header is ignored. A unique query parameter is the only thing that produces a
+// MISS, and during a live draft that staleness is the difference between seeing
+// your guy get taken and finding out two picks later.
+//
+// Only used while a draft is actually running: at a 3s interval that's 20
+// requests a minute for one user, which is a rounding error to Sleeper, and it
+// stops entirely once the draft completes.
+func GetPicksFresh(id string, nonce int64) ([]DraftPick, error) {
+	return getPicks(fmt.Sprintf("%s/draft/%s/picks?_=%d", apiBase, id, nonce))
+}
+
+func getPicks(url string) ([]DraftPick, error) {
 	var picks []DraftPick
-	if err := getJSON(apiBase+"/draft/"+id+"/picks", &picks); err != nil {
+	if err := getJSON(url, &picks); err != nil {
 		return nil, err
 	}
 	sort.Slice(picks, func(i, j int) bool { return picks[i].PickNo < picks[j].PickNo })
