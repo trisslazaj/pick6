@@ -126,7 +126,7 @@ func scriptedPicker(seed int64) ui.Autopicker {
 			}
 			a := p.ADP
 			if a <= 0 {
-				a = 999
+				a = engine.UndraftedADP
 			}
 			avail = append(avail, cand{id, a})
 		}

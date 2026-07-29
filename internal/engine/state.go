@@ -268,7 +268,10 @@ func (s *State) Available(pos string) []Player {
 		if out[i].Value != out[j].Value {
 			return out[i].Value > out[j].Value
 		}
-		return out[i].ADP < out[j].ADP
+		if out[i].ADP != out[j].ADP {
+			return out[i].ADP < out[j].ADP
+		}
+		return out[i].ID < out[j].ID // full ties would fall to map order otherwise
 	})
 	return out
 }

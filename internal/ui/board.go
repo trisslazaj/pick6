@@ -184,20 +184,25 @@ func (b Board) banner(w int) string {
 	if run, ok := s.DetectRun(); ok {
 		return b.runBanner(run, w)
 	}
-	// No run: surface the most urgent cliff, if any.
+	// No run: surface the most urgent cliff, if any. Two last-men-standing at
+	// once is rare but real, and the one whose position bleeds more value wins.
 	type c struct {
 		pos, msg string
 	}
 	var worst *c
+	var worstU float64
 	for _, pos := range positions {
 		if s.Need(pos) == 0 {
 			continue
 		}
 		level, tier, _ := s.Cliff(pos)
-		if level == CliffLastLevel {
+		if level != CliffLastLevel {
+			continue
+		}
+		if u := s.Urgency(pos); worst == nil || u > worstU {
 			worst = &c{pos, fmt.Sprintf("%s tier %d — last one. take him or lose the tier.",
 				strings.ToLower(pos), tier)}
-			break
+			worstU = u
 		}
 	}
 	if worst == nil {
@@ -224,17 +229,16 @@ func (b Board) runBanner(run engine.Run, w int) string {
 		pos, run.Count, engine.RunWindow, run.TierLeft, run.Tier))
 }
 
+// bestOtherPosition names the highest-urgency position besides the one on a
+// run. Returns "" when everything else is safe to wait on — the banner just
+// drops the clause rather than naming a position with nothing at stake.
 func (b Board) bestOtherPosition(exclude string) string {
 	best, bestScore := "", 0.0
 	for _, pos := range positions {
 		if pos == exclude {
 			continue
 		}
-		p, ok := b.State.BestNow(pos)
-		if !ok {
-			continue
-		}
-		if score := float64(p.Value) * b.State.Need(pos); score > bestScore {
+		if score := b.State.Urgency(pos); score > bestScore {
 			best, bestScore = strings.ToLower(pos), score
 		}
 	}
@@ -274,9 +278,10 @@ func (b Board) bestAvailable(w int) string {
 		if len(avail) == 0 {
 			continue
 		}
-		// Milestone 2 orders by need-weighted best value. True urgency — the
-		// value *drop* between now and my next pick — arrives in milestone 4.
-		groups = append(groups, group{pos, avail, float64(avail[0].Value) * s.Need(pos)})
+		// Groups sort by urgency: the need-weighted value lost by waiting until
+		// my next pick. All-safe positions tie at zero and keep display order
+		// via the stable sort.
+		groups = append(groups, group{pos, avail, s.Urgency(pos)})
 	}
 	sort.SliceStable(groups, func(i, j int) bool { return groups[i].score > groups[j].score })
 
@@ -308,6 +313,13 @@ func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w, depth 
 
 	head := fmt.Sprintf("%s  %s", style.Bold(true).Render(strings.ToLower(pos)), count)
 
+	// Green only when there is truly nothing to do: cliff copy always wins, and
+	// untiered groups (k/def, value 0, urgency identically 0) never earn the
+	// tag — "safe to wait" about a kicker in the last round would be a lie.
+	if tier != 0 && level == engine.CliffNone && s.Urgency(pos) == 0 {
+		head += "  " + Wait.Render("safe to wait")
+	}
+
 	// One accent, not five: only the top group gets a left border.
 	edge := "  "
 	if top {
@@ -328,22 +340,29 @@ func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w, depth 
 // playerLine drops columns rather than wrapping when the pane is tight. A row
 // that wraps costs two lines and reads as broken; a row missing the bye week
 // still tells you who and when.
+//
+// Width budget: the row is name + " " + meta(14) + " " + surv(4), plus "  " +
+// bye(6) when it fits. Both thresholds are shifted by the survival column's
+// five columns; lowering either wraps rows at content widths 81-82 or 89-91.
 func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
 	nameW := 22
-	if w < 38 {
+	if w < 40 {
 		nameW = 16
 	}
 	name := style.Render(fmt.Sprintf("%-*s", nameW, trunc(strings.ToLower(p.Name), nameW)))
 	meta := Dim.Render(fmt.Sprintf("%-4s adp %5.1f", p.Team, p.ADP))
+	// Chance he's still there at my next pick. The number the whole board runs
+	// on, so show it rather than asking anyone to trust the ordering blind.
+	surv := Dim.Render(fmt.Sprintf("%3.0f%%", 100*b.State.PSurvive(p)))
 
-	if w < nameW+24 { // no room for the bye column
-		return fmt.Sprintf("%s %s", name, meta)
+	if w < nameW+26 { // no room for the bye column
+		return fmt.Sprintf("%s %s %s", name, meta, surv)
 	}
 	bye := Dim.Render(fmt.Sprintf("bye %2d", p.Bye))
 	if p.Bye == 0 {
 		bye = Dim.Render("      ")
 	}
-	return fmt.Sprintf("%s %s  %s", name, meta, bye)
+	return fmt.Sprintf("%s %s %s  %s", name, meta, surv, bye)
 }
 
 // ---- right pane: roster + ticker ----
