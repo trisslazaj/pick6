@@ -98,21 +98,32 @@ func TestTierHoldIsTheComplementOfAllTaken(t *testing.T) {
 // fired on none of the fifteen on-the-clock vantages of the scripted mock. The
 // horizon is therefore the pick after this one, which is what passing costs.
 //
-// Slot 12 at the turn keeps the arithmetic on paper: picks 12 and 13 are both
-// mine, so no opponent pick intervenes, the tilt is exactly 1, and two men at
-// 0.2 apiece leave the tier holding 1 - 0.8^2 = 0.36 — amber. At the horizon
-// this replaced, the same board read 1.0 and no cliff at all.
+// Slot 2 of a 4-team draft keeps the arithmetic on paper: standing on my own
+// pick 2, my next one is 7 and four opponent picks fall in between, which the
+// four receivers at 0.4 carry (4 x 0.6 = the 4 picks) so the tilt is a no-op.
+// Two backs at 0.2 apiece then leave the tier holding 1 - 0.8^2 = 0.36 — amber.
+// At the horizon this replaced, the same board read 1.0 and no cliff at all.
+//
+// Explicitly NOT the turn, which is where this fixture used to stand. At slot T
+// picks 12 and 13 are both mine and nobody else picks in between, so the tier
+// cannot be eaten before I act on it again and the honest hold there is ~1. That
+// board made the arithmetic even easier and proved the wrong thing: it read 0.36
+// only because the tilt was skipped whenever no opponent pick intervened, i.e.
+// because the model was charging removals to a pick I make myself.
 func TestTierHoldOnTheClockLooksPastMyOwnPick(t *testing.T) {
-	s := newTestState(12, 15, 12)
-	s.PickNo = 12 // my pick, and the following one is 13
+	s := newTestState(4, 15, 2)
+	s.PickNo = 2 // my pick, and the following one is 7
 	// survivor()'s closed form keyed to the FOLLOWING pick: the gap to NextPick
 	// is zero here, which is the whole problem being fixed.
-	add := func(id string, value int, p float64) {
-		s.Players[id] = Player{ID: id, Name: id, Pos: "RB", Tier: 1, Value: value,
+	add := func(id, pos string, value int, p float64) {
+		s.Players[id] = Player{ID: id, Name: id, Pos: pos, Tier: 1, Value: value,
 			ADP: float64(s.PickNo), Sigma: survivalSigma(s.FollowingPick()-s.PickNo, p)}
 	}
-	add("rb1", 100, 0.2)
-	add("rb2", 90, 0.2)
+	add("rb1", "RB", 100, 0.2)
+	add("rb2", "RB", 90, 0.2)
+	for i := 0; i < 4; i++ {
+		add("wr"+string(rune('1'+i)), "WR", 50, 0.4) // the tilt's padding, not filler
+	}
 	s.Players["gone"] = Player{ID: "gone", Pos: "RB", Tier: 1, Value: 200}
 	s.Taken["gone"] = true // the tier has to be touched before any level can fire
 
@@ -126,7 +137,7 @@ func TestTierHoldOnTheClockLooksPastMyOwnPick(t *testing.T) {
 
 	// My last pick of the draft has no "after": there is no later pick to lose
 	// the tier before, so it holds outright and nothing is alarming.
-	s.PickNo = 180 // round 15, slot 12: the final pick, FollowingPick 0
+	s.PickNo = 58 // round 15, slot 2: my final pick, FollowingPick 0
 	if hold, _ := s.TierHold("RB"); hold != 1 {
 		t.Errorf("TierHold on my last pick = %v, want exactly 1", hold)
 	}

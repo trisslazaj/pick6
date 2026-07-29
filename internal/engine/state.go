@@ -325,6 +325,16 @@ func (s *State) TierSize(pos string, tier int) int {
 // first and flex last, and returns one entry per slot (empty string if unfilled)
 // plus whatever spilled onto the bench.
 func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
+	return s.fillSlots(s.Rosters[slot])
+}
+
+// fillSlots is that same rule over an explicit list of ids rather than a seat,
+// so the two-pick lookahead can ask what my lineup would look like with one more
+// player on it. Mutating Rosters and restoring it afterwards would be shorter
+// and wrong: the ui calls this during a render, and a panic between the mutation
+// and the restore would leave every later frame describing a roster that never
+// existed.
+func (s *State) fillSlots(ids []string) (filled []string, bench []string) {
 	filled = make([]string, len(s.Roster.Slots))
 	used := map[string]bool{}
 
@@ -334,7 +344,7 @@ func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
 		if isFlexSlot(want) {
 			continue
 		}
-		for _, id := range s.Rosters[slot] {
+		for _, id := range ids {
 			if used[id] {
 				continue
 			}
@@ -349,7 +359,7 @@ func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
 		if !isFlexSlot(want) {
 			continue
 		}
-		for _, id := range s.Rosters[slot] {
+		for _, id := range ids {
 			if used[id] || !EligibleFor(want, s.Players[id].Pos) {
 				continue
 			}
@@ -358,7 +368,7 @@ func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
 			break
 		}
 	}
-	for _, id := range s.Rosters[slot] {
+	for _, id := range ids {
 		if !used[id] {
 			bench = append(bench, id)
 		}
@@ -433,11 +443,34 @@ func (s *State) MyUpcomingPicks(n int) []int {
 
 // Need returns the urgency weight for a position given my roster.
 func (s *State) Need(pos string) float64 {
+	filled, _ := s.FilledSlots(s.MySlot)
+	return s.needFrom(pos, filled)
+}
+
+// NeedAfter is Need as it would read with playerID already on my roster. The
+// second leg of a two-pick plan is chosen against the lineup the first leg
+// leaves behind — taking a rb with the first pick is exactly what drops rb to
+// flex weight for the second — so the lookahead needs this and the board does
+// not.
+//
+// The id goes onto a copy with its own backing array. Appending straight onto
+// Rosters[MySlot] would write into that slice's spare capacity: invisible to any
+// equality check on State, and still a write into live state during a render.
+func (s *State) NeedAfter(pos, playerID string) float64 {
+	mine := s.Rosters[s.MySlot]
+	ids := make([]string, 0, len(mine)+1)
+	ids = append(ids, mine...)
+	ids = append(ids, playerID)
+	filled, _ := s.fillSlots(ids)
+	return s.needFrom(pos, filled)
+}
+
+// needFrom is the need rule itself, over an already-filled lineup.
+func (s *State) needFrom(pos string, filled []string) float64 {
 	// Nobody needs a tool to tell them to draft a kicker in round 6.
 	if (pos == "K" || pos == "DEF") && s.RoundsRemaining() > KDefLastRounds {
 		return 0
 	}
-	filled, _ := s.FilledSlots(s.MySlot)
 	for i, want := range s.Roster.Slots {
 		if want == pos && filled[i] == "" {
 			return NeedStarter

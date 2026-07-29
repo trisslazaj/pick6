@@ -125,6 +125,12 @@ func (b Board) depth(groups int) int {
 	if b.Height <= 0 || groups == 0 {
 		return 4
 	}
+	// The plan line is one more row the left pane spends and this does not charge
+	// for it, deliberately. Taking it off avail before the division costs a row
+	// per GROUP, not a row total — at 40 lines with four groups the frame shrank
+	// from 39 rows to 36, trading two player rows to reclaim one. The budget is
+	// already approximate (it overshoots by three at 24 lines, which is its own
+	// tracked bug); one predictable row beats a lumpy four.
 	avail := b.Height - 8 // header, banner, footer, breathing room
 	perGroup := avail/groups - 2
 	if perGroup < MinDepth {
@@ -159,7 +165,6 @@ func (b Board) header(w int) string {
 		return Bold.Foreground(lipgloss.Color(ColAccent)).Render("  draft complete") + "\n"
 	}
 	onClock := s.OnTheClock()
-	until := s.PicksUntilMine()
 
 	who := fmt.Sprintf("team %d", onClock)
 	whoStyled := Dim.Render(who)
@@ -170,17 +175,40 @@ func (b Board) header(w int) string {
 	left := fmt.Sprintf("  %s  %s  %s",
 		Bold.Foreground(lipgloss.Color(ColAccent)).Render(
 			fmt.Sprintf("round %d", s.Round(s.PickNo))),
-		Dim.Render(fmt.Sprintf("pick %d.%02d", s.Round(s.PickNo), s.IndexInRound(s.PickNo))),
+		Dim.Render("pick "+b.pickLabel(s.PickNo)),
 		Dim.Render(fmt.Sprintf("overall %d", s.PickNo)),
 	)
 
-	right := fmt.Sprintf("on the clock %s   %s", whoStyled, untilLabel(until))
+	right := fmt.Sprintf("on the clock %s   %s", whoStyled, b.untilNote())
 	pad := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
 	if pad < 1 {
 		pad = 1
 	}
 	return left + strings.Repeat(" ", pad) + right + "\n" +
 		Dim.Render("  "+strings.Repeat("─", w-4))
+}
+
+// pickLabel renders an overall pick as round.pick — "2.10" — which is how
+// everyone at a draft says it out loud. Shared because the header, the "up" line
+// and the plan all quote pick numbers, and three copies of one format string are
+// three chances for one of them to drift.
+func (b Board) pickLabel(p int) string {
+	return fmt.Sprintf("%d.%02d", b.State.Round(p), b.State.IndexInRound(p))
+}
+
+// untilNote is the header's right-hand clause about my own turn, and it asks
+// whether I still have one before quoting a distance to it.
+//
+// PicksUntilMine cannot answer that alone: past my last pick of the draft
+// NextPick has no answer and falls back to the final pick, which is behind us,
+// so the count reads 0 — the same 0 that means "you're on the clock". The header
+// then claimed every remaining pick was mine, for the whole tail of the draft.
+// MyUpcomingPicks is empty exactly when I am done, which is the question.
+func (b Board) untilNote() string {
+	if len(b.State.MyUpcomingPicks(1)) == 0 {
+		return Dim.Render("no picks left")
+	}
+	return untilLabel(b.State.PicksUntilMine())
 }
 
 func untilLabel(n int) string {
@@ -370,10 +398,57 @@ func (b Board) bestAvailable(w int) string {
 	depth := b.depth(len(groups))
 	var sb strings.Builder
 	sb.WriteString(sectionHead("best available", w-2) + "\n")
+	sb.WriteString(b.planLine(w))
 	for gi, g := range groups {
 		sb.WriteString(b.groupBlock(g.pos, g.players, gi == 0, w, depth))
 	}
 	return sb.String()
+}
+
+// planCopy is the two-pick lookahead in words: which position to take with my
+// next pick, and which to expect with the one after it. Both legs are named by
+// their pick numbers and never by "now" — the plan is computed as-if standing at
+// my next pick but drawn on every frame, and on eleven frames out of twelve that
+// pick belongs to somebody else.
+//
+// The pair's score is deliberately NOT rendered. It ranks pairs; it does not
+// forecast what you will get, because its first leg is priced at the value of
+// today's best available even when my next pick is eighteen picks away and he
+// will plainly be gone by then. Printed as "(e 12318)" it read as an expectation
+// while sitting three rows above the same man's survival column reading 0% — one
+// line of the board contradicting the evidence directly under it, on 27 of 166
+// plan frames of the scripted mock. The pair is the product; the number was
+// noise wearing a label it could not honour.
+//
+// "" when there is no second pick to plan for.
+func (b Board) planCopy() string {
+	plan, ok := b.State.BestPlan()
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("plan  %s at %s → %s at %s",
+		strings.ToLower(plan.First), b.pickLabel(plan.FirstPick),
+		strings.ToLower(plan.Second), b.pickLabel(plan.SecondPick))
+}
+
+// planLine is that copy as the left pane's first row, or "" in the last round.
+// When there is no second pick the line disappears outright rather than
+// reserving an empty one — the rule the alert banner already follows, and the
+// reason both read as intentional rather than broken.
+//
+// Dim, because it is a suggestion sitting on top of the board that holds the
+// evidence for it. The group order, the tiers and the survivals below are what
+// you actually read; this is the one-line summary you're free to ignore.
+//
+// The line has no short form to fall back to because it never needs one: its
+// widest possible copy is 33 cells ("plan  def at 15.12 → def at 15.12") and the
+// tightest this pane ever gets is 43, at 80 columns with the widest sidebar.
+func (b Board) planLine(w int) string {
+	line := b.planCopy()
+	if line == "" {
+		return ""
+	}
+	return "  " + Dim.Render(line) + "\n"
 }
 
 // tierLabel is the group header's tier clause, in a long form and a short one.
@@ -561,7 +636,7 @@ func (b Board) insight() string {
 		if picks := s.MyUpcomingPicks(2); len(picks) > 0 {
 			parts := make([]string, len(picks))
 			for i, p := range picks {
-				parts[i] = fmt.Sprintf("%d.%02d", s.Round(p), s.IndexInRound(p))
+				parts[i] = b.pickLabel(p)
 			}
 			sb.WriteString(fmt.Sprintf("  %s %s\n",
 				Dim.Render("up   "),

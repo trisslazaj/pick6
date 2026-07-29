@@ -43,8 +43,20 @@ func (s *State) opponentPicksBefore(at int) int {
 // picks span positions. Normalizing per position would assume each position
 // takes its own share of them, which is precisely what a positional run isn't.
 func (s *State) survivalTilt(at, n int) float64 {
-	if n <= 0 {
-		return 1 // my own pick: nothing intervenes, so there is nothing to correct
+	// The skip is on the HORIZON, not on n. At at == PickNo nothing intervenes at
+	// all: every survival is already exactly 1, so returning exactly 1 costs
+	// nothing and keeps the my-own-pick chain (EBest == v(bestNow), urgency == 0)
+	// arithmetic rather than a bisection's 1.0000004.
+	//
+	// n == 0 with at > PickNo is a different state and must NOT skip. At the turn
+	// the lookahead's second leg looks across a single intervening pick that is MY
+	// OWN, so no opponent removes anybody and the honest answer is that everyone
+	// survives — the clamp toward c = 1/TiltCMax, not "no correction". Skipping on
+	// n alone left the raw logistic in place and priced the top rb at 13.5% across
+	// a pick I am the one making, in exactly the double-tap-at-the-turn case the
+	// lookahead exists for.
+	if at <= s.PickNo {
+		return 1
 	}
 	// Each player's log-survival is computed once and the bisection runs over
 	// that array. Recomputing PSurviveAt inside the loop would be ~26x the

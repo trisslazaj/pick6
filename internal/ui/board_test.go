@@ -152,6 +152,42 @@ func cliffState() *engine.State {
 	return s
 }
 
+// lookaheadState is the ui side of engine/plan_test.go's lookahead board, and
+// the only fixture here that is about the plan line rather than the groups under
+// it. 4 teams, slot 2, standing at pick 1: my picks are 1.02 and 2.03, so five
+// opponent picks fall between them. The rbs hold to the second pick and the
+// receivers do not, so the plan is to take the wr while he exists and collect
+// the rb on the way back.
+//
+// Borrowed rather than invented because its score is hand-computed there
+// (90 + EBest(rb, 7) = 90 + 97.2), which is what lets the rendered line be
+// asserted as an exact string instead of against whatever the engine returns.
+// That only holds while the tilt stays neutral: sum(1 - p) over the eight
+// available players is 0.1 + 0.1 + 0.95 + 0.95 + 4(0.725) = 5, exactly the picks
+// that happen, so the tes are load-bearing and not filler.
+//
+// Values are that board's times 100 — 10000 rather than 100 — because
+// FantasyCalc puts 10465 on the best player alive and five figures is the regime
+// the real board renders in. Nothing on screen depends on the multiplier:
+// survival, need and the ordering are all scale-free, and the plan line quotes
+// no value at all.
+//
+// Sigmas come from the closed form for a player whose adp is the current pick —
+// survival to `at` is 2/(1 + e^(gap/sigma)), so sigma = gap/ln(2/p - 1) puts any
+// probability on the board exactly. gap is 6 here, pick 1 to pick 7.
+func lookaheadState() *engine.State {
+	players, add := newBoard()
+	sigma := func(p float64) float64 { return 6 / math.Log(2/p-1) }
+	add("rb1", "RB", 10000, 1, sigma(0.9), 1)
+	add("rb2", "RB", 8000, 1, sigma(0.9), 1)
+	add("wr1", "WR", 9000, 1, sigma(0.05), 1)
+	add("wr2", "WR", 7000, 1, sigma(0.05), 1)
+	for i := 1; i <= 4; i++ {
+		add(fmt.Sprintf("te%d", i), "TE", 1000, 1, sigma(0.275), 1)
+	}
+	return engine.New(players, 4, 15, 2)
+}
+
 // The scripted drafts the tests replay. Shared so the fixture guard below can
 // stand at exactly the vantages the assertions do.
 var (
@@ -176,7 +212,12 @@ func topGroup(view string) string {
 // (blank, or the accent on the top group) then the position tag then the
 // header's two spaces. Player rows are indented two further, and the sidebar
 // sits past the divider on the same lines, so neither can match.
-var groupHeadRe = regexp.MustCompile(`(?m)^(?:▏ |  )([a-z]+)  \S`)
+//
+// The tag is spelled out rather than [a-z]+ because the plan line sits at the
+// same indent in the same shape — "  plan  wr at 1.02 → …" — and matched as a
+// group called "plan", which put a position that does not exist at the head of
+// every order assertion.
+var groupHeadRe = regexp.MustCompile(`(?m)^(?:▏ |  )(qb|rb|wr|te|k|def)  \S`)
 
 // groupOrder reads the board tab's position groups in the order they render,
 // which is the order urgency put them in.
@@ -204,6 +245,48 @@ func groupLine(view, pos string) string {
 	return ""
 }
 
+// planRow returns the board tab's plan line, or "" when it isn't rendered. The
+// sidebar sits on the same physical line past the divider, so cut there — the
+// assertion is about the left pane's row, not about what happens to be beside it.
+func planRow(view string) string {
+	for _, line := range strings.Split(view, "\n") {
+		l := strings.TrimSpace(line)
+		if !strings.HasPrefix(l, "plan  ") {
+			continue
+		}
+		if i := strings.Index(l, "│"); i >= 0 {
+			l = l[:i]
+		}
+		return strings.TrimSpace(l)
+	}
+	return ""
+}
+
+// leadingBlanks counts the blank left-pane rows between the "best available"
+// section head and whatever renders first under it. groupBlock opens with one
+// blank of its own, so a planless pane reads 1 and a planned pane reads 0 — and
+// 2 means a row was reserved and left empty, which is the failure this is here
+// to name rather than the plan simply being absent.
+func leadingBlanks(view string) int {
+	n, found := 0, false
+	for _, line := range strings.Split(view, "\n") {
+		l := line
+		if i := strings.Index(l, "│"); i >= 0 {
+			l = l[:i] // the sidebar shares these lines; it is not the left pane
+		}
+		l = strings.TrimSpace(l)
+		if !found {
+			found = strings.HasPrefix(l, "best available")
+			continue
+		}
+		if l != "" {
+			break
+		}
+		n++
+	}
+	return n
+}
+
 // playerRow returns the first rendered row mentioning a player, on either tab.
 func playerRow(view, name string) string {
 	for _, line := range strings.Split(view, "\n") {
@@ -216,9 +299,10 @@ func playerRow(view, name string) string {
 
 // tiltRemovals is the exactly-N tilt's own objective, f(c) = sum(1 - p^c) over
 // every available player, rebuilt here from the exported survival because
-// survivalTilt is unexported. Used only by the clamp guard below.
-func tiltRemovals(s *engine.State, c float64) float64 {
-	at := s.NextPick()
+// survivalTilt is unexported. The horizon is a parameter because the frame now
+// solves the tilt at two of them: my next pick, and — for the plan line's second
+// leg — the pick after that. Used only by the clamp guard below.
+func tiltRemovals(s *engine.State, at int, c float64) float64 {
 	total := 0.0
 	for id, p := range s.Players {
 		if s.Taken[id] {
@@ -257,24 +341,34 @@ func TestFixturesAreNotTiltClamped(t *testing.T) {
 	for _, id := range waitPicks {
 		waitAfter.Draft(id)
 	}
+	wait, cliff, look := waitState(), cliffState(), lookaheadState()
 
 	cases := []struct {
 		name string
 		s    *engine.State
+		at   int // the horizon whose solve has to land inside the bracket
+		n    int // opponent picks before it — the tilt's target
 	}{
-		{"run frame a", runA},
-		{"run frame b", runB},
-		{"wait, untouched tier", waitState()},
-		{"wait, tier ending", waitAfter},
-		{"two cliffs at once", cliffState()},
+		{"run frame a", runA, runA.NextPick(), runA.PicksUntilMine()},
+		{"run frame b", runB, runB.NextPick(), runB.PicksUntilMine()},
+		{"wait, untouched tier", wait, wait.NextPick(), wait.PicksUntilMine()},
+		{"wait, tier ending", waitAfter, waitAfter.NextPick(), waitAfter.PicksUntilMine()},
+		{"two cliffs at once", cliff, cliff.NextPick(), cliff.PicksUntilMine()},
+		// The plan line's second leg prices survival to my pick AFTER next, so
+		// that horizon has to clear the bracket too — a clamp there would leave
+		// the rendered plan naming a pair chosen from survivals that are all
+		// zero, which is the same silent nothing-asserted failure one horizon
+		// down. My own next pick is not an opponent's, hence the extra -1.
+		{"lookahead, first leg", look, look.NextPick(), look.PicksUntilMine()},
+		{"lookahead, second leg", look, look.FollowingPick(),
+			look.FollowingPick() - look.PickNo - 1},
 	}
 	for _, c := range cases {
-		n := float64(c.s.PicksUntilMine())
-		lo := tiltRemovals(c.s, 1/engine.TiltCMax)
-		hi := tiltRemovals(c.s, engine.TiltCMax)
-		if lo >= n || n >= hi {
-			t.Errorf("%s: tilt clamps at pick %d — want %.3f < %.0f < %.3f",
-				c.name, c.s.PickNo, lo, n, hi)
+		lo := tiltRemovals(c.s, c.at, 1/engine.TiltCMax)
+		hi := tiltRemovals(c.s, c.at, engine.TiltCMax)
+		if lo >= float64(c.n) || float64(c.n) >= hi {
+			t.Errorf("%s: tilt clamps at pick %d, horizon %d — want %.3f < %d < %.3f",
+				c.name, c.s.PickNo, c.at, lo, c.n, hi)
 		}
 	}
 }
@@ -428,6 +522,87 @@ func TestRunBannerDoesNotShoutAtATierThatHolds(t *testing.T) {
 	}
 	if strings.Contains(view, "act now or lose it") {
 		t.Errorf("the tier holds and the header says so; the banner must not demand action:\n%s", view)
+	}
+}
+
+// Both legs of the plan are named by their pick number, never by "now": the
+// plan is computed as-if standing at my next pick but drawn on every frame, and
+// standing at 1.01 here that pick is already somebody else's. A line that said
+// "take a wr now" would be wrong on eleven frames out of twelve.
+//
+// The whole string is pinned rather than a substring, because every part of it
+// has failed differently at some point: "%d.%d" instead of "%d.%02d" renders 2.3
+// for 2.03, and the second leg is the half that silently reads NextPick when
+// nothing checks it. engine/plan_test.go owns the argument for the pair itself;
+// this owns the row.
+//
+// The width sweep is the other half, and the row is now the same at every one of
+// them: the copy carries no optional clause, because the pair's score used to
+// ride on the end and no longer does. Its widest form is 33 cells against a pane
+// that is 43 at the narrowest terminal the board supports, so any difference
+// across the sweep is a truncation or a wrap — either of which reads as a
+// rendering fault rather than as a tight fit.
+func TestPlanLineNamesBothLegsByPick(t *testing.T) {
+	const legs = "plan  wr at 1.02 → rb at 2.03"
+	for _, w := range []int{80, 92, 104, 140} {
+		view := ansi.ReplaceAllString(
+			Board{State: lookaheadState(), Width: w, Height: 40}.View(), "")
+		if got := planRow(view); got != legs {
+			t.Errorf("width %d: plan line = %q, want %q\n%s", w, got, legs, view)
+		}
+		if got := leadingBlanks(view); got != 0 {
+			t.Errorf("width %d: %d blank rows above the plan, want it directly under the head", w, got)
+		}
+	}
+
+	// Round 15 is my last pick of a 4-team draft, so there is no second leg to
+	// plan for. The row then disappears OUTRIGHT rather than rendering empty —
+	// the rule the alert banner already follows, and the difference between the
+	// two is invisible to anything looking for the copy, since a reserved blank
+	// carries no copy either.
+	s := lookaheadState()
+	s.PickNo = 58
+	view := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
+	if got := planRow(view); got != "" {
+		t.Errorf("no second pick exists, but the board still plans: %q", got)
+	}
+	if got := leadingBlanks(view); got != 1 {
+		t.Errorf("%d blank rows under the section head, want the group separator alone", got)
+	}
+}
+
+// The header must never claim a pick that is not mine. Past my last pick of the
+// draft NextPick has no answer and falls back to the final pick of the draft,
+// which is behind us, so PicksUntilMine reads 0 — and 0 is also how "you're on
+// the clock" is spelled. Standing at the last pick of a draft this seat finished
+// two picks ago, the header read "your pick"; live it would say that on every
+// frame after the user's own last pick, which is the whole tail of the draft.
+//
+// The count is a lie one pick earlier too, where it read "1 pick until yours"
+// about a pick belonging to somebody else, so the fix is to ask whether I have a
+// pick left at all rather than to special-case the zero.
+func TestHeaderStopsCountingAfterMyLastPick(t *testing.T) {
+	cases := []struct {
+		pickNo  int
+		want    string
+		notWant string
+	}{
+		{1, "1 pick until yours", "your pick"}, // the control: my pick is 1.02
+		{58, "your pick", "no picks left"},     // my last pick of the draft, slot 2 in round 15
+		{59, "no picks left", "until yours"},
+		{60, "no picks left", "your pick"}, // the final pick of the draft, and not mine
+	}
+	for _, c := range cases {
+		s := lookaheadState()
+		s.PickNo = c.pickNo
+		view := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
+		head := strings.SplitN(view, "\n", 2)[0]
+		if !strings.Contains(head, c.want) {
+			t.Errorf("pick %d: header %q should read %q", c.pickNo, head, c.want)
+		}
+		if strings.Contains(head, c.notWant) {
+			t.Errorf("pick %d: header %q claims %q", c.pickNo, head, c.notWant)
+		}
 	}
 }
 

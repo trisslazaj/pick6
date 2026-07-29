@@ -152,6 +152,43 @@ func TestSurvivalTiltSkippedOnMyOwnPick(t *testing.T) {
 	}
 }
 
+// n == 0 does NOT mean "nothing intervenes", and conflating the two is how the
+// model came to expect players to vanish across a pick only I make. At the turn
+// — slot T picking at 12 and 13 — the lookahead's second leg looks across one
+// intervening pick and that pick is mine, so no opponent removes anybody and the
+// whole board survives: the low clamp, where a coin flip lifts to
+// 0.5^(1/64) = 0.9892280. Skipping the solve on n alone returned c = 1 and left
+// the raw logistic in place, pricing the top rb at 13.5% survival across his own
+// drafter's pick, in exactly the double-tap case the lookahead exists for.
+//
+// The horizon is what earns the skip: at at == PickNo every survival is already
+// exactly 1, which is what the test above pins.
+func TestSurvivalTiltAcrossMyOwnPickAtTheTurn(t *testing.T) {
+	s := newTestState(12, 15, 12)
+	s.PickNo = 12 // my pick; the next is 13, so only my own pick intervenes
+	q2 := s.FollowingPick()
+	if q2 != 13 {
+		t.Fatalf("fixture is not the turn: following pick = %d, want 13", q2)
+	}
+	for i := 0; i < 4; i++ {
+		survivorAt(s, "rb"+string(rune('1'+i)), "RB", 1, 100-i, q2, 0.5)
+	}
+
+	n := s.opponentPicksBefore(q2)
+	if n != 0 {
+		t.Fatalf("fixture: %d opponent picks before q2, want none", n)
+	}
+	if got := s.survivalTilt(q2, n); got != 1/TiltCMax {
+		t.Errorf("tilt across my own pick = %v, want the low clamp at %v", got, 1/TiltCMax)
+	}
+	for _, p := range s.Players {
+		tilted := math.Pow(s.PSurviveAt(p, q2), s.survivalTilt(q2, n))
+		if math.Abs(tilted-0.9892280) > 1e-6 {
+			t.Errorf("survival of %s to q2 = %v, want 0.9892280", p.ID, tilted)
+		}
+	}
+}
+
 // Both clamps are reachable board states, not defensive padding, and both must
 // come back as finite numbers rather than a NaN that poisons every downstream
 // product.

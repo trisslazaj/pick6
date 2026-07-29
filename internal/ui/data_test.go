@@ -121,6 +121,31 @@ func TestDataViewUrgencyStrip(t *testing.T) {
 	}
 }
 
+// The plan rides on the end of the urgency strip only when the row can pay for
+// it, and dropping it has to be silent: this tab's whole job is the table below,
+// so a strip that wrapped would cost a row of it, and the board tab is carrying
+// the plan in full either way.
+//
+// The fixture's three entries are 45 cells and the plan is another 32 with its
+// gap, against a budget of w-8 — so 80 columns cannot fit it and 92 can, which
+// is the boundary this pins.
+func TestDataStripDropsThePlanWhenItDoesNotFit(t *testing.T) {
+	cases := []struct {
+		w    int
+		want bool
+	}{
+		{80, false},
+		{92, true},
+	}
+	for _, c := range cases {
+		b := Board{State: lookaheadState(), Width: c.w, Height: 40, Tab: 1}
+		view := ansi.ReplaceAllString(b.View(), "")
+		if got := strings.Contains(view, "plan  wr at 1.02 → rb at 2.03"); got != c.want {
+			t.Errorf("width %d: plan on the strip = %v, want %v\n%s", c.w, got, c.want, view)
+		}
+	}
+}
+
 // stripOrder reads the positions off the urgency strip in the order it lists
 // them, which is meant to be the order the board tab stacks its groups.
 func stripOrder(view string) []string {
@@ -129,8 +154,16 @@ func stripOrder(view string) []string {
 		if !strings.HasPrefix(l, "urgency  ") {
 			continue
 		}
+		l = strings.TrimPrefix(l, "urgency  ")
+		// The plan rides on the end of the strip when it fits, separated by
+		// spaces rather than the entries' "·" precisely because it is not one of
+		// them. Cut it off, or a fixture wide enough to show it would quietly add
+		// a phantom "position" to every order assertion below.
+		if i := strings.Index(l, "   plan  "); i >= 0 {
+			l = l[:i]
+		}
 		var out []string
-		for _, e := range strings.Split(strings.TrimPrefix(l, "urgency  "), "·") {
+		for _, e := range strings.Split(l, "·") {
 			if f := strings.Fields(e); len(f) > 0 {
 				out = append(out, f[0])
 			}

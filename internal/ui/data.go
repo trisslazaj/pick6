@@ -300,19 +300,23 @@ func (b Board) urgencyStrip(w int) string {
 				FG.Render(fmt.Sprintf("%.0f", u)), Dim.Render(pair)), u})
 		}
 	}
+	rule := "\n" + Dim.Render("  "+strings.Repeat("─", w-4)) + "\n"
 	if len(entries) == 0 {
 		note := Dim.Render("—")
 		if !s.Done() && s.PicksUntilMine() == 0 {
 			note = Dim.Render("your pick — urgency resets, take best value")
 		}
-		return "  " + Dim.Render("urgency  ") + note + "\n" +
-			Dim.Render("  "+strings.Repeat("─", w-4)) + "\n"
+		// The plan still rides along here, and this is the frame it is most worth
+		// reading on: standing at my own pick, every urgency is exactly zero and
+		// the strip has nothing else to say about which position to take.
+		line := "  " + Dim.Render("urgency  ") + note
+		return line + b.planTail(lipgloss.Width(line), false, w) + rule
 	}
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].u > entries[j].u })
 
 	line := "  " + Dim.Render("urgency  ")
 	used := lipgloss.Width(line)
-	shown := 0
+	shown, overflowed := 0, false
 	for _, e := range entries {
 		sep := ""
 		if shown > 0 {
@@ -320,13 +324,37 @@ func (b Board) urgencyStrip(w int) string {
 		}
 		if used+lipgloss.Width(sep)+lipgloss.Width(e.text) > w-8 {
 			line += Dim.Render(fmt.Sprintf(" +%d", len(entries)-shown))
+			overflowed = true
 			break
 		}
 		line += sep + e.text
 		used += lipgloss.Width(sep) + lipgloss.Width(e.text)
 		shown++
 	}
-	return line + "\n" + Dim.Render("  "+strings.Repeat("─", w-4)) + "\n"
+	return line + b.planTail(used, overflowed, w) + rule
+}
+
+// planTail appends the two-pick plan to the strip when the row has width to
+// spare, and omits it silently otherwise. The board tab carries the plan in
+// full, so here it is a convenience — and a strip that wrapped to two lines
+// would cost a row of the very table this tab exists to show.
+//
+// The gap before it is spaces rather than the entries' "·": the plan is not
+// another position entry, it is one claim about the whole board, and joining
+// their list would read as though it were.
+func (b Board) planTail(used int, overflowed bool, w int) string {
+	if overflowed {
+		return "" // the entries already spent the row and said so with a "+n"
+	}
+	plan := b.planCopy()
+	if plan == "" {
+		return "" // last round: no second pick to plan for
+	}
+	gap := "   "
+	if used+lipgloss.Width(gap)+lipgloss.Width(plan) > w-8 {
+		return ""
+	}
+	return gap + Dim.Render(plan)
 }
 
 // lastName compresses "jeremiyah love" to "love" for the urgency strip; a
