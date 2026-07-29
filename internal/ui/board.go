@@ -22,21 +22,43 @@ type Board struct {
 	Height int
 	Synced time.Time
 	Status string // transient message shown in the footer
+
+	// Tab 0 is the board; tab 1 is the data table — every player, every
+	// number, nothing abstracted away. State for the latter lives here so
+	// both the mock and live models share it.
+	Tab        int
+	DataScroll int
+	DataFilter string // "" = all positions
 }
 
-// Layout bounds. The board has a natural width — a player row is about 46
-// columns and a roster row about 34 — so stretching to fill a wide terminal just
-// manufactures a gulf between the panes. Cap it and centre instead; extra height
-// is spent showing more players, which is the thing you actually want more of.
+// Layout bounds. Rows scale with width — wider terminals buy longer names and
+// a roomier sidebar — up to the point where columns can't usefully consume more
+// and stretching would only manufacture a gulf between the panes. Cap there and
+// centre; extra height is spent showing more players, which is the thing you
+// actually want more of.
 const (
 	MinWidth   = 80
-	MaxWidth   = 92
-	SidebarW   = 34
+	MaxWidth   = 104
+	SidebarW   = 34 // minimum; grows with the terminal up to SidebarMaxW
+	SidebarMaxW = 38
 	MinDepth   = 3 // players shown per position group
 	MaxDepth   = 8
 	MinTickerN = 4
 	MaxTickerN = 10
 )
+
+// sidebarWidth gives the sidebar a share of any width beyond the old 92-column
+// board, so wide terminals buy unclipped roster names instead of a wider gulf.
+func sidebarWidth(content int) int {
+	sw := SidebarW + (content-92)/3
+	if sw < SidebarW {
+		return SidebarW
+	}
+	if sw > SidebarMaxW {
+		return SidebarMaxW
+	}
+	return sw
+}
 
 func (b Board) View() string {
 	content := b.Width
@@ -46,16 +68,20 @@ func (b Board) View() string {
 	if content < MinWidth {
 		content = MinWidth
 	}
-	leftW := content - SidebarW - 3
-
-	left := b.bestAvailable(leftW)
-	right := b.sidebar(SidebarW)
-
-	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(leftW).Render(left),
-		b.divider(maxLines(left, right)),
-		lipgloss.NewStyle().Width(SidebarW).PaddingLeft(2).Render(right),
-	)
+	var body string
+	if b.Tab == 1 {
+		body = b.dataPane(content)
+	} else {
+		sw := sidebarWidth(content)
+		leftW := content - sw - 3
+		left := b.bestAvailable(leftW)
+		right := b.sidebar(sw)
+		body = lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.NewStyle().Width(leftW).Render(left),
+			b.divider(maxLines(left, right)),
+			lipgloss.NewStyle().Width(sw).PaddingLeft(2).Render(right),
+		)
+	}
 
 	block := strings.Join([]string{
 		b.header(content),
@@ -184,20 +210,25 @@ func (b Board) banner(w int) string {
 	if run, ok := s.DetectRun(); ok {
 		return b.runBanner(run, w)
 	}
-	// No run: surface the most urgent cliff, if any.
+	// No run: surface the most urgent cliff, if any. Two last-men-standing at
+	// once is rare but real, and the one whose position bleeds more value wins.
 	type c struct {
 		pos, msg string
 	}
 	var worst *c
+	var worstU float64
 	for _, pos := range positions {
 		if s.Need(pos) == 0 {
 			continue
 		}
 		level, tier, _ := s.Cliff(pos)
-		if level == CliffLastLevel {
+		if level != CliffLastLevel {
+			continue
+		}
+		if u := s.Urgency(pos); worst == nil || u > worstU {
 			worst = &c{pos, fmt.Sprintf("%s tier %d — last one. take him or lose the tier.",
 				strings.ToLower(pos), tier)}
-			break
+			worstU = u
 		}
 	}
 	if worst == nil {
@@ -224,17 +255,16 @@ func (b Board) runBanner(run engine.Run, w int) string {
 		pos, run.Count, engine.RunWindow, run.TierLeft, run.Tier))
 }
 
+// bestOtherPosition names the highest-urgency position besides the one on a
+// run. Returns "" when everything else is safe to wait on — the banner just
+// drops the clause rather than naming a position with nothing at stake.
 func (b Board) bestOtherPosition(exclude string) string {
 	best, bestScore := "", 0.0
 	for _, pos := range positions {
 		if pos == exclude {
 			continue
 		}
-		p, ok := b.State.BestNow(pos)
-		if !ok {
-			continue
-		}
-		if score := float64(p.Value) * b.State.Need(pos); score > bestScore {
+		if score := b.State.Urgency(pos); score > bestScore {
 			best, bestScore = strings.ToLower(pos), score
 		}
 	}
@@ -242,14 +272,18 @@ func (b Board) bestOtherPosition(exclude string) string {
 }
 
 func bar(w int, color, tag, msg string) string {
-	body := fmt.Sprintf(" %s  %s ", strings.ToUpper(tag), msg)
+	body := strings.ToLower(fmt.Sprintf(" %s  %s ", strings.ToUpper(tag), msg))
+	// Truncate, never wrap: a two-line banner makes the frame one taller than
+	// the terminal and bubbletea clips the header — during a run, the exact
+	// moment someone is looking. The head of the copy carries the information.
+	body = trunc(body, w-4)
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#1A1B26")).
 		Background(lipgloss.Color(color)).
 		Bold(true).
 		Width(w - 4).
 		MarginLeft(2).
-		Render(strings.ToLower(body))
+		Render(body)
 }
 
 // ---- left pane: best available ----
@@ -260,6 +294,7 @@ func (b Board) bestAvailable(w int) string {
 		pos     string
 		players []engine.Player
 		score   float64
+		value   float64
 	}
 	var groups []group
 	for _, pos := range positions {
@@ -274,11 +309,20 @@ func (b Board) bestAvailable(w int) string {
 		if len(avail) == 0 {
 			continue
 		}
-		// Milestone 2 orders by need-weighted best value. True urgency — the
-		// value *drop* between now and my next pick — arrives in milestone 4.
-		groups = append(groups, group{pos, avail, float64(avail[0].Value) * s.Need(pos)})
+		// Groups sort by urgency: the need-weighted value lost by waiting until
+		// my next pick. Near my own pick urgencies collapse to zero — nobody can
+		// be taken in zero picks — so ties fall to need-weighted best value,
+		// which keeps the board pointing at the pick instead of going limp
+		// exactly when I'm on the clock.
+		groups = append(groups, group{pos, avail, s.Urgency(pos),
+			float64(avail[0].Value) * s.Need(pos)})
 	}
-	sort.SliceStable(groups, func(i, j int) bool { return groups[i].score > groups[j].score })
+	sort.SliceStable(groups, func(i, j int) bool {
+		if groups[i].score != groups[j].score {
+			return groups[i].score > groups[j].score
+		}
+		return groups[i].value > groups[j].value
+	})
 
 	depth := b.depth(len(groups))
 	var sb strings.Builder
@@ -308,6 +352,14 @@ func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w, depth 
 
 	head := fmt.Sprintf("%s  %s", style.Bold(true).Render(strings.ToLower(pos)), count)
 
+	// Green only when there is truly nothing to do: cliff copy always wins,
+	// untiered groups (k/def, value 0, urgency identically 0) never earn the
+	// tag — "safe to wait" about a kicker in the last round would be a lie —
+	// and neither does anything on my own pick, when waiting isn't on offer.
+	if tier != 0 && level == engine.CliffNone && s.Urgency(pos) == 0 && s.PicksUntilMine() > 0 {
+		head += "  " + Wait.Render("safe to wait")
+	}
+
 	// One accent, not five: only the top group gets a left border.
 	edge := "  "
 	if top {
@@ -328,22 +380,40 @@ func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w, depth 
 // playerLine drops columns rather than wrapping when the pane is tight. A row
 // that wraps costs two lines and reads as broken; a row missing the bye week
 // still tells you who and when.
+//
+// Width budget: the row is name + " " + meta(14) + " " + surv(4), plus "  " +
+// bye(6) when it fits. The name takes whatever the pane can spare (row =
+// nameW+28 with bye, so nameW = w-26 fills the budget exactly); below w=42
+// even the floor name doesn't leave room for the bye column.
 func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
-	nameW := 22
-	if w < 38 {
+	nameW := w - 26
+	if nameW < 16 {
 		nameW = 16
 	}
+	if nameW > 26 {
+		nameW = 26
+	}
 	name := style.Render(fmt.Sprintf("%-*s", nameW, trunc(strings.ToLower(p.Name), nameW)))
-	meta := Dim.Render(fmt.Sprintf("%-4s adp %5.1f", p.Team, p.ADP))
+	// A falling player is a discount — the draft has moved past his price and
+	// he's still here. Amber on the numbers, not the name: it's a state, and
+	// the name keeps its position colour like everyone else's.
+	numStyle := Dim
+	if b.State.Falling(p) {
+		numStyle = Run
+	}
+	meta := numStyle.Render(fmt.Sprintf("%-4s adp %5.1f", p.Team, p.ADP))
+	// Chance he's still there at my next pick. The number the whole board runs
+	// on, so show it rather than asking anyone to trust the ordering blind.
+	surv := numStyle.Render(fmt.Sprintf("%3.0f%%", 100*b.State.PSurvive(p)))
 
-	if w < nameW+24 { // no room for the bye column
-		return fmt.Sprintf("%s %s", name, meta)
+	if w < nameW+26 { // no room for the bye column
+		return fmt.Sprintf("%s %s %s", name, meta, surv)
 	}
 	bye := Dim.Render(fmt.Sprintf("bye %2d", p.Bye))
 	if p.Bye == 0 {
 		bye = Dim.Render("      ")
 	}
-	return fmt.Sprintf("%s %s  %s", name, meta, bye)
+	return fmt.Sprintf("%s %s %s  %s", name, meta, surv, bye)
 }
 
 // ---- right pane: roster + ticker ----
@@ -351,10 +421,10 @@ func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
 func (b Board) sidebar(w int) string {
 	var sb strings.Builder
 	sb.WriteString(sectionHead("your roster", w-2) + "\n")
-	sb.WriteString(b.roster())
+	sb.WriteString(b.roster(w))
 	sb.WriteString(b.insight())
 	sb.WriteString("\n" + sectionHead("recent picks", w-2) + "\n")
-	sb.WriteString(b.ticker())
+	sb.WriteString(b.ticker(w))
 	return sb.String()
 }
 
@@ -411,9 +481,19 @@ func (b Board) insight() string {
 	return sb.String()
 }
 
-func (b Board) roster() string {
+func (b Board) roster(w int) string {
 	s := b.State
 	filled, bench := s.FilledSlots(s.MySlot)
+
+	// Row budget: 2 indent + 2 pane padding + label(6) + name + "  bye 11"(8).
+	// A name past this wraps the bye onto its own line, which reads as broken.
+	nameW := w - 18
+	if nameW < 16 {
+		nameW = 16
+	}
+	if nameW > 24 {
+		nameW = 24
+	}
 
 	var sb strings.Builder
 	for i, slot := range s.Roster.Slots {
@@ -428,18 +508,18 @@ func (b Board) roster() string {
 			byeNote = Dim.Render(fmt.Sprintf("  bye %d", p.Bye))
 		}
 		sb.WriteString(fmt.Sprintf("  %s %s%s\n", label,
-			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), 18)), byeNote))
+			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), nameW)), byeNote))
 	}
 	for i, id := range bench {
 		p := s.Players[id]
 		sb.WriteString(fmt.Sprintf("  %s %s\n",
 			Dim.Render(fmt.Sprintf("bn%-3d", i+1)),
-			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), 18))))
+			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), nameW))))
 	}
 	return sb.String()
 }
 
-func (b Board) ticker() string {
+func (b Board) ticker(w int) string {
 	s := b.State
 	picks := s.Picks
 	if n := b.tickerRows(); len(picks) > n {
@@ -448,13 +528,20 @@ func (b Board) ticker() string {
 	if len(picks) == 0 {
 		return Dim.Render("  nothing yet") + "\n"
 	}
+	nameW := w - 17 // "▌you 1.02 rb  " chrome plus pane padding
+	if nameW < 17 {
+		nameW = 17
+	}
+	if nameW > 24 {
+		nameW = 24
+	}
 	var sb strings.Builder
 	for i := len(picks) - 1; i >= 0; i-- {
 		pk := picks[i]
 		p := s.Players[pk.PlayerID]
 		label := fmt.Sprintf("%d.%02d", pk.Round, ((pk.PickNo-1)%s.Teams)+1)
 		pos := fmt.Sprintf("%-3s", strings.ToLower(p.Pos))
-		name := trunc(strings.ToLower(p.Name), 17)
+		name := trunc(strings.ToLower(p.Name), nameW)
 
 		// Your own picks are the thing you scan for, so they get a green bar and
 		// their own label rather than a dot you have to hunt for.
@@ -477,7 +564,10 @@ func (b Board) ticker() string {
 // ---- footer ----
 
 func (b Board) footer(w int) string {
-	keys := []string{"space step", "a auto", "u undo", "q quit"}
+	keys := []string{"space step", "a auto", "u undo", "tab data", "q quit"}
+	if b.Tab == 1 {
+		keys = []string{"tab board", "j/k scroll", "p filter", "q quit"}
+	}
 	left := "  " + Dim.Render(strings.Join(keys, "   "))
 
 	right := Dim.Render(fmt.Sprintf("synced %s ago", since(b.Synced)))

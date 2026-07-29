@@ -176,9 +176,9 @@ func TestNoLineExceedsTerminalWidth(t *testing.T) {
 }
 
 // Widening the terminal must not just add whitespace between the panes — that
-// was the original complaint. The board caps and centres instead.
+// was the original complaint. Beyond MaxWidth the board caps and centres.
 func TestWideTerminalCapsAndCentres(t *testing.T) {
-	widths := []int{100, 160, 240}
+	widths := []int{120, 160, 240}
 	var gaps []int
 	for _, w := range widths {
 		m := NewModel(testState(), firstAvailable, false)

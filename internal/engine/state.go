@@ -7,7 +7,9 @@ import (
 	"sort"
 )
 
-// Player is the engine's view of a draftable player.
+// Player is the engine's view of a draftable player. The last three fields are
+// carried for the data tab only — the engine never reads them, but the whole
+// point of that tab is showing every number the sources gave us.
 type Player struct {
 	ID    string
 	Name  string
@@ -18,6 +20,10 @@ type Player struct {
 	Sigma float64
 	Value int
 	Tier  int
+
+	Stdev        float64 // observed draft-position spread, 0 when unknown
+	FormatSpread float64 // largest ADP gap across scoring formats
+	TierSrc      string  // "rankings" or "derived", "" when untiered
 }
 
 // Roster describes a league's starting lineup.
@@ -268,7 +274,10 @@ func (s *State) Available(pos string) []Player {
 		if out[i].Value != out[j].Value {
 			return out[i].Value > out[j].Value
 		}
-		return out[i].ADP < out[j].ADP
+		if out[i].ADP != out[j].ADP {
+			return out[i].ADP < out[j].ADP
+		}
+		return out[i].ID < out[j].ID // full ties would fall to map order otherwise
 	})
 	return out
 }

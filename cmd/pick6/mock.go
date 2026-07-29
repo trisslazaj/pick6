@@ -25,6 +25,7 @@ func runMock(args []string) error {
 	seed := fs.Int64("seed", 6, "rng seed; same seed replays the same draft")
 	auto := fs.Bool("auto", true, "auto-advance picks")
 	snapshot := fs.Int("snapshot", -1, "advance N picks, print one frame, exit (no tui)")
+	data := fs.Bool("data", false, "render the data tab instead of the board in snapshot mode")
 	width := fs.Int("width", 100, "terminal width for snapshot mode")
 	height := fs.Int("height", 40, "terminal height for snapshot mode")
 	if err := fs.Parse(args); err != nil {
@@ -53,6 +54,9 @@ func runMock(args []string) error {
 			s.Draft(id)
 		}
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now()}
+		if *data {
+			b.Tab = 1
+		}
 		fmt.Println(b.View())
 		return nil
 	}
@@ -91,6 +95,10 @@ func loadBoard() (map[string]engine.Player, error) {
 			Sigma: p.Sigma,
 			Value: p.Value,
 			Tier:  p.Tier,
+
+			Stdev:        p.Stdev,
+			FormatSpread: p.FormatSpread,
+			TierSrc:      string(p.TierSrc),
 		}
 	}
 	if len(out) == 0 {
@@ -126,7 +134,7 @@ func scriptedPicker(seed int64) ui.Autopicker {
 			}
 			a := p.ADP
 			if a <= 0 {
-				a = 999
+				a = engine.UndraftedADP
 			}
 			avail = append(avail, cand{id, a})
 		}
