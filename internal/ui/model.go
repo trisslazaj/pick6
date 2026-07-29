@@ -52,6 +52,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.board.HandleKey(msg.String()) {
+			return m, nil
+		}
 		switch msg.String() {
 		case "q", "ctrl+c", "esc":
 			m.quit = true

@@ -35,6 +35,10 @@ pick6 tiers                  # print the current tier board
 pick6 mock -snapshot 26      # print one frame, no tui (for screenshots)
 ```
 
+In the TUI, `tab` flips between the board and a full data table — every available player with
+value, tier, ADP, spread, survival and format spread on one screen (`j/k` scrolls, `p` filters
+by position). The board abstracts; the table doesn't.
+
 ```
 go run ./cmd/pick6 fetch
 ```

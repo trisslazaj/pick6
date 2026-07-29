@@ -22,6 +22,13 @@ type Board struct {
 	Height int
 	Synced time.Time
 	Status string // transient message shown in the footer
+
+	// Tab 0 is the board; tab 1 is the data table — every player, every
+	// number, nothing abstracted away. State for the latter lives here so
+	// both the mock and live models share it.
+	Tab        int
+	DataScroll int
+	DataFilter string // "" = all positions
 }
 
 // Layout bounds. The board has a natural width — a player row is about 46
@@ -46,16 +53,19 @@ func (b Board) View() string {
 	if content < MinWidth {
 		content = MinWidth
 	}
-	leftW := content - SidebarW - 3
-
-	left := b.bestAvailable(leftW)
-	right := b.sidebar(SidebarW)
-
-	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(leftW).Render(left),
-		b.divider(maxLines(left, right)),
-		lipgloss.NewStyle().Width(SidebarW).PaddingLeft(2).Render(right),
-	)
+	var body string
+	if b.Tab == 1 {
+		body = b.dataPane(content)
+	} else {
+		leftW := content - SidebarW - 3
+		left := b.bestAvailable(leftW)
+		right := b.sidebar(SidebarW)
+		body = lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.NewStyle().Width(leftW).Render(left),
+			b.divider(maxLines(left, right)),
+			lipgloss.NewStyle().Width(SidebarW).PaddingLeft(2).Render(right),
+		)
+	}
 
 	block := strings.Join([]string{
 		b.header(content),
@@ -246,14 +256,18 @@ func (b Board) bestOtherPosition(exclude string) string {
 }
 
 func bar(w int, color, tag, msg string) string {
-	body := fmt.Sprintf(" %s  %s ", strings.ToUpper(tag), msg)
+	body := strings.ToLower(fmt.Sprintf(" %s  %s ", strings.ToUpper(tag), msg))
+	// Truncate, never wrap: a two-line banner makes the frame one taller than
+	// the terminal and bubbletea clips the header — during a run, the exact
+	// moment someone is looking. The head of the copy carries the information.
+	body = trunc(body, w-4)
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#1A1B26")).
 		Background(lipgloss.Color(color)).
 		Bold(true).
 		Width(w - 4).
 		MarginLeft(2).
-		Render(strings.ToLower(body))
+		Render(body)
 }
 
 // ---- left pane: best available ----
@@ -513,7 +527,10 @@ func (b Board) ticker() string {
 // ---- footer ----
 
 func (b Board) footer(w int) string {
-	keys := []string{"space step", "a auto", "u undo", "q quit"}
+	keys := []string{"space step", "a auto", "u undo", "tab data", "q quit"}
+	if b.Tab == 1 {
+		keys = []string{"tab board", "j/k scroll", "p filter", "q quit"}
+	}
 	left := "  " + Dim.Render(strings.Join(keys, "   "))
 
 	right := Dim.Render(fmt.Sprintf("synced %s ago", since(b.Synced)))
