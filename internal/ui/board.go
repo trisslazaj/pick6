@@ -31,19 +31,34 @@ type Board struct {
 	DataFilter string // "" = all positions
 }
 
-// Layout bounds. The board has a natural width — a player row is about 46
-// columns and a roster row about 34 — so stretching to fill a wide terminal just
-// manufactures a gulf between the panes. Cap it and centre instead; extra height
-// is spent showing more players, which is the thing you actually want more of.
+// Layout bounds. Rows scale with width — wider terminals buy longer names and
+// a roomier sidebar — up to the point where columns can't usefully consume more
+// and stretching would only manufacture a gulf between the panes. Cap there and
+// centre; extra height is spent showing more players, which is the thing you
+// actually want more of.
 const (
 	MinWidth   = 80
-	MaxWidth   = 92
-	SidebarW   = 34
+	MaxWidth   = 104
+	SidebarW   = 34 // minimum; grows with the terminal up to SidebarMaxW
+	SidebarMaxW = 38
 	MinDepth   = 3 // players shown per position group
 	MaxDepth   = 8
 	MinTickerN = 4
 	MaxTickerN = 10
 )
+
+// sidebarWidth gives the sidebar a share of any width beyond the old 92-column
+// board, so wide terminals buy unclipped roster names instead of a wider gulf.
+func sidebarWidth(content int) int {
+	sw := SidebarW + (content-92)/3
+	if sw < SidebarW {
+		return SidebarW
+	}
+	if sw > SidebarMaxW {
+		return SidebarMaxW
+	}
+	return sw
+}
 
 func (b Board) View() string {
 	content := b.Width
@@ -57,13 +72,14 @@ func (b Board) View() string {
 	if b.Tab == 1 {
 		body = b.dataPane(content)
 	} else {
-		leftW := content - SidebarW - 3
+		sw := sidebarWidth(content)
+		leftW := content - sw - 3
 		left := b.bestAvailable(leftW)
-		right := b.sidebar(SidebarW)
+		right := b.sidebar(sw)
 		body = lipgloss.JoinHorizontal(lipgloss.Top,
 			lipgloss.NewStyle().Width(leftW).Render(left),
 			b.divider(maxLines(left, right)),
-			lipgloss.NewStyle().Width(SidebarW).PaddingLeft(2).Render(right),
+			lipgloss.NewStyle().Width(sw).PaddingLeft(2).Render(right),
 		)
 	}
 
@@ -366,12 +382,16 @@ func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w, depth 
 // still tells you who and when.
 //
 // Width budget: the row is name + " " + meta(14) + " " + surv(4), plus "  " +
-// bye(6) when it fits. Both thresholds are shifted by the survival column's
-// five columns; lowering either wraps rows at content widths 81-82 or 89-91.
+// bye(6) when it fits. The name takes whatever the pane can spare (row =
+// nameW+28 with bye, so nameW = w-26 fills the budget exactly); below w=42
+// even the floor name doesn't leave room for the bye column.
 func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
-	nameW := 22
-	if w < 40 {
+	nameW := w - 26
+	if nameW < 16 {
 		nameW = 16
+	}
+	if nameW > 26 {
+		nameW = 26
 	}
 	name := style.Render(fmt.Sprintf("%-*s", nameW, trunc(strings.ToLower(p.Name), nameW)))
 	// A falling player is a discount — the draft has moved past his price and
@@ -401,10 +421,10 @@ func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
 func (b Board) sidebar(w int) string {
 	var sb strings.Builder
 	sb.WriteString(sectionHead("your roster", w-2) + "\n")
-	sb.WriteString(b.roster())
+	sb.WriteString(b.roster(w))
 	sb.WriteString(b.insight())
 	sb.WriteString("\n" + sectionHead("recent picks", w-2) + "\n")
-	sb.WriteString(b.ticker())
+	sb.WriteString(b.ticker(w))
 	return sb.String()
 }
 
@@ -461,9 +481,19 @@ func (b Board) insight() string {
 	return sb.String()
 }
 
-func (b Board) roster() string {
+func (b Board) roster(w int) string {
 	s := b.State
 	filled, bench := s.FilledSlots(s.MySlot)
+
+	// Row budget: 2 indent + 2 pane padding + label(6) + name + "  bye 11"(8).
+	// A name past this wraps the bye onto its own line, which reads as broken.
+	nameW := w - 18
+	if nameW < 16 {
+		nameW = 16
+	}
+	if nameW > 24 {
+		nameW = 24
+	}
 
 	var sb strings.Builder
 	for i, slot := range s.Roster.Slots {
@@ -478,18 +508,18 @@ func (b Board) roster() string {
 			byeNote = Dim.Render(fmt.Sprintf("  bye %d", p.Bye))
 		}
 		sb.WriteString(fmt.Sprintf("  %s %s%s\n", label,
-			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), 18)), byeNote))
+			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), nameW)), byeNote))
 	}
 	for i, id := range bench {
 		p := s.Players[id]
 		sb.WriteString(fmt.Sprintf("  %s %s\n",
 			Dim.Render(fmt.Sprintf("bn%-3d", i+1)),
-			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), 18))))
+			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), nameW))))
 	}
 	return sb.String()
 }
 
-func (b Board) ticker() string {
+func (b Board) ticker(w int) string {
 	s := b.State
 	picks := s.Picks
 	if n := b.tickerRows(); len(picks) > n {
@@ -498,13 +528,20 @@ func (b Board) ticker() string {
 	if len(picks) == 0 {
 		return Dim.Render("  nothing yet") + "\n"
 	}
+	nameW := w - 17 // "▌you 1.02 rb  " chrome plus pane padding
+	if nameW < 17 {
+		nameW = 17
+	}
+	if nameW > 24 {
+		nameW = 24
+	}
 	var sb strings.Builder
 	for i := len(picks) - 1; i >= 0; i-- {
 		pk := picks[i]
 		p := s.Players[pk.PlayerID]
 		label := fmt.Sprintf("%d.%02d", pk.Round, ((pk.PickNo-1)%s.Teams)+1)
 		pos := fmt.Sprintf("%-3s", strings.ToLower(p.Pos))
-		name := trunc(strings.ToLower(p.Name), 17)
+		name := trunc(strings.ToLower(p.Name), nameW)
 
 		// Your own picks are the thing you scan for, so they get a green bar and
 		// their own label rather than a dot you have to hunt for.

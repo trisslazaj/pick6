@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -36,7 +37,7 @@ func TestDataViewShowsEveryColumn(t *testing.T) {
 	b := Board{State: s, Width: 92, Height: 40, Tab: 1}
 	view := ansi.ReplaceAllString(b.View(), "")
 
-	for _, label := range []string{"pos", "player", "tm", "bye", "tier", "value", "adp", "sd", "surv", "sprd"} {
+	for _, label := range []string{"pos", "player", "tm", "bye", "tier", "value", "adp", "spread", "surv", "fmt gap"} {
 		if !strings.Contains(view, label) {
 			t.Errorf("data view is missing the %q column label", label)
 		}
@@ -176,6 +177,33 @@ func TestDataViewFitsTerminalHeight(t *testing.T) {
 		}
 		if lines := strings.Count(view, "\n") + 1; lines > 24 {
 			t.Errorf("width %d: frame is %d lines for a 24-line terminal", w, lines)
+		}
+	}
+}
+
+// A roster row must keep the bye note on the player's own line at every
+// width — an 18-char name once pushed "bye 11" onto its own row, which reads
+// as a rendering fault in the pane you look at most.
+func TestRosterByeStaysOnOneLine(t *testing.T) {
+	players := map[string]engine.Player{
+		"w1": {ID: "w1", Name: "fake longnamed-receiver", Pos: "WR", Team: "AAA",
+			Value: 100, ADP: 3, Sigma: 2, Tier: 1, Bye: 11},
+		"r1": {ID: "r1", Name: "fake back", Pos: "RB", Team: "AAA",
+			Value: 90, ADP: 10, Sigma: 3, Tier: 1, Bye: 7},
+	}
+	digitsOnly := regexp.MustCompile(`^[0-9]+$`)
+	for _, w := range []int{80, 92, 104, 140} {
+		s := engine.New(players, 12, 15, 3)
+		s.PickNo = 3 // my pick
+		s.Draft("w1")
+		b := Board{State: s, Width: w, Height: 40}
+		for i, line := range strings.Split(ansi.ReplaceAllString(b.View(), ""), "\n") {
+			// A wrapped sidebar row leaves an orphan fragment — a line that is
+			// nothing but the spilled number ("11" from "bye 11").
+			frag := strings.TrimSpace(strings.ReplaceAll(line, "│", " "))
+			if frag != "" && digitsOnly.MatchString(frag) {
+				t.Errorf("width %d: line %d is an orphaned wrap fragment %q", w, i, frag)
+			}
 		}
 	}
 }

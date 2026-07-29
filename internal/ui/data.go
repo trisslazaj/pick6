@@ -92,9 +92,23 @@ func (b Board) visibleDataRows() int {
 	if b.Height <= 0 {
 		return 20
 	}
-	n := b.Height - 10 // header, banner, urgency strip, title, column head, footer
+	n := b.Height - 11 // header, banner, urgency strip, title, column head, legend, footer
 	if n < 8 {
 		return 8
+	}
+	return n
+}
+
+// dataNameW scales the player column with the terminal: every other column is
+// fixed-width, so the name takes the slack, floored at 18 and capped where
+// even hyphenated receivers fit.
+func dataNameW(w int) int {
+	n := w - 62
+	if n < 18 {
+		return 18
+	}
+	if n > 26 {
+		return 26
 	}
 	return n
 }
@@ -146,18 +160,22 @@ func (b Board) dataPane(w int) string {
 	}
 	sb.WriteString("  " + left + strings.Repeat(" ", pad) + right + "\n")
 
-	sb.WriteString(Dim.Render(fmt.Sprintf("  %-3s  %-20s  %-3s  %3s  %4s  %5s  %5s  %4s  %4s  %4s",
-		"pos", "player", "tm", "bye", "tier", "value", "adp", "sd", "surv", "sprd")) + "\n")
+	nameW := dataNameW(w)
+	sb.WriteString(Dim.Render(fmt.Sprintf("  %-3s  %-*s  %-3s  %3s  %4s  %5s  %5s  %6s  %4s  %7s",
+		"pos", nameW, "player", "tm", "bye", "tier", "value", "adp", "spread", "surv", "fmt gap")) + "\n")
 	for _, p := range rows[off:end] {
-		sb.WriteString(b.dataRow(p) + "\n")
+		sb.WriteString(b.dataRow(p, nameW) + "\n")
 	}
+	sb.WriteString(Dim.Render(trunc(
+		"  spread: how widely real drafts vary on him · fmt gap: adp shift by scoring format · d: derived tier",
+		w-2)) + "\n")
 	return sb.String()
 }
 
 // dataRow is one player, every column. Dashes mean "no source had a number",
 // which is itself information — a dash-heavy row is a player the market has
 // no opinion on.
-func (b Board) dataRow(p engine.Player) string {
+func (b Board) dataRow(p engine.Player, nameW int) string {
 	s := b.State
 	style := Pos(p.Pos, false)
 
@@ -194,13 +212,13 @@ func (b Board) dataRow(p engine.Player) string {
 	if p.ADP > 0 {
 		adp = fmt.Sprintf("%5.1f", p.ADP)
 	}
-	sd := "   —"
+	sd := "     —"
 	if p.Stdev > 0 {
-		sd = fmt.Sprintf("%4.1f", p.Stdev)
+		sd = fmt.Sprintf("%6.1f", p.Stdev)
 	}
-	sprd := "   —"
+	sprd := "      —"
 	if p.FormatSpread > 0 {
-		sprd = fmt.Sprintf("%4.1f", p.FormatSpread)
+		sprd = fmt.Sprintf("%7.1f", p.FormatSpread)
 	}
 	bye := "  —"
 	if p.Bye > 0 {
@@ -209,7 +227,7 @@ func (b Board) dataRow(p engine.Player) string {
 
 	return fmt.Sprintf("  %s  %s  %s  %s  %s  %s  %s  %s  %s  %s",
 		style.Render(fmt.Sprintf("%-3s", strings.ToLower(p.Pos))),
-		style.Render(fmt.Sprintf("%-20s", trunc(strings.ToLower(p.Name), 20))),
+		style.Render(fmt.Sprintf("%-*s", nameW, trunc(strings.ToLower(p.Name), nameW))),
 		Dim.Render(fmt.Sprintf("%-3s", p.Team)),
 		Dim.Render(bye),
 		Dim.Render(tier),
