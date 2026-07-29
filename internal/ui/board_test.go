@@ -131,11 +131,13 @@ func TestCliffBannerPicksTheUrgentPosition(t *testing.T) {
 	add("ra", "RB", 100, 2, 2, 1)
 	add("rb2", "RB", 90, 60, 8, 1) // survives easily: safe cliff
 	add("wa", "WR", 100, 2, 2, 1)
-	add("wb2", "WR", 98, 1, 0.5, 1) // gone by my pick: urgent cliff
+	add("wb2", "WR", 98, 1, 0.5, 1) // gone by pick 22: urgent cliff
 	add("wc", "WR", 40, 60, 8, 2)
+	add("td1", "TE", 30, 80, 9, 1) // my own pick 3, so picks intervene again
 	s := engine.New(players, 12, 15, 3)
 	s.Draft("ra") // both tiers now emptying: CliffLast on rb and wr
 	s.Draft("wa")
+	s.Draft("td1") // pick 3 is mine; next pick 22, survival math live again
 	b := Board{State: s, Width: 92, Height: 40}
 	view := ansi.ReplaceAllString(b.View(), "")
 
@@ -148,16 +150,16 @@ func TestCliffBannerPicksTheUrgentPosition(t *testing.T) {
 }
 
 // The survival column is the engine's number on screen: a player whose adp is
-// exactly my next pick is a coin flip and must render as 50%.
+// exactly my next pick is a coin flip — 51% after conditioning nudges it up.
 func TestPlayerRowShowsSurvival(t *testing.T) {
 	players := map[string]engine.Player{
 		"r1": {ID: "r1", Name: "fake r1", Pos: "RB", Team: "AAA",
-			Value: 100, ADP: 3, Sigma: 6, Tier: 1, Bye: 7}, // my first pick is 3
+			Value: 100, ADP: 3, Sigma: 0.5, Tier: 1, Bye: 7}, // my first pick is 3
 	}
 	s := engine.New(players, 12, 15, 3)
 	b := Board{State: s, Width: 92, Height: 40}
 	view := ansi.ReplaceAllString(b.View(), "")
-	if !strings.Contains(view, " 50%") {
-		t.Errorf("a coin-flip player should render 50%%, got:\n%s", view)
+	if !strings.Contains(view, " 51%") {
+		t.Errorf("a coin-flip player should render 51%%, got:\n%s", view)
 	}
 }

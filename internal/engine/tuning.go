@@ -8,8 +8,9 @@ const (
 	SigmaMin         = 0.5
 	SigmaMax         = 25.0
 	SurviveThreshold = 0.5   // bestLater candidate cutoff
-	SurvivalExpClamp = 30.0  // |exponent| cap before math.Exp; extreme ADPs must not overflow
+	SurvivalExpClamp = 30.0  // softplus goes linear past this; keeps exp from overflowing
 	UndraftedADP     = 999.0 // missing/zero ADP: off the drafted radar, always survives
+	FallerSigmas     = 1.0   // picks past ADP, in units of own sigma, before a player is "falling"
 
 	// Need weights.
 	NeedStarter = 1.0  // an unfilled dedicated starter slot exists for pos

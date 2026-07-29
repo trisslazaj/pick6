@@ -4,7 +4,9 @@ Terminal war room for fantasy football drafts. Live-syncs Sleeper, tracks tiers,
 
 ## status
 
-Milestone 2 of 6. The board renders; live Sleeper sync isn't wired up yet.
+Milestone 4 of 6. The board renders, live-syncs a Sleeper draft, and thinks: survival
+probability, urgency ordering, cliff and run alerts are all live. Left: polish + release,
+then the opponent-aware simulation.
 
 ## install
 
@@ -26,6 +28,7 @@ source, with nothing to reinstall.
 
 ```
 pick6 fetch                  # pull data (do this first)
+pick6 live <draft_id> -user yourname   # the main event: sync a live sleeper draft
 pick6 mock                   # watch a scripted draft play out on the real board
 pick6 mock -auto=false       # step through it yourself with space
 pick6 tiers                  # print the current tier board
@@ -51,6 +54,34 @@ matter and unknown columns are ignored, so FantasyPros exports and hand-made fil
 ```
 name,position,team,tier,points
 ```
+
+## the math, in plain english
+
+The whole board answers one question: **what does waiting cost?**
+
+**Survival.** Every player has an ADP — the average pick where real drafts take him, measured
+across about a thousand recent drafts — and a spread, because the market doesn't agree on
+everyone equally: a locked-in first-rounder goes inside a two-pick window, a late flier goes
+anywhere across three rounds. Feed "my next pick minus his ADP, measured in his own spread"
+through an S-curve and out comes the chance he's still on the board when you're up. ADP already
+passed → probably gone. ADP far ahead → safe. ADP exactly at your pick → coin flip, which is
+literally what ADP means — half the rooms had taken him by then.
+
+One honesty adjustment: a player who's on the board *right now* can only be taken by the picks
+between now and your turn. So the number is really "chance he lasts to my pick, given that he's
+lasted this long." Without that, a player the room keeps passing on reads 90% gone when only one
+team picks before you do.
+
+**Urgency.** Per position: take the best player available now, and the best player with at least
+a coin flip's chance of surviving to your next pick. The value gap between those two is what
+waiting costs you — scaled by whether you actually need the position (open starter beats flex
+depth beats bench, and kickers count for nothing until the end). The board sorts by that number,
+and zero urgency is itself the signal: your guy will still be there. Wait.
+
+**Counting.** Tiers come from human rankings, or from value gaps when no file provides them. A
+tier that's emptying is a cliff — two left is amber, last one is red. Four of the last six picks
+at one position is a run. And a player still available a full spread past his ADP is *falling*:
+the draft moved past his price and he's still here. His numbers turn amber. That's a discount.
 
 ## data sources
 

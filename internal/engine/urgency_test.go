@@ -18,25 +18,47 @@ func addPlayers(s *State, ps ...Player) {
 func TestPSurviveLogistic(t *testing.T) {
 	s := newTestState(12, 15, 3)
 	s.PickNo = 4 // NextPick() = 22
+	// Expected values are S(22)/S(4) — survival to my next pick, conditioned on
+	// having survived to the current one.
 	cases := []struct {
 		adp, sigma, want float64
 	}{
-		{22, 6, 0.5},       // adp at my pick: literally a coin flip
-		{16, 6, 0.2689414}, // one sigma early
-		{28, 6, 0.7310586}, // one sigma late
-		{10, 6, 0.1192029}, // two sigma early
-		{34, 6, 0.8807971},
+		{22, 6, 0.5248935}, // adp at my pick: a coin flip, nudged up by conditioning
+		{16, 6, 0.3053387}, // one sigma early
+		{28, 6, 0.7444484}, // one sigma late
+		{10, 6, 0.1630552}, // two sigma early
+		{34, 6, 0.8867318},
 		// The per-player sigma pair: the same 1-pick gap is "he's gone" for a
 		// predictable player and a coin flip for a volatile one. This is the
 		// whole reason sigma is per-player and not a constant.
 		{21, 0.5, 0.1192029},
-		{21, 6, 0.4584295},
+		{21, 6, 0.4853927},
 	}
 	for _, c := range cases {
 		p := Player{ID: "x", Pos: "RB", ADP: c.adp, Sigma: c.sigma}
 		if got := s.PSurvive(p); math.Abs(got-c.want) > 1e-6 {
 			t.Errorf("PSurvive(adp=%v, sigma=%v) = %v, want %v", c.adp, c.sigma, got, c.want)
 		}
+	}
+}
+
+// The conditioning regression: a faller — adp 18, still here at pick 21, one
+// pick before mine — can lose at most one team's pick, so he survives at ~78%.
+// The unconditional logistic said ~21%, a number that ignores him being right
+// there on the board. Far from my pick the two models agree (18 intervening
+// picks really are likely to eat him), which is exactly the shape we want.
+func TestPSurviveConditionsOnThePresent(t *testing.T) {
+	faller := Player{ID: "x", Pos: "RB", ADP: 18, Sigma: 3}
+
+	s := newTestState(12, 15, 3)
+	s.PickNo = 21 // NextPick() = 22: one pick intervenes
+	if got := s.PSurvive(faller); math.Abs(got-0.7756653) > 1e-6 {
+		t.Errorf("PSurvive(faller, 1 pick out) = %v, want 0.7756653", got)
+	}
+
+	s.PickNo = 4 // NextPick() = 22: eighteen picks intervene
+	if got := s.PSurvive(faller); math.Abs(got-0.2105702) > 1e-6 {
+		t.Errorf("PSurvive(faller, 18 picks out) = %v, want 0.2105702", got)
 	}
 }
 
@@ -47,8 +69,8 @@ func TestPSurviveSigmaFallback(t *testing.T) {
 	s.PickNo = 4
 	for _, sigma := range []float64{0, -1} {
 		p := Player{ID: "x", Pos: "RB", ADP: 16, Sigma: sigma}
-		if got := s.PSurvive(p); math.Abs(got-0.2689414) > 1e-6 {
-			t.Errorf("PSurvive(sigma=%v) = %v, want the SigmaDefault answer 0.2689414", sigma, got)
+		if got := s.PSurvive(p); math.Abs(got-0.3053387) > 1e-6 {
+			t.Errorf("PSurvive(sigma=%v) = %v, want the SigmaDefault answer 0.3053387", sigma, got)
 		}
 	}
 }
@@ -67,33 +89,61 @@ func TestPSurviveMissingADP(t *testing.T) {
 	}
 }
 
-// The exponent clamp can't be seen by a tolerance table — clamped (9.36e-14)
-// and unclamped (1.28e-18) are both "about zero". The window below fails if the
-// clamp is missing and fails if exp overflowed to NaN/0.
-func TestPSurviveClampsExponent(t *testing.T) {
+// Extreme exponents must come through exact, not clamped into an artifact: the
+// log-space form gives the true 2.33e-16 here, where clamping each S at ±30
+// used to manufacture 1.71e-11. The window fails on the old artifact, on NaN,
+// and on a flushed-to-zero underflow.
+func TestPSurviveExtremeExponents(t *testing.T) {
 	s := newTestState(12, 15, 3)
 	s.PickNo = 4
-	p := Player{ID: "x", Pos: "RB", ADP: 1.4, Sigma: 0.5} // quotient 41.2, clamped to 30
+	p := Player{ID: "x", Pos: "RB", ADP: 1.4, Sigma: 0.5} // exponents 5.2 and 41.2
 	got := s.PSurvive(p)
-	if math.IsNaN(got) || got <= 1e-14 || got >= 1e-12 {
-		t.Errorf("PSurvive(extreme) = %v, want ~9.36e-14 (the clamped value)", got)
+	if math.IsNaN(got) || got <= 1e-16 || got >= 1e-15 {
+		t.Errorf("PSurvive(extreme) = %v, want ~2.33e-16 (the exact value)", got)
 	}
 }
 
-// On my own pick NextPick == PickNo and the logistic still answers sanely.
+// The deep-faller regression: with a tight sigma, a player far past his ADP
+// used to saturate both exponents and read 100% — the further he fell, the
+// safer he looked, which put a green "safe to wait" on the hottest discount on
+// the board. The conditional tail is a per-pick hazard, exp(-(next-now)/sigma):
+// two intervening picks at sigma 0.5 is e^-4 no matter how deep the fall.
+func TestPSurviveDeepFallerTail(t *testing.T) {
+	s := newTestState(12, 15, 3)
+	s.PickNo = 25 // NextPick() = 27: two picks intervene
+	want := math.Exp(-4)
+	for _, adp := range []float64{10, 5} { // 30 and 40 own-sigmas past his price
+		p := Player{ID: "x", Pos: "RB", ADP: adp, Sigma: 0.5}
+		if got := s.PSurvive(p); math.Abs(got-want) > 1e-6 {
+			t.Errorf("PSurvive(deep faller, adp=%v) = %v, want e^-4 = %v", adp, got, want)
+		}
+	}
+}
+
+// After the draft NextPick's fallback is the final pick, which is in the past;
+// unguarded, the ratio tops 1 and a replay frame prints "105%". Everyone left
+// on a finished board "survives" at exactly 100%.
+func TestPSurviveAfterDraftDone(t *testing.T) {
+	s := newTestState(12, 15, 3)
+	s.PickNo = 12*15 + 1 // Done
+	for _, adp := range []float64{182, 185, 190} {
+		p := Player{ID: "x", Pos: "RB", ADP: adp, Sigma: 6}
+		if got := s.PSurvive(p); got != 1 {
+			t.Errorf("PSurvive(adp=%v) after the draft = %v, want exactly 1", adp, got)
+		}
+	}
+}
+
+// On my own pick no picks intervene, so everyone still on the board survives
+// with certainty — even a deep faller. The board's ordering job then falls to
+// the value tie-break, not to survival.
 func TestPSurviveOnMyPick(t *testing.T) {
 	s := newTestState(12, 15, 3)
 	s.PickNo = 3 // my pick; NextPick() = 3
-	cases := []struct {
-		adp, want float64
-	}{
-		{3, 0.5},
-		{1.5, 0.4378235},
-	}
-	for _, c := range cases {
-		p := Player{ID: "x", Pos: "RB", ADP: c.adp, Sigma: 6}
-		if got := s.PSurvive(p); math.Abs(got-c.want) > 1e-6 {
-			t.Errorf("PSurvive(adp=%v) on my pick = %v, want %v", c.adp, got, c.want)
+	for _, adp := range []float64{3, 1.5, 50} {
+		p := Player{ID: "x", Pos: "RB", ADP: adp, Sigma: 6}
+		if got := s.PSurvive(p); got != 1 {
+			t.Errorf("PSurvive(adp=%v) on my own pick = %v, want exactly 1", adp, got)
 		}
 	}
 }
@@ -104,10 +154,10 @@ func TestBestLaterPicksValueAmongSurvivors(t *testing.T) {
 	s := newTestState(12, 15, 3)
 	s.PickNo = 4
 	addPlayers(s,
-		Player{ID: "a", Pos: "RB", Value: 100, ADP: 4, Sigma: 2},  // p ~ 0.0001: gone
-		Player{ID: "b", Pos: "RB", Value: 90, ADP: 20, Sigma: 4},  // p = 0.378: below threshold
-		Player{ID: "c", Pos: "RB", Value: 80, ADP: 26, Sigma: 4},  // p = 0.731: survives
-		Player{ID: "d", Pos: "RB", Value: 70, ADP: 40, Sigma: 6},  // p = 0.953: survives harder
+		Player{ID: "a", Pos: "RB", Value: 100, ADP: 4, Sigma: 2},  // p ~ 0.0002: gone
+		Player{ID: "b", Pos: "RB", Value: 90, ADP: 20, Sigma: 4},  // p = 0.384: below threshold
+		Player{ID: "c", Pos: "RB", Value: 80, ADP: 26, Sigma: 4},  // p = 0.734: survives
+		Player{ID: "d", Pos: "RB", Value: 70, ADP: 40, Sigma: 6},  // p = 0.955: survives harder
 	)
 	later, ok := s.BestLater("RB")
 	if !ok || later.ID != "c" {
@@ -115,13 +165,17 @@ func TestBestLaterPicksValueAmongSurvivors(t *testing.T) {
 	}
 }
 
-// A coin-flip player (p exactly 0.5) counts as a candidate: >= not >.
-func TestBestLaterThresholdIsInclusive(t *testing.T) {
+// A coin-flip player is candidate territory. Conditioning makes an exact 0.5
+// unreachable (S(now) < 1 always nudges the coin flip up, here to 0.525), so
+// the >= in BestLater is no longer distinguishable from > by any test — this
+// pins the nearest realizable thing: adp on my pick means candidate, and
+// urgency prices only the small gap above him.
+func TestBestLaterCoinFlipIsACandidate(t *testing.T) {
 	s := newTestState(12, 15, 3)
 	s.PickNo = 4
 	addPlayers(s,
 		Player{ID: "a", Pos: "RB", Value: 100, ADP: 4, Sigma: 2},
-		Player{ID: "e", Pos: "RB", Value: 95, ADP: 22, Sigma: 6}, // adp == next pick: p = 0.5
+		Player{ID: "e", Pos: "RB", Value: 95, ADP: 22, Sigma: 6}, // p = 0.525
 	)
 	if later, _ := s.BestLater("RB"); later.ID != "e" {
 		t.Errorf("BestLater = %q, want the coin-flip player e", later.ID)
@@ -137,8 +191,8 @@ func TestBestLaterFallbackToLikeliest(t *testing.T) {
 	s := newTestState(12, 15, 3)
 	s.PickNo = 4
 	addPlayers(s,
-		Player{ID: "a", Pos: "RB", Value: 100, ADP: 4, Sigma: 2},  // p ~ 0.0001
-		Player{ID: "b", Pos: "RB", Value: 90, ADP: 10, Sigma: 4},  // p = 0.047
+		Player{ID: "a", Pos: "RB", Value: 100, ADP: 4, Sigma: 2},  // p ~ 0.0002
+		Player{ID: "b", Pos: "RB", Value: 90, ADP: 10, Sigma: 4},  // p = 0.058
 	)
 	if later, _ := s.BestLater("RB"); later.ID != "b" {
 		t.Errorf("BestLater = %q, want b (highest survival when no one clears 0.5)", later.ID)
@@ -197,7 +251,7 @@ func TestUrgencyNeedLadder(t *testing.T) {
 func TestUrgencyKickerSuppression(t *testing.T) {
 	s := newTestState(12, 15, 3)
 	addPlayers(s,
-		Player{ID: "k1", Pos: "K", Value: 100, ADP: 4, Sigma: 2},
+		Player{ID: "k1", Pos: "K", Value: 100, ADP: 140, Sigma: 2},
 		Player{ID: "k2", Pos: "K", Value: 10, ADP: 200, Sigma: 10},
 	)
 	s.PickNo = 4
@@ -205,7 +259,8 @@ func TestUrgencyKickerSuppression(t *testing.T) {
 		t.Errorf("Urgency(K) in round 1 = %v, want 0", got)
 	}
 	s.PickNo = 157 // round 14 of 15: NextPick 166, kickers now in play
-	// k1 is long gone (clamped ~0), k2 survives at 0.968: urgency = (100-10) * 1.0.
+	// k1 won't last the nine picks (p = 0.011), k2 survives at 0.981:
+	// urgency = (100-10) * 1.0.
 	if got := s.Urgency("K"); math.Abs(got-90.0) > 1e-9 {
 		t.Errorf("Urgency(K) in round 14 = %v, want 90", got)
 	}
@@ -226,17 +281,41 @@ func TestUrgencySinglePlayerPosition(t *testing.T) {
 	}
 }
 
-// On my own pick the degenerate case must still point at the fallen elite:
-// he fails the survival cut, bestLater drops to the safe man, and the gap says
-// "take bestNow" — exactly the advice the spec promises.
-func TestUrgencyOnMyPick(t *testing.T) {
+// On my own pick everyone survives (no picks intervene), so urgency is zero
+// across the board and the UI's value tie-break does the pointing. Anything
+// nonzero here would claim waiting costs value when waiting isn't happening.
+func TestUrgencyZeroOnMyOwnPick(t *testing.T) {
 	s := newTestState(12, 15, 3)
 	s.PickNo = 3 // my pick
 	addPlayers(s,
-		Player{ID: "a", Pos: "WR", Value: 100, ADP: 1.5, Sigma: 6}, // p = 0.438: fails the cut
-		Player{ID: "b", Pos: "WR", Value: 60, ADP: 10, Sigma: 4},   // p = 0.852: survives
+		Player{ID: "a", Pos: "WR", Value: 100, ADP: 1.5, Sigma: 6}, // a faller, and still p = 1
+		Player{ID: "b", Pos: "WR", Value: 60, ADP: 10, Sigma: 4},
 	)
-	if got := s.Urgency("WR"); math.Abs(got-40.0) > 1e-9 {
-		t.Errorf("Urgency on my pick = %v, want 40", got)
+	if got := s.Urgency("WR"); got != 0 {
+		t.Errorf("Urgency on my own pick = %v, want 0", got)
+	}
+}
+
+// Falling is measured in the player's own sigma: the same 6-pick slide is a
+// screaming discount for a locked-in player and noise for a volatile one.
+func TestFalling(t *testing.T) {
+	s := newTestState(12, 15, 3)
+	s.PickNo = 21
+	cases := []struct {
+		adp, sigma float64
+		want       bool
+	}{
+		{15, 3, true},   // 2 sigma past his price
+		{18, 3, true},   // exactly 1 sigma: >= fires
+		{20, 3, false},  // barely past adp: not yet a faller
+		{15, 25, false}, // volatile flier: 6 picks is nothing
+		{25, 3, false},  // adp still ahead
+		{0, 3, false},   // off the radar: never falling
+	}
+	for _, c := range cases {
+		p := Player{ID: "x", Pos: "RB", ADP: c.adp, Sigma: c.sigma}
+		if got := s.Falling(p); got != c.want {
+			t.Errorf("Falling(adp=%v, sigma=%v) at pick 21 = %v, want %v", c.adp, c.sigma, got, c.want)
+		}
 	}
 }

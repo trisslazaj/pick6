@@ -264,6 +264,7 @@ func (b Board) bestAvailable(w int) string {
 		pos     string
 		players []engine.Player
 		score   float64
+		value   float64
 	}
 	var groups []group
 	for _, pos := range positions {
@@ -279,11 +280,19 @@ func (b Board) bestAvailable(w int) string {
 			continue
 		}
 		// Groups sort by urgency: the need-weighted value lost by waiting until
-		// my next pick. All-safe positions tie at zero and keep display order
-		// via the stable sort.
-		groups = append(groups, group{pos, avail, s.Urgency(pos)})
+		// my next pick. Near my own pick urgencies collapse to zero — nobody can
+		// be taken in zero picks — so ties fall to need-weighted best value,
+		// which keeps the board pointing at the pick instead of going limp
+		// exactly when I'm on the clock.
+		groups = append(groups, group{pos, avail, s.Urgency(pos),
+			float64(avail[0].Value) * s.Need(pos)})
 	}
-	sort.SliceStable(groups, func(i, j int) bool { return groups[i].score > groups[j].score })
+	sort.SliceStable(groups, func(i, j int) bool {
+		if groups[i].score != groups[j].score {
+			return groups[i].score > groups[j].score
+		}
+		return groups[i].value > groups[j].value
+	})
 
 	depth := b.depth(len(groups))
 	var sb strings.Builder
@@ -313,10 +322,11 @@ func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w, depth 
 
 	head := fmt.Sprintf("%s  %s", style.Bold(true).Render(strings.ToLower(pos)), count)
 
-	// Green only when there is truly nothing to do: cliff copy always wins, and
+	// Green only when there is truly nothing to do: cliff copy always wins,
 	// untiered groups (k/def, value 0, urgency identically 0) never earn the
-	// tag — "safe to wait" about a kicker in the last round would be a lie.
-	if tier != 0 && level == engine.CliffNone && s.Urgency(pos) == 0 {
+	// tag — "safe to wait" about a kicker in the last round would be a lie —
+	// and neither does anything on my own pick, when waiting isn't on offer.
+	if tier != 0 && level == engine.CliffNone && s.Urgency(pos) == 0 && s.PicksUntilMine() > 0 {
 		head += "  " + Wait.Render("safe to wait")
 	}
 
@@ -350,10 +360,17 @@ func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
 		nameW = 16
 	}
 	name := style.Render(fmt.Sprintf("%-*s", nameW, trunc(strings.ToLower(p.Name), nameW)))
-	meta := Dim.Render(fmt.Sprintf("%-4s adp %5.1f", p.Team, p.ADP))
+	// A falling player is a discount — the draft has moved past his price and
+	// he's still here. Amber on the numbers, not the name: it's a state, and
+	// the name keeps its position colour like everyone else's.
+	numStyle := Dim
+	if b.State.Falling(p) {
+		numStyle = Run
+	}
+	meta := numStyle.Render(fmt.Sprintf("%-4s adp %5.1f", p.Team, p.ADP))
 	// Chance he's still there at my next pick. The number the whole board runs
 	// on, so show it rather than asking anyone to trust the ordering blind.
-	surv := Dim.Render(fmt.Sprintf("%3.0f%%", 100*b.State.PSurvive(p)))
+	surv := numStyle.Render(fmt.Sprintf("%3.0f%%", 100*b.State.PSurvive(p)))
 
 	if w < nameW+26 { // no room for the bye column
 		return fmt.Sprintf("%s %s %s", name, meta, surv)

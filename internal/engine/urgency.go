@@ -6,6 +6,13 @@ import "math"
 // pick, from the ADP logistic: a player whose ADP equals my next pick is a coin
 // flip; well before it, he's gone; well after, he's safe.
 //
+// The estimate is conditional on the present: he is demonstrably available
+// right now, so only the picks between now and my turn can take him. Without
+// the S(nextPick)/S(pickNo) ratio a faller — ADP 18, still here at pick 21 —
+// reads ~20% with one pick to go, when the worst case is one team taking him.
+// Conditioning barely moves anyone whose ADP is still ahead (S(now) ~ 1); it
+// only repairs the players the market has already passed.
+//
 // Missing ADP (<= 0) means the player is off the drafted radar — live feeds
 // register handcuffs and rookies no ADP source ranked — and is treated as
 // UndraftedADP: he always survives. Missing sigma falls back to SigmaDefault;
@@ -20,16 +27,49 @@ func (s *State) PSurvive(p Player) float64 {
 	if sigma <= 0 {
 		sigma = SigmaDefault
 	}
-	// Clamp the quotient, not the numerator: an undrafted-radar player at a
-	// tight sigma would overflow exp, but a mid-range player must come through
-	// untouched.
-	x := (float64(s.NextPick()) - adp) / sigma
-	if x > SurvivalExpClamp {
-		x = SurvivalExpClamp
-	} else if x < -SurvivalExpClamp {
-		x = -SurvivalExpClamp
+	next := s.NextPick()
+	if next < s.PickNo {
+		// A finished draft has no next pick; NextPick falls back to the final
+		// one, which is in the past. Without this the ratio tops 1 and a replay
+		// frame prints "105%".
+		next = s.PickNo
 	}
-	return 1 / (1 + math.Exp(x))
+	// The ratio S(next)/S(now) is computed in log space: log S(p) is
+	// -softplus((p-adp)/sigma), so the log of the ratio is a difference of
+	// softpluses and the tail degrades to exp(-(next-now)/sigma), a per-pick
+	// hazard. Clamping each S separately instead would flatten that difference
+	// once both exponents saturate, and a deep faller would read 100% — the
+	// further past his ADP, the safer he'd look. next >= now, softplus is
+	// increasing, so the result is genuinely in (0, 1]: exactly 1 on my own
+	// pick, when no picks intervene and urgency falls to the value tie-break.
+	a := (float64(next) - adp) / sigma
+	b := (float64(s.PickNo) - adp) / sigma
+	return math.Exp(softplus(b) - softplus(a))
+}
+
+// softplus is log(1+exp(x)) without overflow: past the clamp the +1 is
+// noise (relative error under 1e-13) and the function is just x.
+func softplus(x float64) float64 {
+	if x > SurvivalExpClamp {
+		return x
+	}
+	return math.Log1p(math.Exp(x))
+}
+
+// Falling reports a player the market has passed: still available a full
+// FallerSigmas past his ADP, measured in his own sigma so a volatile flier
+// isn't "falling" at a gap that would be seismic for a locked-in first
+// rounder. Falling players are discounts — the board marks them rather than
+// letting them blend into the list.
+func (s *State) Falling(p Player) bool {
+	if p.ADP <= 0 {
+		return false // never off the radar, never falling
+	}
+	sigma := p.Sigma
+	if sigma <= 0 {
+		sigma = SigmaDefault
+	}
+	return (float64(s.PickNo)-p.ADP)/sigma >= FallerSigmas
 }
 
 // BestLater is the best player at a position I can still expect to be there at
