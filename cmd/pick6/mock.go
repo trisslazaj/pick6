@@ -99,6 +99,17 @@ func loadBoard() (map[string]engine.Player, error) {
 			Stdev:        p.Stdev,
 			FormatSpread: p.FormatSpread,
 			TierSrc:      string(p.TierSrc),
+
+			TimesDrafted: p.TimesDrafted,
+			High:         p.High,
+			Low:          p.Low,
+
+			// Injury state is as old as players.json — this is the only place it
+			// enters the engine, and it entered players.json at fetch time. The
+			// board can be honest about that because meta.json says when that was.
+			InjuryStatus: p.InjuryStatus,
+			Status:       p.Status,
+			NewsUpdated:  p.NewsUpdated,
 		}
 	}
 	if len(out) == 0 {

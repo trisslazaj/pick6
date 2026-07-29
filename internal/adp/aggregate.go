@@ -41,14 +41,20 @@ const (
 )
 
 // Entry is one source's opinion about one player, before matching.
+//
+// TimesDrafted/High/Low are the support behind ADP: how many drafts the average
+// summarises and the extremes it hides. The field was called Sample; it is named
+// for FFC's own key now so the three sample-support numbers read as a set.
 type Entry struct {
-	Name   string
-	Pos    string
-	Team   string
-	ADP    float64
-	Stdev  float64 // 0 when the source doesn't report it
-	Bye    int
-	Sample int
+	Name         string
+	Pos          string
+	Team         string
+	ADP          float64
+	Stdev        float64 // 0 when the source doesn't report it
+	Bye          int
+	TimesDrafted int // drafts this average is computed over
+	High         int // earliest pick he was taken at in any of them
+	Low          int // latest
 }
 
 // Player is the merged, matched result: one row per Sleeper player id.
@@ -65,6 +71,22 @@ type Player struct {
 	Value   int     // relative season value; 0 when unknown
 	Tier    int     // per-position tier; 0 when unknown
 	TierSrc TierSource
+
+	// Sample support behind ADP, from the primary source only. Nothing reads
+	// these yet: sigma shrinkage weights stdev by TimesDrafted and the support
+	// floor reads High, both next stage. They are written to players.json now so
+	// the board already carries them when that lands.
+	TimesDrafted int
+	High         int
+	Low          int
+
+	// Injury truth, copied from the sleeper dump at fetch time. Display only —
+	// see sleeper.Player for why nothing may ever price them into value. Frozen
+	// at fetch: meta.json records when that was, and refetching on draft morning
+	// is the ritual that keeps them worth reading.
+	InjuryStatus string
+	Status       string
+	NewsUpdated  int64 // epoch milliseconds, 0 when the dump had no news for him
 
 	// FormatSpread is the largest gap in picks between the primary format's ADP
 	// and any cross-checked format. High spread means the player's draft cost is
@@ -122,6 +144,14 @@ func Merge(ix *rankings.Index, primary FFCResult, crosschecks []FFCResult, cw *C
 			Stdev:     e.Stdev,
 			Sigma:     Sigma(e.Stdev),
 			Formats:   1,
+
+			// Only the primary's support travels. A cross-check format is a
+			// different scoring of the same drafts, so its high/low describe a
+			// different price series and averaging them would blur the one number
+			// the support floor depends on being exact.
+			TimesDrafted: e.TimesDrafted,
+			High:         e.High,
+			Low:          e.Low,
 		}
 		// Sleeper is the authority on identity — source team codes disagree
 		// (MFL says LVR where Sleeper says LV) and defense names vary wildly.

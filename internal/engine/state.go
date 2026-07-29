@@ -7,9 +7,9 @@ import (
 	"sort"
 )
 
-// Player is the engine's view of a draftable player. The last three fields are
-// carried for the data tab only — the engine never reads them, but the whole
-// point of that tab is showing every number the sources gave us.
+// Player is the engine's view of a draftable player. Everything below the blank
+// line is carried for display only — the engine never reads it, but the whole
+// point of the data tab is showing every number the sources gave us.
 type Player struct {
 	ID    string
 	Name  string
@@ -24,6 +24,21 @@ type Player struct {
 	Stdev        float64 // observed draft-position spread, 0 when unknown
 	FormatSpread float64 // largest ADP gap across scoring formats
 	TierSrc      string  // "rankings" or "derived", "" when untiered
+
+	// Sample support behind ADP: the drafts it averages, and the earliest and
+	// latest pick he actually went at in any of them. Display for now; sigma
+	// shrinkage and the support floor read them next stage.
+	TimesDrafted int
+	High         int
+	Low          int
+
+	// Injury truth, frozen at fetch time and never priced in. Survival and value
+	// must not read these: our values are imported, and marking one down for an
+	// injury would be a projection of our own, which this project doesn't make.
+	// The board shows the fact and lets the human do the discounting.
+	InjuryStatus string // "" is the normal case; "" in Status means unknown, not hurt
+	Status       string
+	NewsUpdated  int64 // epoch milliseconds, 0 when unknown
 }
 
 // Roster describes a league's starting lineup.

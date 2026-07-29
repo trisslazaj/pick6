@@ -87,13 +87,19 @@ func FetchFFC(format string, teams, year int) (FFCResult, bool, error) {
 	}
 	for _, p := range r.Players {
 		out.Entries = append(out.Entries, Entry{
-			Name:   p.Name,
-			Pos:    p.Position, // PK / DEF normalized downstream
-			Team:   p.Team,
-			ADP:    p.ADP,
-			Stdev:  p.Stdev,
-			Bye:    p.Bye,
-			Sample: p.TimesDrafted,
+			Name: p.Name,
+			Pos:  p.Position, // PK / DEF normalized downstream
+			Team: p.Team,
+			ADP:  p.ADP,
+			Bye:  p.Bye,
+			// The support behind the average: how many drafts it summarises and
+			// the earliest/latest pick anyone actually took him at. Parsed since
+			// day one and dropped on the floor until now; sigma shrinkage and the
+			// support floor both need them.
+			Stdev:        p.Stdev,
+			TimesDrafted: p.TimesDrafted,
+			High:         p.High,
+			Low:          p.Low,
 		})
 	}
 	return out, fetched, nil

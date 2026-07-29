@@ -97,11 +97,11 @@ func FetchMFL(year, teams, ppr int) (MFLResult, bool, error) {
 		}
 		sample, _ := strconv.Atoi(e.DraftsIn)
 		out.Entries = append(out.Entries, Entry{
-			Name:   d.name,
-			Pos:    d.pos,
-			Team:   d.team,
-			ADP:    adp,
-			Sample: sample,
+			Name:         d.name,
+			Pos:          d.pos,
+			Team:         d.team,
+			ADP:          adp,
+			TimesDrafted: sample,
 		})
 	}
 	return out, f1 || f2, nil

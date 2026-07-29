@@ -64,6 +64,20 @@ const (
 	ValueBase  = 250.0
 	ValueDecay = 40.0
 
+	// Freshness. Neither is engine math — the engine never asks how old its own
+	// data is — but they are tuneable numbers a human will want to find, and
+	// this file is where tuneable numbers live.
+	//
+	// StaleADPHours is when the live board should start saying so out loud. FFC
+	// recomputes once a day, so a board over a day old has definitionally missed
+	// a refresh, and injury status is frozen at the same moment adp is.
+	StaleADPHours = 24
+	// NewsFreshHours is how recently sleeper's news_updated must have moved for
+	// the board to call it news. Two days: long enough to survive a fetch on
+	// draft morning about something that broke friday night, short enough that
+	// the chip means "go read something" rather than decorating half the board.
+	NewsFreshHours = 48
+
 	// K/DEF suppression. Two different questions, deliberately two constants:
 	// what we're willing to recommend, and what the room actually does.
 	KDefLastRounds = 3
