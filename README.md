@@ -96,17 +96,33 @@ $e^{-(\text{nextPick} - \text{pickNo})/\sigma}$ — each pick that passes costs 
 factor, no matter how far he's fallen. (It's computed in log space so the extremes don't
 flatten; see `internal/engine/urgency.go`.)
 
-**Urgency.** Per position: the best player available now, versus the best player still *likely*
-to be there at your next pick —
+One correction on top of that. Exactly $N$ players come off the board before your turn — that's
+what a draft is — but treating every survival as independent "expects" $\sum_j (1 - p_j)$ of them
+to go, and that sum is measurably not $N$. Backtested against a real draft, the model was
+pessimistic across the board. So raise every probability to the single power that reconciles
+them:
 
-$$\text{bestLater} = \arg\max_j \{\, v_j : p_{\text{survive}}(j) \ge 0.5 \,\}$$
+$$\text{find } c > 0 \ \text{ with } \ \sum_j \big(1 - p_j^{\,c}\big) = N,
+\qquad \tilde p_j = p_j^{\,c}$$
 
-$$\text{urgency} = \Big( v(\text{bestNow}) - v(\text{bestLater}) \Big) \times \text{need}$$
+It's the gentlest fix there is: $\ln p$ is a player's hazard over those picks, so $p^c$ scales
+everyone's hazard by the same factor. Certainties stay certain ($1^c = 1$), nobody overtakes
+anybody, and $\tilde p$ is what every number on screen means.
+
+**Urgency.** Per position: the best player available now, versus the expected value of whoever
+is still there at your next pick. Line the position up best-first — the best survivor is #1 if he
+survives, #2 only if #1 is gone *and* #2 survives, and so on:
+
+$$\mathbb{E}[\text{best later}] = \sum_j v_j\, \tilde p_j \prod_{i<j} \big(1 - \tilde p_i\big)$$
+
+$$\text{urgency} = \Big( v(\text{bestNow}) - \mathbb{E}[\text{best later}] \Big) \times \text{need}$$
 
 — where need is 1.0 for an open starter slot, 0.6 for flex depth, 0.25 for bench, and 0 for
-kickers and defenses until the last rounds. The value gap is what waiting costs; need is whether
-you should care. The board sorts by it, and zero urgency is itself the signal: your guy will
-still be there. Wait.
+kickers and defenses until the last rounds. The expected drop is what waiting costs; need is
+whether you should care. The board sorts by it. And because it's an expectation rather than a
+cutoff, nothing jumps: a player crossing 50% doesn't re-sort the board on a rounding error. The
+wait signal is its own claim now — *safe to wait*, green, when the best man himself is more
+likely than not to still be sitting there.
 
 **Counting.** Tiers come from human rankings; where no file covers, they're derived by breaking
 the value curve wherever it genuinely drops:
@@ -115,8 +131,14 @@ $$\frac{v_{i-1} - v_i}{v_{i-1}} > 0.10
 \quad\text{and}\quad
 v_{i-1} - v_i \ \ge\ 0.015 \cdot v_{\max}$$
 
-A tier that's emptying is a cliff — two left is amber, last one is red. Four of the last six
-picks at one position is a run. And a player still available a full spread past his ADP,
+A tier is a cliff when it probably won't reach you, which is a probability and not a headcount —
+three players the room is about to eat is a worse cliff than one player nobody wants:
+
+$$p_{\text{hold}} = 1 - \prod_j \big(1 - \tilde p_j\big) \quad \text{over what's left in the tier}$$
+
+Under 50% is amber, under 15% is red, and a tier nobody has drafted out of yet is never either.
+Four of the last six picks at one position is a run. And a player still available a full spread
+past his ADP,
 
 $$\frac{\text{pickNo} - \mathrm{adp}}{\sigma} \ \ge\ 1,$$
 

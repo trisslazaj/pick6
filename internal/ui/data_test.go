@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -99,11 +100,12 @@ func TestDataViewScrollClamps(t *testing.T) {
 }
 
 // The urgency strip is the engine's summary on one line: the number, the
-// bestNow→bestLater pair producing it, and a green safe for positions where
-// waiting is free.
+// bestNow→bestLater pair producing it, and a green safe for positions whose own
+// best man will keep. bestLater is the modal best survivor now — rb6 is the man
+// most likely to be the best back left, which is the question the arrow asks.
 func TestDataViewUrgencyStrip(t *testing.T) {
 	s := runState()
-	for _, id := range []string{"wr1", "wr2", "qb1", "wr3", "rb2", "rb3", "wr4", "rb4", "rb5"} {
+	for _, id := range append(append([]string{}, openingPicks...), runPicks...) {
 		s.Draft(id) // the frame-B state: rb urgency 45, wr safe
 	}
 	b := Board{State: s, Width: 92, Height: 40, Tab: 1}
@@ -111,15 +113,64 @@ func TestDataViewUrgencyStrip(t *testing.T) {
 	if !strings.Contains(view, "rb 45 rb1→rb6") {
 		t.Errorf("strip should show rb 45 with its bestNow→bestLater pair, got:\n%s", view)
 	}
-	if !strings.Contains(view, "wr safe") {
-		t.Errorf("strip should mark wr safe, got:\n%s", view)
+	// A safe position keeps its number: the tag says his own odds are fine, the
+	// number says what the position still costs, and hiding it is what let the
+	// two tabs rank positions differently.
+	if !strings.Contains(view, "wr 0 safe") {
+		t.Errorf("strip should mark wr safe and still show its number, got:\n%s", view)
 	}
 }
 
-// The strip's "safe" obeys the board tab's guards. On my own pick every
-// urgency is zero by construction, and an all-green strip at the moment of
-// choosing would be nonsense — it says so instead. A cliff-last position
-// never reads safe even at zero urgency.
+// stripOrder reads the positions off the urgency strip in the order it lists
+// them, which is meant to be the order the board tab stacks its groups.
+func stripOrder(view string) []string {
+	for _, line := range strings.Split(view, "\n") {
+		l := strings.TrimSpace(line)
+		if !strings.HasPrefix(l, "urgency  ") {
+			continue
+		}
+		var out []string
+		for _, e := range strings.Split(strings.TrimPrefix(l, "urgency  "), "·") {
+			if f := strings.Fields(e); len(f) > 0 {
+				out = append(out, f[0])
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// The two tabs must rank positions identically, because they are rendering one
+// number. The strip used to file every "safe" position under a sort key of 0,
+// which was faithful while safe meant urgency was exactly 0 — under continuous
+// urgency it is a lie, and this fixture is where it shows: te is safe AND the
+// second most urgent position on the board, so the board tab put it second
+// while the strip buried it behind rb, a position worth a third as much.
+func TestTabsAgreeOnPositionOrder(t *testing.T) {
+	s := runState()
+	for _, id := range openingPicks {
+		s.Draft(id)
+	}
+	board := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
+	data := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40, Tab: 1}.View(), "")
+
+	// wr 28.3, te 9.6 (safe), qb 3.6 (safe), rb 3.0 — two of the four wear the
+	// green tag and one of those outranks everything but the leader.
+	want := []string{"wr", "te", "qb", "rb"}
+	if got := groupOrder(board); !reflect.DeepEqual(got, want) {
+		t.Errorf("board tab groups = %v, want %v", got, want)
+	}
+	if got := stripOrder(data); !reflect.DeepEqual(got, want) {
+		t.Errorf("data tab strip = %v, want %v", got, want)
+	}
+}
+
+// The strip reads "safe" from the same engine call the board tab does, so the
+// two tabs cannot disagree. On my own pick every urgency is exactly zero by
+// construction and nothing is safe (waiting isn't on offer), so the strip has
+// nothing to list and says so instead of going all-green at the moment of
+// choosing. A position whose tier is about to vanish reads its number, never
+// the green tag.
 func TestUrgencyStripGuards(t *testing.T) {
 	s := runState()
 	s.Draft("wr1")
@@ -133,30 +184,14 @@ func TestUrgencyStripGuards(t *testing.T) {
 		t.Errorf("no position is 'safe' on my own pick, got:\n%s", view)
 	}
 
-	// The safe-cliff fixture: rb's last tier-1 man survives (urgency 0) but
-	// the tier is cliffing — the strip must not call that safe while the
-	// banner calls it a cliff.
-	players := map[string]engine.Player{}
-	add := func(id, pos string, value int, adp, sigma float64, tier int) {
-		players[id] = engine.Player{ID: id, Name: "fake " + id, Pos: pos, Team: "AAA",
-			Value: value, ADP: adp, Sigma: sigma, Tier: tier, Bye: 7}
-	}
-	add("ra", "RB", 100, 2, 2, 1)
-	add("rb2", "RB", 90, 60, 8, 1)
-	add("wa", "WR", 100, 2, 2, 1)
-	add("wb2", "WR", 98, 1, 0.5, 1)
-	add("wc", "WR", 40, 60, 8, 2)
-	add("td1", "TE", 30, 80, 9, 1)
-	s2 := engine.New(players, 12, 15, 3)
-	s2.Draft("ra")
-	s2.Draft("wa")
-	s2.Draft("td1")
-	b2 := Board{State: s2, Width: 92, Height: 40, Tab: 1}
+	// The two-cliffs board: rb's last tier-1 man is going, so rb is cliffing
+	// and must not read safe while the banner calls wr a cliff.
+	b2 := Board{State: cliffState(), Width: 92, Height: 40, Tab: 1}
 	view2 := ansi.ReplaceAllString(b2.View(), "")
 	if strings.Contains(view2, "rb safe") {
 		t.Errorf("a cliffing position must not read safe, got:\n%s", view2)
 	}
-	if !strings.Contains(view2, "wr 58") {
+	if !strings.Contains(view2, "wr 40") {
 		t.Errorf("the urgent position should still show its number, got:\n%s", view2)
 	}
 }
@@ -167,7 +202,7 @@ func TestUrgencyStripGuards(t *testing.T) {
 func TestDataViewFitsTerminalHeight(t *testing.T) {
 	for _, w := range []int{80, 92} {
 		s := runState()
-		for _, id := range []string{"wr1", "wr2", "qb1", "wr3", "rb2", "rb3", "wr4", "rb4", "rb5"} {
+		for _, id := range append(append([]string{}, openingPicks...), runPicks...) {
 			s.Draft(id) // run banner active
 		}
 		b := Board{State: s, Width: w, Height: 24, Tab: 1}

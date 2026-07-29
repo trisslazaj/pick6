@@ -120,6 +120,12 @@ func tuneSigma(preds []pred, pool []engine.Player) {
 	})
 
 	fmt.Printf("\ntune — %d sigma combinations by brier\n", len(out))
+	// The grid scores the UNTILTED model, so its winner is the best sigma for a
+	// board with no exactly-n correction on it. The tilt renormalizes the whole
+	// vantage, which is exactly the kind of thing that can absorb a sigma error —
+	// read this table as "are the shipped sigmas badly wrong on their own", not
+	// as the sigma to ship alongside the tilt.
+	fmt.Println("  scored without the tilt: this asks whether the sigmas are wrong on their own")
 	fmt.Printf("  %s\n", sigmaCoverage(preds, pool))
 	fmt.Printf("  %-8s %-8s %-8s %8s %9s %10s\n", "default", "min", "max", "brier", "log-loss", "predicted")
 	show := func(c combo) {

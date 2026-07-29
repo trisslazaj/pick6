@@ -82,44 +82,87 @@ func (s *State) Falling(p Player) bool {
 	return (float64(s.PickNo)-p.ADP)/sigma >= FallerSigmas
 }
 
-// BestLater is the best player at a position I can still expect to be there at
-// my next pick: highest value among those with PSurvive >= SurviveThreshold.
-// If nobody clears the threshold, the available player most likely to survive —
-// someone always technically does. ok is false only when the position is empty.
+// BestLater names the player most likely to be the best one left at my next
+// pick: the argmax of p~_j * prod_{i<j}(1 - p~_i), the same per-player term
+// EBest sums. ok is false only when the position is empty.
+//
+// This is a DISPLAY value now. Urgency prices the whole distribution, but a
+// header that reads "chase -> hall" needs one name, and the modal survivor
+// answers the question a human actually asks: who am I probably picking
+// instead? The old definition — best value clearing a 0.5 survival threshold —
+// was the urgency math, and it left with it. The two usually name the same man.
+// Where they differ, the modal answer is the one higher up the board: he only
+// has to outlast the intervening picks, while everyone below him also needs the
+// men above him to go first. A 49% player above the line beats a 50% player
+// below it, and when nobody clears 0.5 at all the modal answer is the top of
+// the position rather than the deepest, safest name on it.
+//
+// Ties keep Available order (value desc, adp asc, id asc), so the answer is
+// deterministic rather than map-order roulette.
 func (s *State) BestLater(pos string) (Player, bool) {
 	avail := s.Available(pos)
 	if len(avail) == 0 {
 		return Player{}, false
 	}
-	// Available is value-desc, ADP-asc, ID-asc, so the first player clearing
-	// the threshold is the argmax by value with a deterministic tie-break.
+	at := s.NextPick()
+	c := s.survivalTilt(at, s.opponentPicksBefore(at))
+
+	best, bestWeight, acc := avail[0], -1.0, 1.0
 	for _, p := range avail {
-		if s.PSurvive(p) >= SurviveThreshold {
-			return p, true
+		q := math.Pow(s.PSurviveAt(p, at), c)
+		if w := acc * q; w > bestWeight {
+			best, bestWeight = p, w
 		}
-	}
-	best, bestP := avail[0], s.PSurvive(avail[0])
-	for _, p := range avail[1:] {
-		if sp := s.PSurvive(p); sp > bestP {
-			best, bestP = p, sp
-		}
+		acc *= 1 - q
 	}
 	return best, true
 }
 
-// Urgency is the need-weighted value lost by waiting until my next pick:
-// value(bestNow) - value(bestLater), scaled by roster need. Zero when the
-// position is empty, when need is zero (K/DEF before the last rounds), or when
-// bestNow will survive anyway — that zero IS the wait signal.
+// SafeToWait is the one place the "safe to wait" state is decided, so the board
+// tab and the data tab cannot end up contradicting each other about the same
+// position. It means what it always meant — your guy himself will keep — but it
+// can no longer be inferred from urgency == 0: urgency is continuous now, and
+// an exact zero only happens on my own pick.
 //
-// A position down to its last player also reads zero: the fallback returns him
-// as his own bestLater. Whether he vanishes outright is the cliff banner's job;
-// urgency only prices the drop between now and later.
+// The guards around it are unchanged: an untiered position (K/DEF) makes no
+// claim, an emptying tier is never safe however likely its best man is to last,
+// and nothing is "safe to wait" when the wait is zero picks long.
+func (s *State) SafeToWait(pos string) bool {
+	if s.PicksUntilMine() <= 0 {
+		return false
+	}
+	now, ok := s.BestNow(pos)
+	if !ok || now.Tier == 0 {
+		return false
+	}
+	if level, _, _ := s.Cliff(pos); level != CliffNone {
+		return false
+	}
+	return s.PSurviveTilted(now) >= SurviveThreshold
+}
+
+// Urgency is the need-weighted value I expect to lose by waiting: the best
+// player available now, minus the expected value of the best one still there at
+// my next pick.
+//
+// Unlike milestone 4's version this is continuous in the survival
+// probabilities — a position whose top player is 60% to last no longer reads
+// identically to one whose top player is certain, and no single pick can
+// re-sort the board by nudging somebody across a threshold.
+//
+// Zero when the position is empty or need is zero (K/DEF before the last
+// rounds), and EXACTLY zero on my own pick: no picks intervene, every survival
+// is 1, so EBest is bestNow's own value and the UI's value tie-break does the
+// pointing. It can never go negative — EBest is a sub-convex combination of
+// values that bestNow's own leads.
 func (s *State) Urgency(pos string) float64 {
 	now, ok := s.BestNow(pos)
 	if !ok {
 		return 0
 	}
-	later, _ := s.BestLater(pos) // cannot fail once BestNow succeeded
-	return float64(now.Value-later.Value) * s.Need(pos)
+	need := s.Need(pos)
+	if need == 0 {
+		return 0 // suppressed positions skip the walk entirely; it can't matter
+	}
+	return (float64(now.Value) - s.EBest(pos, s.NextPick())) * need
 }

@@ -185,7 +185,10 @@ func (b Board) dataRow(p engine.Player, nameW int) string {
 		numeric = Run
 	}
 
-	surv := s.PSurvive(p)
+	// The tilted survival, same as the board tab's column: two panes quoting
+	// different odds on the same player is the one failure this table cannot
+	// afford, since reading the numbers is its entire job.
+	surv := s.PSurviveTilted(p)
 	survStyle := Dim
 	switch {
 	case s.Falling(p):
@@ -240,15 +243,25 @@ func (b Board) dataRow(p engine.Player, nameW int) string {
 }
 
 // urgencyStrip is the engine's summary math on one line: per position, the
-// urgency number and the bestNow→bestLater pair that produces it, or a green
-// "safe" when waiting costs nothing. Sorted most urgent first; entries that
-// don't fit collapse into a "+n" rather than wrapping.
+// urgency number and the bestNow→bestLater pair that produces it, plus a green
+// "safe" where waiting keeps your own guy. Sorted most urgent first; entries
+// that don't fit collapse into a "+n" rather than wrapping.
 //
-// "safe" obeys the same guards as the board tab's safe-to-wait tag — not on
-// my own pick (urgency is 0 for everyone then, and waiting isn't on offer),
-// not for untiered positions (k/def have no math to be safe about), and not
-// while the position's tier is cliffing. Two tabs contradicting each other
-// about the same state is worse than either being wrong alone.
+// "safe" is decided by the same engine call as the board tab's safe-to-wait
+// tag, State.SafeToWait, rather than re-derived here. Two tabs contradicting
+// each other about the same state is worse than either being wrong alone, and
+// re-deriving is exactly how they drift apart.
+//
+// Which is also why a safe position still shows its number and still sorts on
+// it. Under milestone 4 "safe" meant urgency was exactly 0, so filing those
+// entries under a sort key of 0 was faithful; urgency is continuous now and the
+// board's top group — the one wearing the accent border — is routinely a
+// position whose own best man will keep. Pinning it to zero here ranked it last
+// while the board tab ranked it first, about the same state, in the same frame.
+//
+// The u > 0 arm is what stays silent on my own pick: urgency is continuous now
+// and only ever EXACTLY zero when no picks intervene, which is the one frame
+// where the strip has nothing worth saying and says so below.
 func (b Board) urgencyStrip(w int) string {
 	s := b.State
 	type entry struct {
@@ -266,15 +279,25 @@ func (b Board) urgencyStrip(w int) string {
 		}
 		tag := Pos(pos, false).Bold(true).Render(strings.ToLower(pos))
 		u := s.Urgency(pos)
-		level, _, _ := s.Cliff(pos)
 		switch {
-		case u > 0:
-			later, _ := s.BestLater(pos)
+		case s.SafeToWait(pos):
 			entries = append(entries, entry{fmt.Sprintf("%s %s %s", tag,
-				FG.Render(fmt.Sprintf("%.0f", u)),
-				Dim.Render(lastName(now.Name)+"→"+lastName(later.Name))), u})
-		case now.Tier != 0 && level == engine.CliffNone && s.PicksUntilMine() > 0:
-			entries = append(entries, entry{fmt.Sprintf("%s %s", tag, Wait.Render("safe")), 0})
+				FG.Render(fmt.Sprintf("%.0f", u)), Wait.Render("safe")), u})
+		case u > 0:
+			// bestLater is the modal best survivor now — the man you are most
+			// likely to be choosing from instead, which is the question the
+			// arrow was always asking. He can be bestNow himself: the top man
+			// only has to outlast the intervening picks, while everyone under
+			// him also needs the men above him to go first. Rendering
+			// "love→love" for that reads as a rendering fault, so the arrow
+			// says what it means instead.
+			later, _ := s.BestLater(pos)
+			pair := lastName(now.Name) + "→" + lastName(later.Name)
+			if later.ID == now.ID {
+				pair = lastName(now.Name) + "→same"
+			}
+			entries = append(entries, entry{fmt.Sprintf("%s %s %s", tag,
+				FG.Render(fmt.Sprintf("%.0f", u)), Dim.Render(pair)), u})
 		}
 	}
 	if len(entries) == 0 {

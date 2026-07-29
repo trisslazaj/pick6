@@ -7,10 +7,36 @@ const (
 	SigmaFromStdev   = 1.8138 // pi/sqrt(3): stdev of a logistic = scale * this
 	SigmaMin         = 0.5
 	SigmaMax         = 25.0
-	SurviveThreshold = 0.5   // bestLater candidate cutoff
+	SurviveThreshold = 0.5   // "he himself will keep": the safe-to-wait cutoff
 	SurvivalExpClamp = 30.0  // softplus goes linear past this; keeps exp from overflowing
 	UndraftedADP     = 999.0 // missing/zero ADP: off the drafted radar, always survives
 	FallerSigmas     = 1.0   // picks past ADP, in units of own sigma, before a player is "falling"
+
+	// The exactly-N tilt. Independent survivals expect sum(1-p) removals before
+	// my turn; a draft makes exactly PicksUntilMine(). They disagree, measurably
+	// and in one direction: the backtest over the real 2024 draft (15,923
+	// predictions) put mean predicted survival at 0.8231 against 0.8844 observed,
+	// with every reliability bin under 0.9 under-predicting. Solving for the
+	// exponent c that reconciles them is the correction.
+	//
+	// TiltCMax brackets the bisection at [1/64, 64]. On the shipped 201-player
+	// board c solves to 0.33..0.86 at every vantage measured, so the bracket is
+	// wide enough to never bind on real data; it binds on toy boards, which is
+	// where the clamps earn their keep.
+	TiltCMax = 64.0
+	TiltTol  = 1e-6 // bisection width; ~26 halvings of the bracket
+
+	// EBestEpsilon stops the expected-best walk once "everyone better is gone"
+	// gets this unlikely. The remaining terms cannot move the answer by more
+	// than epsilon times a value, i.e. under a millionth of a point.
+	EBestEpsilon = 1e-6
+
+	// Tier hold: the probability at least one player in the current tier reaches
+	// my next pick. Cliff levels read this instead of the raw remaining count,
+	// because three players the room is about to eat is a worse cliff than one
+	// player nobody wants.
+	TierHoldWarn  = 0.5
+	TierHoldCliff = 0.15
 
 	// Need weights.
 	NeedStarter = 1.0  // an unfilled dedicated starter slot exists for pos
@@ -28,8 +54,9 @@ const (
 	// is a week you cannot field a legal team without scrambling.
 	ByeConflictThreshold = 3
 
-	// Cliffs and runs.
-	CliffWarn    = 2 // players left in tier for amber
+	// Runs. (The old CliffWarn count threshold is gone: cliff levels come from
+	// TierHoldWarn/TierHoldCliff now, and a leftover count nothing reads would
+	// be the next reader's first wrong guess about how cliffs work.)
 	RunWindow    = 6 // sliding window of recent picks
 	RunThreshold = 4 // shared positions in that window to call a run
 

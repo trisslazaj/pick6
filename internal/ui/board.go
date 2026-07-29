@@ -210,8 +210,9 @@ func (b Board) banner(w int) string {
 	if run, ok := s.DetectRun(); ok {
 		return b.runBanner(run, w)
 	}
-	// No run: surface the most urgent cliff, if any. Two last-men-standing at
-	// once is rare but real, and the one whose position bleeds more value wins.
+	// No run: surface the most urgent cliff, if any. Two tiers about to vanish
+	// at once is rare but real, and the one whose position bleeds more value
+	// wins.
 	type c struct {
 		pos, msg string
 	}
@@ -221,13 +222,13 @@ func (b Board) banner(w int) string {
 		if s.Need(pos) == 0 {
 			continue
 		}
-		level, tier, _ := s.Cliff(pos)
+		level, tier, remaining := s.Cliff(pos)
 		if level != CliffLastLevel {
 			continue
 		}
+		hold, _ := s.TierHold(pos)
 		if u := s.Urgency(pos); worst == nil || u > worstU {
-			worst = &c{pos, fmt.Sprintf("%s tier %d — last one. take him or lose the tier.",
-				strings.ToLower(pos), tier)}
+			worst = &c{pos, cliffMsg(strings.ToLower(pos), tier, remaining, hold)}
 			worstU = u
 		}
 	}
@@ -240,6 +241,25 @@ func (b Board) banner(w int) string {
 // CliffLastLevel aliases the engine constant so callers here read cleanly.
 const CliffLastLevel = engine.CliffLast
 
+// cliffMsg is the banner's copy for a tier that probably won't reach me.
+//
+// "last one" is a claim about the COUNT, and the count is no longer what fires
+// the alarm: cliff level comes from the probability the tier holds, so red now
+// fires with three men left when all three are contested. Calling three players
+// "last one" would be flatly untrue, so that wording is kept for the case that
+// earns it and the probabilistic case says what it actually knows.
+func cliffMsg(pos string, tier, remaining int, hold float64) string {
+	if remaining == 1 {
+		return fmt.Sprintf("%s tier %d — last one. take him or lose the tier.", pos, tier)
+	}
+	return fmt.Sprintf("%s tier %d unlikely to hold — holds %s. take one or lose the tier.",
+		pos, tier, pct(hold))
+}
+
+// pct renders a probability the way every other number on the board is
+// rendered: whole percent, no decimals, nothing to read past.
+func pct(p float64) string { return fmt.Sprintf("%.0f%%", 100*p) }
+
 func (b Board) runBanner(run engine.Run, w int) string {
 	pos := strings.ToLower(run.Pos)
 	if run.TierBroke {
@@ -250,18 +270,41 @@ func (b Board) runBanner(run engine.Run, w int) string {
 		}
 		return bar(w, ColCliff, "run", msg)
 	}
-	return bar(w, ColRun, "run", fmt.Sprintf(
-		"%s run in progress — %d of the last %d picks. %d left in tier %d. act now or lose it.",
-		pos, run.Count, engine.RunWindow, run.TierLeft, run.Tier))
+	// The count is the run's evidence. Whether it costs you anything is the
+	// tier's hold probability, and "act now or lose it" is a claim about that
+	// rather than about the count: with cliff levels priced by probability, a
+	// run banner sat above a group header reading "safe to wait" on 21 of the 41
+	// run frames of the scripted mock — the same frame telling the reader to act
+	// and to wait about the same position. So the imperative is earned by the
+	// same threshold that turns that header amber, and a run whose tier will
+	// keep reports the room moving instead of manufacturing an alarm.
+	msg := fmt.Sprintf("%s run in progress — %d of the last %d picks. %d left in tier %d",
+		pos, run.Count, engine.RunWindow, run.TierLeft, run.Tier)
+	if hold, ok := b.State.TierHold(run.Pos); ok && hold >= engine.TierHoldWarn {
+		// The number goes on the calm wording only, and it is a width budget as
+		// much as a copy choice: the alarm wording plus a percentage overruns
+		// the banner's single row and truncates. When the alarm fires the group
+		// header below is carrying the same number anyway.
+		msg += fmt.Sprintf(", holds %s.", pct(hold))
+	} else {
+		msg += ". act now or lose it."
+	}
+	return bar(w, ColRun, "run", msg)
 }
 
 // bestOtherPosition names the highest-urgency position besides the one on a
-// run. Returns "" when everything else is safe to wait on — the banner just
-// drops the clause rather than naming a position with nothing at stake.
+// run, skipping any the board is simultaneously tagging "safe to wait".
+// Returns "" when everything else is safe — the banner drops the clause rather
+// than pointing at a position whose own group header, three lines below, says
+// there is no hurry.
+//
+// The skip used to be implicit: a safe position scored exactly 0 under
+// milestone-4 urgency and lost the argmax by itself. Continuous urgency gives
+// it a real number, and it started winning.
 func (b Board) bestOtherPosition(exclude string) string {
 	best, bestScore := "", 0.0
 	for _, pos := range positions {
-		if pos == exclude {
+		if pos == exclude || b.State.SafeToWait(pos) {
 			continue
 		}
 		if score := b.State.Urgency(pos); score > bestScore {
@@ -333,30 +376,73 @@ func (b Board) bestAvailable(w int) string {
 	return sb.String()
 }
 
+// tierLabel is the group header's tier clause, in a long form and a short one.
+//
+// It carries both the remaining count and the probability at least one of those
+// players is still there the next time I can act (on the clock, that means after
+// this pick), because the two answer different questions and the second is the
+// one the cliff levels now read. A count cannot
+// tell three players the room is about to eat from one player nobody wants, and
+// those are opposite situations; showing the count alone would leave the reader
+// unable to see why an eight-man tier went red.
+func (b Board) tierLabel(pos string) (long, short string, style lipgloss.Style) {
+	s := b.State
+	level, tier, remaining := s.Cliff(pos)
+	if tier == 0 {
+		// K and DEF carry no value from any source, so they carry no tier and
+		// there is no hold probability to quote about them.
+		return "untiered", "untiered", Dim
+	}
+	hold, _ := s.TierHold(pos) // cannot fail once Cliff found a tiered player
+	switch {
+	case level == engine.CliffLast && remaining == 1:
+		// A count claim, and still a true one — keep the wording that says it.
+		short = fmt.Sprintf("last one in tier %d", tier)
+		return short, short, Cliff.Bold(true)
+	case level == engine.CliffLast:
+		short = fmt.Sprintf("tier %d unlikely to hold", tier)
+		return short + " — holds " + pct(hold), short, Cliff.Bold(true)
+	case level == engine.CliffWarning:
+		short = fmt.Sprintf("%d left in tier %d — ending", remaining, tier)
+		return short + " · holds " + pct(hold), short, Run
+	default:
+		short = fmt.Sprintf("%d left in tier %d", remaining, tier)
+		return short + " · holds " + pct(hold), short, Dim
+	}
+}
+
 func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w, depth int) string {
 	s := b.State
 	suppressed := s.Need(pos) == 0
 	style := Pos(pos, suppressed)
 
-	level, tier, remaining := s.Cliff(pos)
-	count := Dim.Render(fmt.Sprintf("%d left in tier %d", remaining, tier))
-	switch level {
-	case engine.CliffLast:
-		count = Cliff.Bold(true).Render("last one in tier " + fmt.Sprint(tier))
-	case engine.CliffWarning:
-		count = Run.Render(fmt.Sprintf("%d left in tier %d — ending", remaining, tier))
-	}
-	if tier == 0 {
-		count = Dim.Render("untiered")
+	// The green tag comes straight from the engine, which is also what the data
+	// tab's strip asks. It used to be inferred from urgency == 0, and urgency is
+	// continuous now — an exact zero happens only on my own pick, so the old
+	// condition would have quietly stopped firing anywhere else. Every guard it
+	// carried (cliff copy wins, untiered k/def never claim safety, nothing is
+	// "safe to wait" when the wait is zero picks long) lives in SafeToWait now.
+	tag := strings.ToLower(pos)
+	wait := ""
+	if s.SafeToWait(pos) {
+		wait = "  safe to wait"
 	}
 
-	head := fmt.Sprintf("%s  %s", style.Bold(true).Render(strings.ToLower(pos)), count)
+	// The header drops its hold clause rather than wrapping. At 80 columns the
+	// left pane is 43 wide and the long form plus a safe-to-wait tag overruns
+	// it; a wrapped group header reads as a rendering fault, the same reason
+	// playerLine drops the bye column instead of spilling.
+	long, short, countStyle := b.tierLabel(pos)
+	count := long
+	// Measured in display cells, not bytes: the separators are a middle dot and
+	// an em dash, and counting their utf-8 length would drop the hold clause a
+	// few columns before it actually stopped fitting.
+	if 2+lipgloss.Width(tag)+2+lipgloss.Width(count)+lipgloss.Width(wait) > w-2 {
+		count = short
+	}
 
-	// Green only when there is truly nothing to do: cliff copy always wins,
-	// untiered groups (k/def, value 0, urgency identically 0) never earn the
-	// tag — "safe to wait" about a kicker in the last round would be a lie —
-	// and neither does anything on my own pick, when waiting isn't on offer.
-	if tier != 0 && level == engine.CliffNone && s.Urgency(pos) == 0 && s.PicksUntilMine() > 0 {
+	head := fmt.Sprintf("%s  %s", style.Bold(true).Render(tag), countStyle.Render(count))
+	if wait != "" {
 		head += "  " + Wait.Render("safe to wait")
 	}
 
@@ -403,8 +489,12 @@ func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
 	}
 	meta := numStyle.Render(fmt.Sprintf("%-4s adp %5.1f", p.Team, p.ADP))
 	// Chance he's still there at my next pick. The number the whole board runs
-	// on, so show it rather than asking anyone to trust the ordering blind.
-	surv := numStyle.Render(fmt.Sprintf("%3.0f%%", 100*b.State.PSurvive(p)))
+	// on, so show it rather than asking anyone to trust the ordering blind —
+	// and specifically the TILTED one, the same probability urgency, tier-hold
+	// and the safe tag consume. One truth: a raw survival on screen next to an
+	// ordering computed from the corrected one leaves nobody able to tell which
+	// number the board actually believed.
+	surv := numStyle.Render(fmt.Sprintf("%3.0f%%", 100*b.State.PSurviveTilted(p)))
 
 	if w < nameW+26 { // no room for the bye column
 		return fmt.Sprintf("%s %s %s", name, meta, surv)

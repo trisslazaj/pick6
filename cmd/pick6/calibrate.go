@@ -100,7 +100,7 @@ func runCalibrate(args []string) error {
 			continue
 		}
 
-		p, v := walk(d, picks, b.players)
+		p, v := walk(d, picks, b.players, vantages)
 		preds = append(preds, p...)
 		vantages += v
 		drafts++
@@ -118,6 +118,12 @@ func runCalibrate(args []string) error {
 	}
 	if len(preds) == 0 {
 		return fmt.Errorf("nothing scorable — no draft had era adp")
+	}
+	// idx is assigned once, here, after every draft has appended: the tilt hands
+	// its per-vantage answers back through this index, so pred.idx must be the
+	// row's position in THIS slice and nothing else.
+	for i := range preds {
+		preds[i].idx = i
 	}
 
 	report(preds, drafts, vantages)
@@ -182,7 +188,10 @@ func loadEraBoard(ix *rankings.Index, format string, year int) *eraBoard {
 // free — the snake math is seat-agnostic, so each seat is a different schedule
 // of vantages over the same reality. It is not twelve times the *evidence*
 // (same draft, correlated), which the caveats say out loud.
-func walk(d *sleeper.Draft, picks []sleeper.DraftPick, board []engine.Player) (out []pred, vantages int) {
+// vbase is where this draft's vantage numbering starts, so ids stay unique once
+// a second draft has era adp to score against. The tilt is solved per vantage
+// and two drafts sharing an id would pool two different boards into one solve.
+func walk(d *sleeper.Draft, picks []sleeper.DraftPick, board []engine.Player, vbase int) (out []pred, vantages int) {
 	drafted := make(map[string]int, len(picks))
 	for _, p := range picks {
 		drafted[p.PlayerID] = p.PickNo
@@ -197,6 +206,7 @@ func walk(d *sleeper.Draft, picks []sleeper.DraftPick, board []engine.Player) (o
 		for r := 1; r < rounds; r++ {
 			from, to := s.MyPick(r), s.MyPick(r+1)
 			s.PickNo = from
+			v := vbase + vantages
 			vantages++
 			for _, pl := range board {
 				at := drafted[pl.ID]
@@ -210,7 +220,7 @@ func walk(d *sleeper.Draft, picks []sleeper.DraftPick, board []engine.Player) (o
 				out = append(out, pred{
 					pos: pl.Pos, adp: pl.ADP, stdev: pl.Stdev,
 					from: from, to: to, teams: teams,
-					q: s.PSurviveAt(pl, to), y: y,
+					q: s.PSurviveAt(pl, to), y: y, vantage: v,
 				})
 			}
 		}
@@ -288,4 +298,9 @@ func printCaveats(skipped, noEra int) {
 	fmt.Println("  the adp snapshot is the trailing window of that season's draft week, so it")
 	fmt.Println("  already knows what the room knew — late injuries, camp news. read the numbers")
 	fmt.Println("  as the optimistic case: the model running with final prices.")
+	fmt.Println("  the tilt is scored at a vantage that stands on my own pick and looks to my")
+	fmt.Println("  next, so its n counts my pick too. live the window opens on somebody else's")
+	fmt.Println("  pick and my next one closes it, so n is picks-until-mine. same rule — every")
+	fmt.Println("  pick inside the window — but the live horizon is one pick shorter than any")
+	fmt.Println("  row here, which is the easy direction: shorter windows tilt less.")
 }
