@@ -1,5 +1,8 @@
 # backlog — model improvements beyond v1, before/alongside v2's monte carlo
 
+> implementation spec for the accepted slice: **docs/milestone-4x.md** — hand that file to
+> the implementing agent; this one is the triage that produced it.
+
 Spitballed and triaged 2026-07-29. Constraints respected throughout: no projections of our
 own, no server/db, free sources only. Items marked ✦ were independently proposed by multiple
 lenses — treat that as a signal.
