@@ -8,17 +8,23 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/trisslazaj/pick6/internal/cache"
 )
 
 const apiBase = "https://api.sleeper.app/v1"
 
 // Draft is the subset of Sleeper's draft metadata we use.
 type Draft struct {
-	DraftID  string `json:"draft_id"`
-	Type     string `json:"type"`   // must be "snake"
-	Status   string `json:"status"` // pre_draft | drafting | paused | complete
-	Season   string `json:"season"`
-	Settings struct {
+	DraftID string `json:"draft_id"`
+	Type    string `json:"type"`   // must be "snake"
+	Status  string `json:"status"` // pre_draft | drafting | paused | complete
+	Season  string `json:"season"`
+	// StartTime is epoch millis. The backtester compares it against the adp
+	// snapshot's window: prices from a different week are a different market,
+	// and that gap belongs in the output rather than in an assumption.
+	StartTime int64 `json:"start_time"`
+	Settings  struct {
 		Teams          int `json:"teams"`
 		Rounds         int `json:"rounds"`
 		ReversalRound  int `json:"reversal_round"`
@@ -109,6 +115,50 @@ func getPicks(url string) ([]DraftPick, error) {
 	}
 	sort.Slice(picks, func(i, j int) bool { return picks[i].PickNo < picks[j].PickNo })
 	return picks, nil
+}
+
+// completedDraftAge is the cache lifetime for a finished draft. A completed
+// draft's metadata and picks never change again, so the only reason not to use
+// forever is that the file should eventually age out of the cache dir; 30 days
+// covers a whole offseason of backtest runs on one fetch.
+const completedDraftAge = 30 * 24 * time.Hour
+
+// CachedDraft is GetDraft off disk, for the historical drafts the backtester
+// replays. Live drafting must keep using GetDraft — status and draft_order
+// change while a draft is running.
+func CachedDraft(id string) (*Draft, error) {
+	var d Draft
+	if err := cachedJSON("draft_"+id+".json", apiBase+"/draft/"+id, &d); err != nil {
+		return nil, err
+	}
+	if d.DraftID == "" {
+		return nil, fmt.Errorf("draft %s not found", id)
+	}
+	return &d, nil
+}
+
+// CachedPicks is GetPicks off disk, sorted by pick number for the same reason
+// getPicks sorts: one out-of-order pick would corrupt the roster it lands on.
+func CachedPicks(id string) ([]DraftPick, error) {
+	var picks []DraftPick
+	if err := cachedJSON("draft_"+id+"_picks.json", apiBase+"/draft/"+id+"/picks", &picks); err != nil {
+		return nil, err
+	}
+	sort.Slice(picks, func(i, j int) bool { return picks[i].PickNo < picks[j].PickNo })
+	return picks, nil
+}
+
+func cachedJSON(name, url string, v any) error {
+	b, _, err := cache.Get(name, url, completedDraftAge)
+	if err != nil {
+		return err
+	}
+	// Sleeper answers unknown ids with a bare `null` and a 200, so the cache
+	// happily stores it; catch it here rather than returning an empty result.
+	if string(b) == "null" {
+		return fmt.Errorf("%s: not found", url)
+	}
+	return json.Unmarshal(b, v)
 }
 
 // GetUser resolves a username (or user id) to a user.

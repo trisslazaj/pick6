@@ -160,7 +160,7 @@ func say(source string, fetched bool, detail string) {
 	if fetched {
 		where = "fetched"
 	}
-	fmt.Printf("  %-12s %-8s %s\n", source, where, detail)
+	note(source, where, detail)
 }
 
 func tierSummary(byPos map[string]int) string {

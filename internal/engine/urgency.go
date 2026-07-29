@@ -2,23 +2,28 @@ package engine
 
 import "math"
 
-// PSurvive estimates the probability a player is still available at my next
-// pick, from the ADP logistic: a player whose ADP equals my next pick is a coin
+// PSurviveAt estimates the probability a player is still available at pick
+// `at`, from the ADP logistic: a player whose ADP equals that pick is a coin
 // flip; well before it, he's gone; well after, he's safe.
 //
 // The estimate is conditional on the present: he is demonstrably available
-// right now, so only the picks between now and my turn can take him. Without
-// the S(nextPick)/S(pickNo) ratio a faller — ADP 18, still here at pick 21 —
+// right now, so only the picks between now and `at` can take him. Without
+// the S(at)/S(pickNo) ratio a faller — ADP 18, still here at pick 21 —
 // reads ~20% with one pick to go, when the worst case is one team taking him.
 // Conditioning barely moves anyone whose ADP is still ahead (S(now) ~ 1); it
 // only repairs the players the market has already passed.
+//
+// The horizon is a parameter because the callers ask about more than one:
+// my next pick during a draft, my pick after that for lookahead, and any
+// vantage pair at all when the backtester scores the model against a real
+// completed draft.
 //
 // Missing ADP (<= 0) means the player is off the drafted radar — live feeds
 // register handcuffs and rookies no ADP source ranked — and is treated as
 // UndraftedADP: he always survives. Missing sigma falls back to SigmaDefault;
 // per-player sigma is converted from observed stdev and clamped at fetch time,
 // not here.
-func (s *State) PSurvive(p Player) float64 {
+func (s *State) PSurviveAt(p Player, at int) float64 {
 	adp := p.ADP
 	if adp <= 0 {
 		adp = UndraftedADP
@@ -27,24 +32,29 @@ func (s *State) PSurvive(p Player) float64 {
 	if sigma <= 0 {
 		sigma = SigmaDefault
 	}
-	next := s.NextPick()
-	if next < s.PickNo {
-		// A finished draft has no next pick; NextPick falls back to the final
-		// one, which is in the past. Without this the ratio tops 1 and a replay
-		// frame prints "105%".
-		next = s.PickNo
+	if at < s.PickNo {
+		// A horizon behind us means no picks intervene. This is how a finished
+		// draft arrives: NextPick falls back to the final pick, which is in the
+		// past, and unguarded the ratio tops 1 — a replay frame prints "105%".
+		at = s.PickNo
 	}
-	// The ratio S(next)/S(now) is computed in log space: log S(p) is
+	// The ratio S(at)/S(now) is computed in log space: log S(p) is
 	// -softplus((p-adp)/sigma), so the log of the ratio is a difference of
-	// softpluses and the tail degrades to exp(-(next-now)/sigma), a per-pick
+	// softpluses and the tail degrades to exp(-(at-now)/sigma), a per-pick
 	// hazard. Clamping each S separately instead would flatten that difference
 	// once both exponents saturate, and a deep faller would read 100% — the
-	// further past his ADP, the safer he'd look. next >= now, softplus is
+	// further past his ADP, the safer he'd look. at >= now, softplus is
 	// increasing, so the result is genuinely in (0, 1]: exactly 1 on my own
 	// pick, when no picks intervene and urgency falls to the value tie-break.
-	a := (float64(next) - adp) / sigma
+	a := (float64(at) - adp) / sigma
 	b := (float64(s.PickNo) - adp) / sigma
 	return math.Exp(softplus(b) - softplus(a))
+}
+
+// PSurvive is PSurviveAt at the horizon that matters at the clock — my next
+// pick. See PSurviveAt for the model and its sentinels.
+func (s *State) PSurvive(p Player) float64 {
+	return s.PSurviveAt(p, s.NextPick())
 }
 
 // softplus is log(1+exp(x)) without overflow: past the clamp the +1 is

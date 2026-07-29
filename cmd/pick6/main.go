@@ -9,11 +9,12 @@ import (
 const usage = `pick6 — terminal draft war room
 
 usage:
-  pick6 fetch   download and cache player data + adp, build the mapping
-  pick6 tiers   print the current tier board (run fetch first)
-  pick6 mock    replay a scripted draft against the real ui
-  pick6 live    poll a sleeper draft and render the board
-  pick6 board   static best-available board, manual mark-taken (not built yet)
+  pick6 fetch       download and cache player data + adp, build the mapping
+  pick6 tiers       print the current tier board (run fetch first)
+  pick6 mock        replay a scripted draft against the real ui
+  pick6 live        poll a sleeper draft and render the board
+  pick6 calibrate   score the survival model against drafts that already happened
+  pick6 board       static best-available board, manual mark-taken (not built yet)
 `
 
 func main() {
@@ -41,6 +42,11 @@ func main() {
 	case "live":
 		if err := runLive(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "live failed: %v\n", err)
+			os.Exit(1)
+		}
+	case "calibrate":
+		if err := runCalibrate(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "calibrate failed: %v\n", err)
 			os.Exit(1)
 		}
 	case "board":

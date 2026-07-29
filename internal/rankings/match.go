@@ -98,18 +98,35 @@ func NewIndex(pool map[string]sleeper.Player) *Index {
 	return ix
 }
 
-// Lookup resolves a source player to a Sleeper player_id.
+// Lookup resolves a source player to a Sleeper player_id, falling back to
+// Levenshtein when the name doesn't match exactly.
 // Pass team for defenses; it is ignored for everyone else.
 func (ix *Index) Lookup(name, pos, team string) (string, bool) {
+	if id, ok := ix.LookupExact(name, pos, team); ok {
+		return id, true
+	}
+	// Defenses never reach the fuzzy stage in practice — byKey holds none of
+	// them — so this is a plain miss for DEF and the fallback for everyone else.
+	return ix.fuzzy(Normalize(name), NormalizePos(pos))
+}
+
+// LookupExact is Lookup minus the fuzzy fallback: same position normalization,
+// same defense-by-team join, same exact key, then a miss.
+//
+// It exists for the backtester, which joins a 2024 source against the *current*
+// active Sleeper pool. Anyone retired or cut since is simply absent from that
+// pool, and Levenshtein would hand back a similarly-named active player whose
+// id never appears in the 2024 picks — so he'd be labeled "survived forever"
+// and quietly bias every calibration number. A name with no exact match is one
+// to print and drop, not one to guess at.
+func (ix *Index) LookupExact(name, pos, team string) (string, bool) {
 	pos = NormalizePos(pos)
 	if pos == "DEF" {
 		id, ok := ix.byTeam[strings.ToUpper(team)]
 		return id, ok
 	}
-	if id, ok := ix.byKey[Key{Normalize(name), pos}]; ok {
-		return id, true
-	}
-	return ix.fuzzy(Normalize(name), pos)
+	id, ok := ix.byKey[Key{Normalize(name), pos}]
+	return id, ok
 }
 
 // fuzzy is the Levenshtein <= 2 fallback, scoped to the same position.

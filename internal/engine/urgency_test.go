@@ -154,10 +154,10 @@ func TestBestLaterPicksValueAmongSurvivors(t *testing.T) {
 	s := newTestState(12, 15, 3)
 	s.PickNo = 4
 	addPlayers(s,
-		Player{ID: "a", Pos: "RB", Value: 100, ADP: 4, Sigma: 2},  // p ~ 0.0002: gone
-		Player{ID: "b", Pos: "RB", Value: 90, ADP: 20, Sigma: 4},  // p = 0.384: below threshold
-		Player{ID: "c", Pos: "RB", Value: 80, ADP: 26, Sigma: 4},  // p = 0.734: survives
-		Player{ID: "d", Pos: "RB", Value: 70, ADP: 40, Sigma: 6},  // p = 0.955: survives harder
+		Player{ID: "a", Pos: "RB", Value: 100, ADP: 4, Sigma: 2}, // p ~ 0.0002: gone
+		Player{ID: "b", Pos: "RB", Value: 90, ADP: 20, Sigma: 4}, // p = 0.384: below threshold
+		Player{ID: "c", Pos: "RB", Value: 80, ADP: 26, Sigma: 4}, // p = 0.734: survives
+		Player{ID: "d", Pos: "RB", Value: 70, ADP: 40, Sigma: 6}, // p = 0.955: survives harder
 	)
 	later, ok := s.BestLater("RB")
 	if !ok || later.ID != "c" {
@@ -191,8 +191,8 @@ func TestBestLaterFallbackToLikeliest(t *testing.T) {
 	s := newTestState(12, 15, 3)
 	s.PickNo = 4
 	addPlayers(s,
-		Player{ID: "a", Pos: "RB", Value: 100, ADP: 4, Sigma: 2},  // p ~ 0.0002
-		Player{ID: "b", Pos: "RB", Value: 90, ADP: 10, Sigma: 4},  // p = 0.058
+		Player{ID: "a", Pos: "RB", Value: 100, ADP: 4, Sigma: 2}, // p ~ 0.0002
+		Player{ID: "b", Pos: "RB", Value: 90, ADP: 10, Sigma: 4}, // p = 0.058
 	)
 	if later, _ := s.BestLater("RB"); later.ID != "b" {
 		t.Errorf("BestLater = %q, want b (highest survival when no one clears 0.5)", later.ID)
@@ -231,8 +231,8 @@ func TestUrgencyNeedLadder(t *testing.T) {
 		s := newTestState(12, 15, 3)
 		s.PickNo = 4
 		addPlayers(s,
-			Player{ID: "a", Pos: "RB", Value: 100, ADP: 4, Sigma: 2},  // gone by 22
-			Player{ID: "b", Pos: "RB", Value: 60, ADP: 30, Sigma: 5},  // survives
+			Player{ID: "a", Pos: "RB", Value: 100, ADP: 4, Sigma: 2}, // gone by 22
+			Player{ID: "b", Pos: "RB", Value: 60, ADP: 30, Sigma: 5}, // survives
 		)
 		for i := 0; i < c.filler; i++ {
 			id := "taken" + string(rune('0'+i))

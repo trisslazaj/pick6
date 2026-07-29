@@ -37,14 +37,14 @@ type Board struct {
 // centre; extra height is spent showing more players, which is the thing you
 // actually want more of.
 const (
-	MinWidth   = 80
-	MaxWidth   = 104
-	SidebarW   = 34 // minimum; grows with the terminal up to SidebarMaxW
+	MinWidth    = 80
+	MaxWidth    = 104
+	SidebarW    = 34 // minimum; grows with the terminal up to SidebarMaxW
 	SidebarMaxW = 38
-	MinDepth   = 3 // players shown per position group
-	MaxDepth   = 8
-	MinTickerN = 4
-	MaxTickerN = 10
+	MinDepth    = 3 // players shown per position group
+	MaxDepth    = 8
+	MinTickerN  = 4
+	MaxTickerN  = 10
 )
 
 // sidebarWidth gives the sidebar a share of any width beyond the old 92-column
