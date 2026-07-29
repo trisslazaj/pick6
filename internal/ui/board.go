@@ -23,6 +23,31 @@ type Board struct {
 	Synced time.Time
 	Status string // transient message shown in the footer
 
+	// Reserve is rows the caller will draw BELOW this board — live mode's sticky
+	// stale warning, its desync line, the poll error, "draft complete". The panes
+	// are sized to fill Height exactly, so a caller appending a line without
+	// charging for it makes the frame one row taller than the terminal, which
+	// scrolls the header off the top and defeats the alt-screen repaint. Sticky
+	// lines make that permanent: a board older than StaleADPHours sat one row
+	// over for the whole draft, in exactly the state the warning exists for.
+	//
+	// It buys back a row only where the board has one to give. depth() is a
+	// quantised knob — a row per GROUP, not a row total — so at 40 lines charging
+	// one row costs four and the frame comes in three under rather than one over,
+	// which is the right direction. Below MinDepth there is nothing left to give
+	// and the frame stays put: at exactly 28 lines it is still one over, which is
+	// the pre-existing floor (a 24-line terminal already renders 28 rows), not
+	// something this field can fix.
+	Reserve int
+
+	// Fresh is how old the data underneath all of this is, handed in by the cmd
+	// layer. The zero value means "no meta.json" and renders as nothing at all,
+	// which is the honest answer for a board fetched before that file existed.
+	Fresh Freshness
+	// Now is the clock the news chip reads; zero means the wall clock. A field
+	// only so tests can pin it.
+	Now time.Time
+
 	// Tab 0 is the board; tab 1 is the data table — every player, every
 	// number, nothing abstracted away. State for the latter lives here so
 	// both the mock and live models share it.
@@ -131,7 +156,7 @@ func (b Board) depth(groups int) int {
 	// from 39 rows to 36, trading two player rows to reclaim one. The budget is
 	// already approximate (it overshoots by three at 24 lines, which is its own
 	// tracked bug); one predictable row beats a lumpy four.
-	avail := b.Height - 8 // header, banner, footer, breathing room
+	avail := b.Height - 8 - b.Reserve // header, banner, footer, breathing room
 	perGroup := avail/groups - 2
 	if perGroup < MinDepth {
 		return MinDepth
@@ -147,7 +172,9 @@ func (b Board) tickerRows() int {
 		return MinTickerN + 2
 	}
 	// The sidebar's fixed chrome is roughly 20 rows before the ticker starts.
-	n := b.Height - 22
+	// It charges Reserve too: late in a draft one or two groups survive and the
+	// sidebar becomes the taller pane, so it is the one setting frame height.
+	n := b.Height - 22 - b.Reserve
 	if n < MinTickerN {
 		return MinTickerN
 	}
@@ -349,7 +376,7 @@ func bar(w int, color, tag, msg string) string {
 	// moment someone is looking. The head of the copy carries the information.
 	body = trunc(body, w-4)
 	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#1A1B26")).
+		Foreground(lipgloss.Color(ColInk)).
 		Background(lipgloss.Color(color)).
 		Bold(true).
 		Width(w - 4).
@@ -546,6 +573,10 @@ func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w, depth 
 // bye(6) when it fits. The name takes whatever the pane can spare (row =
 // nameW+28 with bye, so nameW = w-26 fills the budget exactly); below w=42
 // even the floor name doesn't leave room for the bye column.
+//
+// Chips ride inside the name column and are paid for out of it, so this budget
+// is untouched by them — at 80 columns the row already spends 36 of its 37
+// cells and there is nothing to append to.
 func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
 	nameW := w - 26
 	if nameW < 16 {
@@ -554,7 +585,7 @@ func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
 	if nameW > 26 {
 		nameW = 26
 	}
-	name := style.Render(fmt.Sprintf("%-*s", nameW, trunc(strings.ToLower(p.Name), nameW)))
+	name := b.nameCell(p, style, nameW)
 	// A falling player is a discount — the draft has moved past his price and
 	// he's still here. Amber on the numbers, not the name: it's a state, and
 	// the name keeps its position colour like everyone else's.
@@ -739,6 +770,26 @@ func (b Board) footer(w int) string {
 	if b.Status != "" {
 		right = Accent.Render(strings.ToLower(b.Status))
 	}
+
+	// How old the picture is, sitting next to how long ago we last synced —
+	// two clocks that get mistaken for each other constantly. "synced" is the
+	// poll; "adp" is the data the entire board is computed from, frozen at fetch
+	// time along with every injury flag, and only meta.json knows when that was.
+	//
+	// Long form, then short, then nothing: at 80 columns the keybinds and the
+	// sync note have already spent the row and about 15 cells are left, which is
+	// the short form and not the long one. Dropping beats wrapping, the same rule
+	// playerLine and the banner follow.
+	if long, short := b.Fresh.note(); long != "" {
+		avail := w - 3 - lipgloss.Width(left) - lipgloss.Width(right)
+		for _, cand := range []string{long, short} {
+			if lipgloss.Width(cand)+3 <= avail {
+				right = Dim.Render(cand) + "   " + right
+				break
+			}
+		}
+	}
+
 	pad := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
 	if pad < 1 {
 		pad = 1

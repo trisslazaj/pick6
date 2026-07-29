@@ -12,6 +12,14 @@ const (
 	UndraftedADP     = 999.0 // missing/zero ADP: off the drafted radar, always survives
 	FallerSigmas     = 1.0   // picks past ADP, in units of own sigma, before a player is "falling"
 
+	// RuleOfThree is the numerator of the support floor: if something happened
+	// zero times in n trials, the 95% upper bound on its rate is -ln(0.05)/n =
+	// 2.996/n, i.e. about 3/n. FFC reports the earliest pick anyone in its
+	// sample ever took a player at, so a horizon at or before that pick is one
+	// no observed draft ever removed him inside, and the honest floor on his
+	// survival is 1 - 3/n rather than whatever the logistic curve says.
+	RuleOfThree = 3.0
+
 	// The exactly-N tilt. Independent survivals expect sum(1-p) removals before
 	// my turn; a draft makes exactly PicksUntilMine(). They disagree, measurably
 	// and in one direction: the backtest over the real 2024 draft (15,923
@@ -72,11 +80,25 @@ const (
 	// recomputes once a day, so a board over a day old has definitionally missed
 	// a refresh, and injury status is frozen at the same moment adp is.
 	StaleADPHours = 24
+	// ADPWindowStaleDays is the other half of that question. FetchedAt can be
+	// minutes old while the data behind it is days old, because every source is
+	// disk-cached and a fetch that hits cache all the way through moves only the
+	// timestamp. ffc's own sample window is the thing that actually went stale,
+	// and it recomputes daily, so two days late means at least one refresh was
+	// missed on their side too.
+	ADPWindowStaleDays = 2
 	// NewsFreshHours is how recently sleeper's news_updated must have moved for
 	// the board to call it news. Two days: long enough to survive a fetch on
 	// draft morning about something that broke friday night, short enough that
 	// the chip means "go read something" rather than decorating half the board.
 	NewsFreshHours = 48
+	// TripwireSlack is how far past a player's worst observed pick the draft has
+	// to run before the board says so. `low` is a maximum over ~1,187 ffc drafts,
+	// and a room sitting one pick behind national adp on somebody is unremarkable
+	// — two picks of slack keeps the chip off a rounding-level difference and
+	// still fires the moment the room is genuinely behind every draft in the
+	// sample at once.
+	TripwireSlack = 2
 
 	// K/DEF suppression. Two different questions, deliberately two constants:
 	// what we're willing to recommend, and what the room actually does.

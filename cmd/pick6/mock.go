@@ -53,7 +53,8 @@ func runMock(args []string) error {
 			}
 			s.Draft(id)
 		}
-		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now()}
+		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
+			Fresh: loadFreshness()}
 		if *data {
 			b.Tab = 1
 		}
@@ -62,7 +63,7 @@ func runMock(args []string) error {
 	}
 
 	p := tea.NewProgram(
-		ui.NewModel(s, pick, *auto),
+		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness()),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()
@@ -116,6 +117,30 @@ func loadBoard() (map[string]engine.Player, error) {
 		return nil, fmt.Errorf("board is empty — run `pick6 fetch` first")
 	}
 	return out, nil
+}
+
+// loadFreshness reads meta.json for the footer's age clause and the live
+// board's stale warning, flattening adp.Meta into the three fields the ui
+// needs.
+//
+// A missing or unreadable file is deliberately not an error and not a log line:
+// boards fetched before meta.json existed still draw fine, they just cannot say
+// how old they are. The zero Freshness renders as nothing at all, which beats
+// "adp 0h old" about a board from last week.
+func loadFreshness() ui.Freshness {
+	dir, err := cache.Dir()
+	if err != nil {
+		return ui.Freshness{}
+	}
+	m, err := adp.LoadMeta(dir)
+	if err != nil {
+		return ui.Freshness{}
+	}
+	f := ui.Freshness{FetchedAt: m.FetchedAt, Drafts: m.TotalDrafts}
+	if end, ok := m.WindowEnd(); ok {
+		f.WindowEnd = end
+	}
+	return f
 }
 
 // scriptedPicker drafts the way a room of humans roughly does: near the top of

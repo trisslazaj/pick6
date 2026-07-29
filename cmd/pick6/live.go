@@ -99,13 +99,16 @@ func runLive(args []string) error {
 			}
 		}
 		fmt.Printf("replayed %d picks\n\n", len(snap.Picks))
-		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now()}
+		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
+			Fresh: loadFreshness()}
 		fmt.Println(b.View())
 		return nil
 	}
 
 	p := tea.NewProgram(
-		ui.NewLiveModel(s, feed, interval, false).WithDraft(draft),
+		ui.NewLiveModel(s, feed, interval, false).
+			WithDraft(draft).
+			WithFreshness(loadFreshness()),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()

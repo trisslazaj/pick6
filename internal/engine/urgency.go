@@ -51,6 +51,49 @@ func (s *State) PSurviveAt(p Player, at int) float64 {
 	return math.Exp(softplus(b) - softplus(a))
 }
 
+// SupportFloor raises a survival probability to what the observed sample can
+// actually rule out. `high` is the earliest pick anyone in `drafts` real drafts
+// took this player at; surviving to `at` means surviving every pick strictly
+// before it, so at <= high describes a window no observed draft ever removed him
+// inside. Zero events in n trials bounds the rate at about RuleOfThree/n, so the
+// survival cannot honestly read below 1 - 3/n however confident the curve is.
+//
+// It only ever raises, never lowers — an observed early pick is evidence a
+// player CAN go early, not evidence about how often. Absent support (high or
+// drafts zero) is "no data", not "no risk", so it changes nothing.
+//
+// BUILT, MEASURED, AND DELIBERATELY NOT WIRED IN. `pick6 calibrate` grades it on
+// the real 2024 draft and it moves nothing: of 15,923 predictions, 9,817 fall
+// inside the unobserved window and the bound bites on ZERO of them against the
+// raw curve and on TWO against the shrunk one. Brier and log-loss are identical
+// to four decimals with it and without it, tilted or untilted. Replayed over the
+// shipped 2026 board — all twelve seats, every round — it bites on 16 of 34,104
+// predictions, the largest move being 74.5% -> 82.4%.
+//
+// The reason is structural, not seasonal: `high` is the minimum observed pick
+// and adp is the mean, so high < adp always, and the floor's window therefore
+// always lies before a player's own price — where the logistic already reads
+// near 1. The bound is dominated by the curve almost everywhere by construction.
+//
+// It stays here because it is the right idea about the right failure (a tight
+// curve inventing risk the sample denies) and it is one call site away: put it
+// around PSurviveAt's return, which is BEFORE the exactly-n tilt, and that
+// ordering matters — the tilt balances a budget over the finished per-player
+// numbers, so flooring afterwards would hand back mass it had just balanced and
+// break the property the tilt was adopted for. Rewire it if a source ever ships
+// a `high` that is not a per-draft minimum, or if calibrate starts reporting a
+// bind count worth grading.
+//
+// max(drafts, RuleOfThree) keeps a two-draft player from producing a negative
+// floor — with n = 1 the bound 1 - 3/1 is -2, which is the rule of three saying
+// it has nothing to offer, not a probability.
+func SupportFloor(p float64, at, high, drafts int) float64 {
+	if high <= 0 || drafts <= 0 || at > high {
+		return p
+	}
+	return math.Max(p, 1-RuleOfThree/math.Max(float64(drafts), RuleOfThree))
+}
+
 // PSurvive is PSurviveAt at the horizon that matters at the clock — my next
 // pick. See PSurviveAt for the model and its sentinels.
 func (s *State) PSurvive(p Player) float64 {

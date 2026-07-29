@@ -85,6 +85,12 @@ func runCalibrate(args []string) error {
 					detail += " · run with -v to list them"
 				}
 				note(fmt.Sprintf("join %d", year), "exact", detail)
+				// The shrink's prior, printed rather than trusted: it is a line
+				// fitted to that season's own pool, and a slope near zero would
+				// mean the shrink is pulling everyone toward one number.
+				note(fmt.Sprintf("prior %d", year), "fitted", fmt.Sprintf(
+					"stdev ~ %.2f + %.4f*adp (median %.1f, %.0f pseudo-drafts)",
+					b.prior.Intercept, b.prior.Slope, b.prior.Median, b.prior.Pseudo))
 				dropped = append(dropped, b.dropped...)
 				eraPool = append(eraPool, b.players...)
 			}
@@ -100,7 +106,7 @@ func runCalibrate(args []string) error {
 			continue
 		}
 
-		p, v := walk(d, picks, b.players, vantages)
+		p, v := walk(d, picks, b, vantages)
 		preds = append(preds, p...)
 		vantages += v
 		drafts++
@@ -145,7 +151,12 @@ type eraBoard struct {
 	players []engine.Player
 	dropped []string
 	res     adp.FFCResult
-	err     error
+	// prior is that season's own stdev-against-adp line, fitted over the era
+	// pool. Fitting it on the 2026 pool and scoring 2024 with it would grade the
+	// shrink against a market it never saw — the same era mismatch the skipped
+	// 2025 drafts exist to avoid.
+	prior adp.StdevPrior
+	err   error
 }
 
 func loadEraBoard(ix *rankings.Index, format string, year int) *eraBoard {
@@ -159,6 +170,16 @@ func loadEraBoard(ix *rankings.Index, format string, year int) *eraBoard {
 		len(res.Entries), res.TotalDrafts, res.Window))
 
 	b := &eraBoard{res: res}
+	adps := make([]float64, 0, len(res.Entries))
+	stdevs := make([]float64, 0, len(res.Entries))
+	for _, e := range res.Entries {
+		if e.Stdev > 0 && e.ADP > 0 {
+			adps = append(adps, e.ADP)
+			stdevs = append(stdevs, e.Stdev)
+		}
+	}
+	b.prior = adp.FitStdevPrior(adps, stdevs)
+
 	for _, e := range res.Entries {
 		id, ok := ix.LookupExact(e.Name, e.Pos, e.Team)
 		if !ok {
@@ -170,13 +191,24 @@ func loadEraBoard(ix *rankings.Index, format string, year int) *eraBoard {
 			continue
 		}
 		b.players = append(b.players, engine.Player{
-			ID:    id,
-			Name:  e.Name,
-			Pos:   rankings.NormalizePos(e.Pos),
-			Team:  e.Team,
-			ADP:   e.ADP,
-			Sigma: adp.Sigma(e.Stdev), // the same conversion fetch writes
+			ID:   id,
+			Name: e.Name,
+			Pos:  rankings.NormalizePos(e.Pos),
+			Team: e.Team,
+			ADP:  e.ADP,
+			// The UNSHRUNK conversion, deliberately: this feeds the base row.
+			// walk carries the shrunk sigma fetch actually writes alongside it,
+			// so the two can be compared instead of one silently replacing the
+			// other.
+			Sigma: adp.Sigma(e.Stdev),
 			Stdev: e.Stdev,
+
+			// The sample support behind that adp. It rides on the board rather
+			// than being looked up again per row, and walk decides which models
+			// get to see it.
+			TimesDrafted: e.TimesDrafted,
+			High:         e.High,
+			Low:          e.Low,
 		})
 	}
 	return b
@@ -191,7 +223,8 @@ func loadEraBoard(ix *rankings.Index, format string, year int) *eraBoard {
 // vbase is where this draft's vantage numbering starts, so ids stay unique once
 // a second draft has era adp to score against. The tilt is solved per vantage
 // and two drafts sharing an id would pool two different boards into one solve.
-func walk(d *sleeper.Draft, picks []sleeper.DraftPick, board []engine.Player, vbase int) (out []pred, vantages int) {
+func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, vbase int) (out []pred, vantages int) {
+	board := b.players
 	drafted := make(map[string]int, len(picks))
 	for _, p := range picks {
 		drafted[p.PlayerID] = p.PickNo
@@ -221,6 +254,17 @@ func walk(d *sleeper.Draft, picks []sleeper.DraftPick, board []engine.Player, vb
 					pos: pl.Pos, adp: pl.ADP, stdev: pl.Stdev,
 					from: from, to: to, teams: teams,
 					q: s.PSurviveAt(pl, to), y: y, vantage: v,
+
+					// 4b's two inputs, per row: the shrunk sigma fetch now writes,
+					// and the support the floor reads. The base q above is the
+					// plain conditional logistic either way — the floor is not
+					// wired into PSurviveAt, so the models that want it apply
+					// engine.SupportFloor themselves and the comparison stays a
+					// comparison.
+					sigmaShrunk: adp.Sigma(b.prior.Shrink(pl.Stdev, pl.ADP, pl.TimesDrafted)),
+					prior:       b.prior.At(pl.ADP),
+					high:        pl.High,
+					drafts:      pl.TimesDrafted,
 				})
 			}
 		}

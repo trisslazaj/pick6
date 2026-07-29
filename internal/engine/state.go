@@ -26,8 +26,11 @@ type Player struct {
 	TierSrc      string  // "rankings" or "derived", "" when untiered
 
 	// Sample support behind ADP: the drafts it averages, and the earliest and
-	// latest pick he actually went at in any of them. Display for now; sigma
-	// shrinkage and the support floor read them next stage.
+	// latest pick he actually went at in any of them. TimesDrafted has already
+	// done its work at fetch time, where it weights the sigma shrink — the
+	// number that arrives here is a display column. High is the input
+	// SupportFloor would read if it were wired into survival; it is not, and
+	// that function carries the measurement that decided it.
 	TimesDrafted int
 	High         int
 	Low          int

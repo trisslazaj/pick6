@@ -22,6 +22,15 @@ type pred struct {
 	q     float64 // the engine's own conditional survival, per-player sigma
 	y     float64 // 1 if he really was still available at `to`
 
+	// 4b's inputs. sigmaShrunk is the variance-shrunk sigma fetch writes now;
+	// prior is the pool's expected stdev at this adp, kept separately so -tune
+	// can re-blend at any pseudo-count. high/drafts are ffc's own support:
+	// the earliest pick anyone took him at, and how many drafts that is over.
+	sigmaShrunk float64
+	prior       float64
+	high        int
+	drafts      int
+
 	// The tilt is not a per-player transform — it is one exponent solved over a
 	// whole vantage's board at once — so a flat list of predictions is not enough
 	// to compute it. vantage says which (draft, seat, round) this row came from;
@@ -71,8 +80,14 @@ func clampP(v float64) float64 { return math.Max(1e-6, math.Min(1-1e-6, v)) }
 
 // ---- the models being compared ----
 
-// modelEngine is what ships today, recorded during the walk so this is literally
-// the engine's own arithmetic and not a reimplementation of it.
+// modelEngine is the plain conditional logistic over the source's raw stdev,
+// recorded during the walk so this is literally the engine's own arithmetic and
+// not a reimplementation of it.
+//
+// It is the BASE every other row is measured against, not what ships: fetch
+// shrinks sigma now and the tilt corrects the whole vantage, so the shipped
+// model is the "shrunk sigma + tilt" row. Keeping the base uncorrected is the
+// point — a baseline that quietly adopts each improvement can never show one.
 func modelEngine(p pred) float64 { return p.q }
 
 // modelFlatSigma throws away the per-player stdev. If this ties the engine, the
@@ -94,6 +109,57 @@ func modelUnconditional(p pred) float64 {
 // floor. Anything that cannot beat it is theater.
 func modelConstant(rate float64) func(pred) float64 {
 	return func(pred) float64 { return rate }
+}
+
+// ---- 4b: the two support-driven corrections, each scorable on its own ----
+
+// modelShrunkSigma is the engine's curve with the variance-shrunk sigma instead
+// of the raw one. The shrink is fetch-side arithmetic (adp.StdevPrior.Shrink),
+// precomputed per row during the walk, so this grades what fetch now writes and
+// not a reimplementation of it.
+func modelShrunkSigma(p pred) float64 {
+	return psurvive(p.from, p.to, p.adp, p.sigmaShrunk)
+}
+
+// modelSupportFloor raises the shipped curve to the rule-of-three bound wherever
+// the horizon lands inside the window no observed draft ever took him in. It
+// calls engine.SupportFloor rather than restating the formula — the tilt's
+// duplicated solve in this file is the standing reminder of what two copies of
+// one model costs.
+func modelSupportFloor(p pred) float64 {
+	return engine.SupportFloor(p.q, p.to, p.high, p.drafts)
+}
+
+// modelShrunkFloor is both, in the order the engine applies them: sigma is
+// chosen at fetch, the floor is applied to the curve it produces.
+func modelShrunkFloor(p pred) float64 {
+	return engine.SupportFloor(modelShrunkSigma(p), p.to, p.high, p.drafts)
+}
+
+// floorReach counts what the floor is even allowed to touch. A correction that
+// fires on twelve rows out of sixteen thousand is not an improvement however
+// good its brier looks, so the count is printed next to the score rather than
+// left for the reader to assume.
+//
+// applies is "the horizon is at or before his earliest observed pick"; binds is
+// the subset where the bound was actually above the model's own answer. lift is
+// the mean size of the move over the rows it bound on.
+func floorReach(preds []pred, base func(pred) float64) (applies, binds int, lift float64) {
+	for _, p := range preds {
+		if p.high <= 0 || p.drafts <= 0 || p.to > p.high {
+			continue
+		}
+		applies++
+		b := base(p)
+		if f := engine.SupportFloor(b, p.to, p.high, p.drafts); f > b {
+			binds++
+			lift += f - b
+		}
+	}
+	if binds > 0 {
+		lift /= float64(binds)
+	}
+	return applies, binds, lift
 }
 
 // ---- the exactly-n tilt, scored the same way as everything else ----
@@ -267,8 +333,16 @@ func report(preds []pred, drafts, vantages int) {
 
 	tiltFn, vts := tilted(preds, modelEngine)
 	flatTiltFn, _ := tilted(preds, modelFlatSigma)
+	shrunkTiltFn, _ := tilted(preds, modelShrunkSigma)
+	floorTiltFn, _ := tilted(preds, modelSupportFloor)
+	bothTiltFn, _ := tilted(preds, modelShrunkFloor)
 	shipped := namedModel{"engine", modelEngine}
 	tilt := namedModel{"tilted", tiltFn}
+	// What actually ships after 4b: the shrunk sigma under the tilt. It is a
+	// third column rather than a replacement because the question the tables
+	// answer is what each correction did, and dropping the middle model would
+	// leave the shrink's contribution indistinguishable from the tilt's.
+	current := namedModel{"shrunk+tilt", shrunkTiltFn}
 
 	fmt.Printf("\n%-34s %8s %9s %10s %10s\n", "model", "brier", "log-loss", "predicted", "d brier")
 	row := func(label string, s score) {
@@ -286,23 +360,86 @@ func report(preds []pred, drafts, vantages int) {
 	}
 	row("engine (per-player sigma)", base)
 	row("engine + exactly-n tilt", scoreOf(preds, tiltFn))
+	row("4b: shrunk sigma", scoreOf(preds, modelShrunkSigma))
+	row("4b: shrunk sigma + tilt", scoreOf(preds, shrunkTiltFn))
+	row("4b: support floor", scoreOf(preds, modelSupportFloor))
+	row("4b: support floor + tilt", scoreOf(preds, floorTiltFn))
+	row("4b: shrunk + floor + tilt", scoreOf(preds, bothTiltFn))
 	row(fmt.Sprintf("baseline: constant %.3f", base.obs), scoreOf(preds, modelConstant(base.obs)))
 	row(fmt.Sprintf("baseline: sigma %.1f flat", engine.SigmaDefault), scoreOf(preds, modelFlatSigma))
 	row(fmt.Sprintf("baseline: sigma %.1f flat + tilt", engine.SigmaDefault), scoreOf(preds, flatTiltFn))
 	row("baseline: unconditional", scoreOf(preds, modelUnconditional))
+	fmt.Println("  the tilt ships, so the rows to compare 4b against are the tilted ones.")
 
+	supportReport(preds)
 	tiltReport(vts)
 	// Both models share one set of bins — the engine's — so the tails line up
 	// row for row and the question "did the tilt move the bad bins toward the
 	// observed rate" is answered by reading across, not by matching two tables
 	// whose rows hold different players.
-	reliability("bins by the engine's prediction, so both models share the rows",
-		preds, modelEngine, []namedModel{shipped, tilt})
-	// And then the tilt graded on its own bins, because the table above cannot
-	// see whether the tilt invented a new region of overconfidence.
-	reliability("bins by the tilt's own prediction — its calibration, not a comparison",
-		preds, tiltFn, []namedModel{tilt})
-	segments(preds, shipped, tilt)
+	reliability("bins by the engine's prediction, so all three models share the rows",
+		preds, modelEngine, []namedModel{shipped, tilt, current})
+	// And then the shipped model graded on its own bins, because the table above
+	// cannot see whether it invented a new region of overconfidence.
+	reliability("bins by the shipped model's own prediction — its calibration, not a comparison",
+		preds, shrunkTiltFn, []namedModel{current})
+	// The segments grade the decision on the table: tilt alone against tilt plus
+	// the shrink. The tails are where a change earns or loses its place — a long
+	// horizon is where waiting actually costs you, and the deep board is where
+	// per-player sigma, and therefore the shrink, is doing all of its work.
+	segments(preds, tilt, current)
+}
+
+// supportReport says what 4b's two corrections were allowed to touch, counted
+// in predictions — the same unit the scores above are in. A brier delta with no
+// reach next to it is unreadable: a correction that fires on twelve rows can
+// post any number at all and still mean nothing.
+//
+// Per prediction, not per player, and deliberately so. The scores are per
+// prediction, so "how much of the graded set moved" is the question. The pool
+// view of sigma is a different question and -tune's coverage line answers it.
+func supportReport(preds []pred) {
+	applies, binds, lift := floorReach(preds, modelEngine)
+
+	raws := make([]float64, 0, len(preds))
+	shrunks := make([]float64, 0, len(preds))
+	var moved int
+	for _, p := range preds {
+		raw := adp.Sigma(p.stdev)
+		raws = append(raws, raw)
+		shrunks = append(shrunks, p.sigmaShrunk)
+		if math.Abs(p.sigmaShrunk-raw) > 0.05*raw {
+			moved++
+		}
+	}
+	sort.Float64s(raws)
+	sort.Float64s(shrunks)
+
+	_, sBinds, sLift := floorReach(preds, modelShrunkSigma)
+
+	fmt.Printf("\n4b — what the two corrections reach, in predictions\n")
+	if len(raws) > 0 {
+		note("shrink", "sigma", fmt.Sprintf(
+			"median %.2f -> %.2f · %d of %d rows moved more than 5%%",
+			raws[len(raws)/2], shrunks[len(shrunks)/2], moved, len(preds)))
+	}
+	note("floor", "reach", fmt.Sprintf(
+		"horizon inside the unobserved window on %d of %d rows · the bound bites on %d · mean lift %+.4f",
+		applies, len(preds), binds, lift))
+	// Graded against the shrunk curve too, because the shrink widens sigma and a
+	// wider curve is exactly what the floor is supposed to catch. If it stays at
+	// zero here, the floor is not being starved by a sigma that was too tight.
+	note("", "shrunk", fmt.Sprintf(
+		"against the shrunk curve the same bound bites on %d · mean lift %+.4f", sBinds, sLift))
+	// The structural reason, stated once so nobody re-derives it: `high` is the
+	// MINIMUM observed pick and adp is the mean, so high < adp always, and the
+	// floor's window is therefore always before the player's own price — where
+	// the logistic already reads near 1. The bound is dominated by the curve
+	// almost everywhere by construction, not by accident of this season.
+	fmt.Printf("  %-12s %-8s %s\n", "", "",
+		"high is the earliest observed pick and adp the mean, so the floor's window")
+	fmt.Printf("  %-12s %-8s %s\n", "", "",
+		"always sits before a player's own price — where the curve is already near 1.")
 }
 
 // tiltReport shows what the correction actually had to work with. The exponent

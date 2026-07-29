@@ -16,6 +16,15 @@ const (
 	SigmaMin       = 0.5
 	SigmaMax       = 25.0
 
+	// ShrinkPseudoDrafts is how many drafts of prior belief the variance shrink
+	// carries. FFC reports times_drafted per player, and it is far smaller than
+	// the pool's headline draft count: the 2024 half-ppr pool says 906 drafts,
+	// but the median player was taken in 54 of them and the thinnest in 11. A
+	// spread measured over 11 drafts is mostly noise; one over 190 is signal.
+	// At 25, a median player's own number outvotes the prior 2:1 and an 11-draft
+	// player lands most of the way onto it.
+	ShrinkPseudoDrafts = 25.0
+
 	// Tier derivation, from value gaps. A tier breaks when value drops by more
 	// than TierDropPct relative to the previous player AND the drop clears an
 	// absolute floor scaled to the position's best player. The relative test
@@ -65,17 +74,24 @@ type Player struct {
 	Team      string
 	Bye       int
 
-	ADP     float64 // from the primary format, in pick units
-	Stdev   float64 // observed draft-position stdev, 0 if unknown
-	Sigma   float64 // logistic scale the survival model wants
-	Value   int     // relative season value; 0 when unknown
-	Tier    int     // per-position tier; 0 when unknown
+	ADP   float64 // from the primary format, in pick units
+	Stdev float64 // observed draft-position stdev as the source reported it, 0 if unknown
+	// Sigma is the logistic scale the survival model wants. It is NOT
+	// Stdev/SigmaFromStdev: ShrinkSigma blends the observed spread toward the
+	// pool's prior first, weighted by TimesDrafted, so a five-draft player's
+	// suspiciously tight number is pulled back to what players at his price
+	// usually do. The gap between the two columns is that shrink.
+	Sigma   float64
+	Value   int // relative season value; 0 when unknown
+	Tier    int // per-position tier; 0 when unknown
 	TierSrc TierSource
 
-	// Sample support behind ADP, from the primary source only. Nothing reads
-	// these yet: sigma shrinkage weights stdev by TimesDrafted and the support
-	// floor reads High, both next stage. They are written to players.json now so
-	// the board already carries them when that lands.
+	// Sample support behind ADP, from the primary source only. TimesDrafted is
+	// live: it is the weight ShrinkSigma gives a player's own stdev against the
+	// pool prior. High and Low are carried for the board — High is what
+	// engine.SupportFloor would read if it were ever wired in (it isn't; see
+	// that function for the measurement), and Low drives the ui's past-worst-pick
+	// tripwire.
 	TimesDrafted int
 	High         int
 	Low          int
@@ -106,6 +122,112 @@ func Sigma(stdev float64) float64 {
 		return SigmaDefault
 	}
 	return math.Max(SigmaMin, math.Min(SigmaMax, stdev/SigmaFromStdev))
+}
+
+// StdevPrior is the pool's own answer to "how much does the market usually
+// disagree about a player priced here": a least-squares line of stdev against
+// adp, plus the pool median as the fallback when the fit degenerates or the
+// line goes non-positive at some adp.
+//
+// The line is not decoration — spread grows with depth, measurably. On the 2024
+// half-ppr pool the fit is stdev = 0.76 + 0.0876*adp, so it expects 1.6 picks of
+// disagreement about the adp-10 player and 16.5 about the adp-180 one. Shrinking
+// a thin sample toward one pooled median instead would tell a round-15 flier that
+// the market agrees about him as tightly as it does about a round-5 back.
+type StdevPrior struct {
+	Intercept float64
+	Slope     float64
+	Median    float64
+	Pseudo    float64 // prior weight in drafts; ShrinkPseudoDrafts unless a sweep says otherwise
+}
+
+// FitStdevPrior computes that line over the pool. adps and stdevs are parallel;
+// rows with a missing stdev must be left out by the caller, since a zero there
+// means "not reported", not "the market agreed perfectly".
+func FitStdevPrior(adps, stdevs []float64) StdevPrior {
+	p := StdevPrior{Pseudo: ShrinkPseudoDrafts}
+	if len(adps) == 0 {
+		return p
+	}
+	sorted := append([]float64(nil), stdevs...)
+	sort.Float64s(sorted)
+	p.Median = sorted[len(sorted)/2]
+
+	var mx, my float64
+	for i := range adps {
+		mx += adps[i]
+		my += stdevs[i]
+	}
+	n := float64(len(adps))
+	mx, my = mx/n, my/n
+	var sxy, sxx float64
+	for i := range adps {
+		sxy += (adps[i] - mx) * (stdevs[i] - my)
+		sxx += (adps[i] - mx) * (adps[i] - mx)
+	}
+	if sxx == 0 {
+		return p // every player at one adp: no line to draw, the median stands
+	}
+	p.Slope = sxy / sxx
+	p.Intercept = my - p.Slope*mx
+	return p
+}
+
+// At is the prior spread for a player priced at adp, with the median standing in
+// wherever the line would predict a non-positive spread (an extrapolation past
+// the ends of the pool it was fitted on).
+func (p StdevPrior) At(adp float64) float64 {
+	v := p.Intercept + p.Slope*adp
+	if v <= 0 {
+		return p.Median
+	}
+	return v
+}
+
+// Shrink blends a player's observed stdev toward the prior, weighted by how many
+// drafts he was actually taken in. Empirical Bayes in one line.
+//
+// The blend is on VARIANCE, not on stdev: stdev is a square root, and averaging
+// square roots is not the same thing as averaging the quantity they summarise.
+// Variance is what adds.
+func (p StdevPrior) Shrink(stdev, adp float64, drafts int) float64 {
+	return Blend(stdev, p.At(adp), drafts, p.Pseudo)
+}
+
+// Blend is that arithmetic with the prior and its weight supplied, so the
+// backtest can sweep the pseudo-count without a second copy of the formula.
+// A player with no support number reported is left alone: n = 0 would hand the
+// whole answer to the prior and throw away the one measurement we have.
+func Blend(stdev, prior float64, drafts int, pseudo float64) float64 {
+	if stdev <= 0 || drafts <= 0 || prior <= 0 || pseudo <= 0 {
+		return stdev
+	}
+	n := float64(drafts)
+	return math.Sqrt((n*stdev*stdev + pseudo*prior*prior) / (n + pseudo))
+}
+
+// ShrinkSigma is the pool-level pass that writes every Player.Sigma. It has to
+// see the whole pool — the prior is fitted across it — which is why it cannot
+// live inside the per-player Sigma().
+//
+// Call order: it runs once the whole pool is assembled, and it is the last word
+// on Sigma — anything set before it is overwritten. Player.Stdev keeps the
+// source's raw number so the data tab still reports what FFC said; sigma is
+// therefore no longer exactly stdev/SigmaFromStdev, and that gap is the shrink.
+func ShrinkSigma(players map[string]*Player) StdevPrior {
+	adps := make([]float64, 0, len(players))
+	stdevs := make([]float64, 0, len(players))
+	for _, p := range players {
+		if p.Stdev > 0 && p.ADP > 0 {
+			adps = append(adps, p.ADP)
+			stdevs = append(stdevs, p.Stdev)
+		}
+	}
+	prior := FitStdevPrior(adps, stdevs)
+	for _, p := range players {
+		p.Sigma = Sigma(prior.Shrink(p.Stdev, p.ADP, p.TimesDrafted))
+	}
+	return prior
 }
 
 // TierSource records where a player's tier came from, so the UI and the logs can
@@ -142,8 +264,11 @@ func Merge(ix *rankings.Index, primary FFCResult, crosschecks []FFCResult, cw *C
 			Bye:       e.Bye,
 			ADP:       e.ADP,
 			Stdev:     e.Stdev,
-			Sigma:     Sigma(e.Stdev),
-			Formats:   1,
+			// The unshrunk conversion, overwritten by ShrinkSigma below once the
+			// whole pool is in. Set here anyway so no half-built map ever carries
+			// a zero sigma into the engine's silent SigmaDefault fallback.
+			Sigma:   Sigma(e.Stdev),
+			Formats: 1,
 
 			// Only the primary's support travels. A cross-check format is a
 			// different scoring of the same drafts, so its high/low describe a
@@ -163,6 +288,11 @@ func Merge(ix *rankings.Index, primary FFCResult, crosschecks []FFCResult, cw *C
 		}
 		out[id] = p
 	}
+
+	// Every sigma is written here, over the finished pool. Nothing below this
+	// line adds a player or touches a stdev, so this is as early as the prior can
+	// be fitted and as late as it matters.
+	ShrinkSigma(out)
 
 	// Cross-check: same drafts, different scoring. Records disagreement only.
 	for _, cc := range crosschecks {

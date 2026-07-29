@@ -92,7 +92,9 @@ func (b Board) visibleDataRows() int {
 	if b.Height <= 0 {
 		return 20
 	}
-	n := b.Height - 11 // header, banner, urgency strip, title, column head, legend, footer
+	// header, banner, urgency strip, title, column head, legend, footer — plus
+	// whatever the caller draws under the whole board (see Board.Reserve).
+	n := b.Height - 11 - b.Reserve
 	if n < 8 {
 		return 8
 	}
@@ -163,13 +165,55 @@ func (b Board) dataPane(w int) string {
 	nameW := dataNameW(w)
 	sb.WriteString(Dim.Render(fmt.Sprintf("  %-3s  %-*s  %-3s  %3s  %4s  %5s  %5s  %6s  %4s  %7s",
 		"pos", nameW, "player", "tm", "bye", "tier", "value", "adp", "spread", "surv", "fmt gap")) + "\n")
+	// Whether the chip RENDERED, not whether the player tripped it: at 80-82
+	// columns the name column cannot afford " past low", and a legend for a
+	// marker nobody can see spends the row explaining nothing while pushing the
+	// column glossary off it. See tripwireShown.
+	tripped := false
 	for _, p := range rows[off:end] {
+		tripped = tripped || b.tripwireShown(p, nameW)
 		sb.WriteString(b.dataRow(p, nameW) + "\n")
 	}
-	sb.WriteString(Dim.Render(trunc(
-		"  spread: how widely real drafts vary on him · fmt gap: adp shift by scoring format · d: derived tier",
-		w-2)) + "\n")
+	sb.WriteString(b.legend(tripped, w) + "\n")
 	return sb.String()
+}
+
+// legend is the one row under the table that says what the columns mean, and —
+// only when one is actually on the page — what the "past low" chip means.
+//
+// 4b's copy is 36 cells and fits no column on either tab, so it lives here. It
+// goes FIRST and in the chip's own amber, because it is the contextual half:
+// the column glossary is static and learnable, while a chip that appeared this
+// frame is the thing being read right now. A legend for something you cannot
+// see is width spent on nothing, so it is absent the rest of the time.
+//
+// Clauses drop from the tail rather than the line truncating, which is what it
+// used to do — at 92 columns the old single string ran two cells over and
+// ended "d: derived ti…", a rendering fault sitting under a table whose whole
+// job is being readable.
+func (b Board) legend(tripped bool, w int) string {
+	cols := []string{
+		"spread: how widely drafts vary on him",
+		"fmt gap: adp shift by format",
+		"d: derived tier",
+	}
+	out, used := "", 0
+	if tripped {
+		out = Run.Render("past worst observed pick — check news")
+		used = lipgloss.Width("past worst observed pick — check news")
+	}
+	for _, c := range cols {
+		sep := ""
+		if used > 0 {
+			sep = " · "
+		}
+		if used+lipgloss.Width(sep)+lipgloss.Width(c) > w-4 {
+			break
+		}
+		out += Dim.Render(sep + c)
+		used += lipgloss.Width(sep) + lipgloss.Width(c)
+	}
+	return "  " + out
 }
 
 // dataRow is one player, every column. Dashes mean "no source had a number",
@@ -230,7 +274,7 @@ func (b Board) dataRow(p engine.Player, nameW int) string {
 
 	return fmt.Sprintf("  %s  %s  %s  %s  %s  %s  %s  %s  %s  %s",
 		style.Render(fmt.Sprintf("%-3s", strings.ToLower(p.Pos))),
-		style.Render(fmt.Sprintf("%-*s", nameW, trunc(strings.ToLower(p.Name), nameW))),
+		b.nameCell(p, style, nameW),
 		Dim.Render(fmt.Sprintf("%-3s", p.Team)),
 		Dim.Render(bye),
 		Dim.Render(tier),

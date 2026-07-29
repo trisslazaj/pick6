@@ -34,6 +34,13 @@ func NewModel(s *engine.State, pick Autopicker, auto bool) Model {
 	}
 }
 
+// WithFreshness attaches how old the cached board is, for the footer's age
+// clause. Mirrors LiveModel's, so both entry points wire it the same way.
+func (m Model) WithFreshness(f Freshness) Model {
+	m.board.Fresh = f
+	return m
+}
+
 func (m Model) Init() tea.Cmd {
 	if m.auto {
 		return m.tick()

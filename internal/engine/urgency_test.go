@@ -148,6 +148,66 @@ func TestPSurviveOnMyPick(t *testing.T) {
 	}
 }
 
+// The support floor is the rule of three over ffc's observed draft range: zero
+// removals strictly before pick `high` in `drafts` drafts bounds the removal
+// rate near 3/n, so survival to a horizon at or before `high` cannot honestly
+// read lower than 1 - 3/n.
+//
+// It is NOT wired into PSurviveAt — see the function comment for the numbers
+// that decided that — so this table grades the function directly, and the test
+// below it pins the fact that the engine's own path is untouched.
+func TestSupportFloor(t *testing.T) {
+	cases := []struct {
+		name             string
+		p                float64
+		at, high, drafts int
+		want             float64
+	}{
+		// 906 drafts, nobody taken before pick 40, asked about pick 30:
+		// 1 - 3/906 = 0.99668874.
+		{"deep sample lifts a confident miss", 0.30, 30, 40, 906, 0.996688742},
+		// A thin sample bounds much less: 1 - 3/11 = 0.72727273.
+		{"thin sample bounds weakly", 0.30, 30, 40, 11, 0.727272727},
+		// The horizon is past the earliest observed pick, so the sample says
+		// nothing about it and the curve stands.
+		{"past the observed window changes nothing", 0.30, 41, 40, 906, 0.30},
+		{"exactly at the earliest pick still counts", 0.30, 40, 40, 906, 0.996688742},
+		// It only ever raises. An observed early pick is evidence a player CAN go
+		// early, never evidence he goes early often.
+		{"never lowers a confident survival", 0.999, 30, 40, 906, 0.999},
+		// No support is "no data", not "no risk" — and this guard is what keeps
+		// every fixture written before these fields existed scoring unchanged.
+		{"no high reported changes nothing", 0.30, 30, 0, 906, 0.30},
+		{"no draft count changes nothing", 0.30, 30, 40, 0, 0.30},
+		// n = 1 would make the bound 1 - 3/1 = -2, which is the rule of three
+		// admitting it has nothing to say, not a probability.
+		{"a one-draft sample cannot go negative", 0.30, 30, 40, 1, 0.30},
+	}
+	for _, c := range cases {
+		got := SupportFloor(c.p, c.at, c.high, c.drafts)
+		if math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("%s: SupportFloor(%v, at=%d, high=%d, n=%d) = %.9f, want %.9f",
+				c.name, c.p, c.at, c.high, c.drafts, got, c.want)
+		}
+	}
+}
+
+// The floor is deliberately not in the default path, and "deliberately" has to
+// be verifiable: a player carrying full support must survive at exactly the same
+// probability as the identical player carrying none. Wiring it in silently is
+// the regression this catches — it would move numbers the backtest says it never
+// graded.
+func TestSupportFieldsDoNotReachSurvival(t *testing.T) {
+	s := newTestState(12, 15, 3)
+	s.PickNo = 4 // NextPick() = 22
+	bare := Player{ID: "x", Pos: "RB", ADP: 30, Sigma: 3}
+	supported := bare
+	supported.High, supported.TimesDrafted, supported.Low = 40, 906, 60
+	if a, b := s.PSurvive(bare), s.PSurvive(supported); a != b {
+		t.Errorf("support fields moved survival: %.9f without, %.9f with", a, b)
+	}
+}
+
 // BestLater names the man you'd most likely end up taking — not the doomed
 // higher value above him, and not the deepest, safest player on the board.
 // Weights are p~ * prod(1 - p~) over the earlier men: a 0.02, b 0.98(.6) =
