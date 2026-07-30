@@ -66,26 +66,101 @@ The whole board answers one question: **what does waiting cost?**
 **Survival.** Every player has an ADP — the average pick where real drafts take him, measured
 across about a thousand recent drafts — and a spread, because the market doesn't agree on
 everyone equally: a locked-in first-rounder goes inside a two-pick window, a late flier goes
-anywhere across three rounds. Feed "my next pick minus his ADP, measured in his own spread"
-through an S-curve and out comes the chance he's still on the board when you're up. ADP already
-passed → probably gone. ADP far ahead → safe. ADP exactly at your pick → coin flip, which is
-literally what ADP means — half the rooms had taken him by then.
+anywhere across three rounds. The chance he lasts to pick $p$ is a logistic S-curve centred on
+his ADP, with the width set by his *own* spread:
+
+$$S(p) = \frac{1}{1 + e^{(p - \mathrm{adp})/\sigma}}$$
+
+ADP already passed → $S$ near 0, probably gone. ADP far ahead → near 1, safe. And at
+$p = \mathrm{adp}$ it's exactly $\tfrac{1}{2}$ — a coin flip, which is literally what ADP means:
+half the rooms had taken him by then.
+
+The width comes from the measured standard deviation of his real draft slot (for a logistic
+distribution $\mathrm{stdev} = \sigma \pi / \sqrt{3}$):
+
+$$\sigma = \frac{\sqrt{3}}{\pi}\,\mathrm{stdev} \approx \frac{\mathrm{stdev}}{1.8138},
+\qquad \sigma \ \text{clamped to} \ [0.5,\ 25]$$
+
+So a locked-in star (stdev ≈ 1) gets a near-step-function — one pick past his ADP and he is
+simply gone — while a volatile flier (stdev ≈ 40) gets a nearly flat curve: stop panicking, he
+keeps.
+
+**Your room, not the market.** ADP is a thousand strangers; your league is twelve people who
+draft the same way every year. Measured over three of their completed drafts, this room takes
+its first quarterback at pick 23.0 and its first tight end at 23.3, against 26.1 and 39.5
+nationally. So at the top of each position — where that appetite actually lives — the curve is
+centred on a blend of the two prices instead:
+
+$$\mathrm{adp}_{\text{eff}} = w \cdot \mathrm{adp}_{\text{room}}(P, k) + (1 - w) \cdot \mathrm{adp},
+\qquad w = \frac{n}{n + 2}$$
+
+where $\mathrm{adp}_{\text{room}}(P, k)$ is the mean pick at which this league took the $k$-th
+player at position $P$, over the $n$ drafts that ever got that deep. Only the first five at each
+position are repriced: a national ranked list runs far deeper than any finite draft, so past the
+room's appetite that curve is later than ADP about everyone and backtests worse. Restricted to
+the top five it wins — Brier 0.0670 → 0.0660, log-loss 0.2250 → 0.2222, and no position
+regresses at the four decimals the backtest prints — but that is one fold of two drafts, which
+is thin. `-room=false` prices the whole board on the market's numbers.
 
 One honesty adjustment: a player who's on the board *right now* can only be taken by the picks
-between now and your turn. So the number is really "chance he lasts to my pick, given that he's
-lasted this long." Without that, a player the room keeps passing on reads 90% gone when only one
-team picks before you do.
+between now and your turn. So the number shown is survival **conditioned on the present**:
 
-**Urgency.** Per position: take the best player available now, and the best player with at least
-a coin flip's chance of surviving to your next pick. The value gap between those two is what
-waiting costs you — scaled by whether you actually need the position (open starter beats flex
-depth beats bench, and kickers count for nothing until the end). The board sorts by that number,
-and zero urgency is itself the signal: your guy will still be there. Wait.
+$$p_{\text{survive}} = \frac{S(\text{nextPick})}{S(\text{pickNo})}$$
 
-**Counting.** Tiers come from human rankings, or from value gaps when no file provides them. A
-tier that's emptying is a cliff — two left is amber, last one is red. Four of the last six picks
-at one position is a run. And a player still available a full spread past his ADP is *falling*:
-the draft moved past his price and he's still here. His numbers turn amber. That's a discount.
+Without that, a player the room keeps passing on reads 90% gone when only one team picks before
+you do. Deep past his ADP the ratio's tail becomes a clean per-pick hazard,
+$e^{-(\text{nextPick} - \text{pickNo})/\sigma}$ — each pick that passes costs him the same
+factor, no matter how far he's fallen. (It's computed in log space so the extremes don't
+flatten; see `internal/engine/urgency.go`.)
+
+One correction on top of that. Exactly $N$ players come off the board before your turn — that's
+what a draft is — but treating every survival as independent "expects" $\sum_j (1 - p_j)$ of them
+to go, and that sum is measurably not $N$. Backtested against a real draft, the model was
+pessimistic across the board. So raise every probability to the single power that reconciles
+them:
+
+$$\text{find } c > 0 \ \text{ with } \ \sum_j \big(1 - p_j^{\,c}\big) = N,
+\qquad \tilde p_j = p_j^{\,c}$$
+
+It's the gentlest fix there is: $\ln p$ is a player's hazard over those picks, so $p^c$ scales
+everyone's hazard by the same factor. Certainties stay certain ($1^c = 1$), nobody overtakes
+anybody, and $\tilde p$ is what every number on screen means.
+
+**Urgency.** Per position: the best player available now, versus the expected value of whoever
+is still there at your next pick. Line the position up best-first — the best survivor is #1 if he
+survives, #2 only if #1 is gone *and* #2 survives, and so on:
+
+$$\mathbb{E}[\text{best later}] = \sum_j v_j\, \tilde p_j \prod_{i<j} \big(1 - \tilde p_i\big)$$
+
+$$\text{urgency} = \Big( v(\text{bestNow}) - \mathbb{E}[\text{best later}] \Big) \times \text{need}$$
+
+— where need is 1.0 for an open starter slot, 0.6 for flex depth, 0.25 for bench, and 0 for
+kickers and defenses until the last rounds. The expected drop is what waiting costs; need is
+whether you should care. The board sorts by it. And because it's an expectation rather than a
+cutoff, nothing jumps: a player crossing 50% doesn't re-sort the board on a rounding error. The
+wait signal is its own claim now — *safe to wait*, green, when the best man himself is more
+likely than not to still be sitting there.
+
+**Counting.** Tiers come from human rankings; where no file covers, they're derived by breaking
+the value curve wherever it genuinely drops:
+
+$$\frac{v_{i-1} - v_i}{v_{i-1}} > 0.10
+\quad\text{and}\quad
+v_{i-1} - v_i \ \ge\ 0.015 \cdot v_{\max}$$
+
+A tier is a cliff when it probably won't reach you, which is a probability and not a headcount —
+three players the room is about to eat is a worse cliff than one player nobody wants:
+
+$$p_{\text{hold}} = 1 - \prod_j \big(1 - \tilde p_j\big) \quad \text{over what's left in the tier}$$
+
+Under 50% is amber, under 15% is red, and a tier nobody has drafted out of yet is never either.
+Four of the last six picks at one position is a run. And a player still available a full spread
+past his ADP,
+
+$$\frac{\text{pickNo} - \mathrm{adp}}{\sigma} \ \ge\ 1,$$
+
+is *falling*: the draft moved past his price and he's still here. His numbers turn amber.
+That's a discount.
 
 ## data sources
 

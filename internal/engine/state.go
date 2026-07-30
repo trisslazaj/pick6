@@ -7,9 +7,9 @@ import (
 	"sort"
 )
 
-// Player is the engine's view of a draftable player. The last three fields are
-// carried for the data tab only — the engine never reads them, but the whole
-// point of that tab is showing every number the sources gave us.
+// Player is the engine's view of a draftable player. Everything below the blank
+// line is carried for display only — the engine never reads it, but the whole
+// point of the data tab is showing every number the sources gave us.
 type Player struct {
 	ID    string
 	Name  string
@@ -21,9 +21,45 @@ type Player struct {
 	Value int
 	Tier  int
 
+	// ADPEff is ADP as THIS room prices it: the national number blended with
+	// where the k-th player at his position actually goes in this league's own
+	// completed drafts (adp.RoomCurve). It is populated by default on mock and
+	// live, but only for the top adp.RoomWarpTopK players at each position —
+	// past there the room's curve measured worse than the market, so everyone
+	// deeper keeps a zero here on purpose.
+	//
+	// 0 therefore means "no warp for this man": he is outside the top of his
+	// position, the curve never reached his rank, no draft is cached, or
+	// `-room=false`. Every one of those is the same instruction — price him off
+	// raw ADP — which is what price() does.
+	//
+	// Exactly two things read it, PSurviveAt and Falling, and that is the whole
+	// design. Every other reader of ADP — the display columns, Available's sort
+	// tie-break, the mock's picker — must keep seeing the raw market price, so
+	// this is a separate field rather than an overwritten ADP.
+	ADPEff float64
+
 	Stdev        float64 // observed draft-position spread, 0 when unknown
 	FormatSpread float64 // largest ADP gap across scoring formats
 	TierSrc      string  // "rankings" or "derived", "" when untiered
+
+	// Sample support behind ADP: the drafts it averages, and the earliest and
+	// latest pick he actually went at in any of them. TimesDrafted has already
+	// done its work at fetch time, where it weights the sigma shrink — the
+	// number that arrives here is a display column. High is the input
+	// SupportFloor would read if it were wired into survival; it is not, and
+	// that function carries the measurement that decided it.
+	TimesDrafted int
+	High         int
+	Low          int
+
+	// Injury truth, frozen at fetch time and never priced in. Survival and value
+	// must not read these: our values are imported, and marking one down for an
+	// injury would be a projection of our own, which this project doesn't make.
+	// The board shows the fact and lets the human do the discounting.
+	InjuryStatus string // "" is the normal case; "" in Status means unknown, not hurt
+	Status       string
+	NewsUpdated  int64 // epoch milliseconds, 0 when unknown
 }
 
 // Roster describes a league's starting lineup.
@@ -55,6 +91,13 @@ type State struct {
 	PickNo int // current overall pick, 1-indexed (the next pick to be made)
 	Order  []int
 	Roster Roster
+
+	// Demand is D_P: how many players at each position this league drafts in one
+	// draft, measured from its own completed drafts. It sets the replacement
+	// level vor is computed against (see vor.go). nil is fine and is what every
+	// test uses — the fallback derives a demand from the league's lineup shape
+	// instead, which is a floor rather than a measurement.
+	Demand map[string]int
 }
 
 // New builds a state for a snake draft with the natural slot order 1..T.
@@ -325,6 +368,16 @@ func (s *State) TierSize(pos string, tier int) int {
 // first and flex last, and returns one entry per slot (empty string if unfilled)
 // plus whatever spilled onto the bench.
 func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
+	return s.fillSlots(s.Rosters[slot])
+}
+
+// fillSlots is that same rule over an explicit list of ids rather than a seat,
+// so the two-pick lookahead can ask what my lineup would look like with one more
+// player on it. Mutating Rosters and restoring it afterwards would be shorter
+// and wrong: the ui calls this during a render, and a panic between the mutation
+// and the restore would leave every later frame describing a roster that never
+// existed.
+func (s *State) fillSlots(ids []string) (filled []string, bench []string) {
 	filled = make([]string, len(s.Roster.Slots))
 	used := map[string]bool{}
 
@@ -334,7 +387,7 @@ func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
 		if isFlexSlot(want) {
 			continue
 		}
-		for _, id := range s.Rosters[slot] {
+		for _, id := range ids {
 			if used[id] {
 				continue
 			}
@@ -349,7 +402,7 @@ func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
 		if !isFlexSlot(want) {
 			continue
 		}
-		for _, id := range s.Rosters[slot] {
+		for _, id := range ids {
 			if used[id] || !EligibleFor(want, s.Players[id].Pos) {
 				continue
 			}
@@ -358,7 +411,7 @@ func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
 			break
 		}
 	}
-	for _, id := range s.Rosters[slot] {
+	for _, id := range ids {
 		if !used[id] {
 			bench = append(bench, id)
 		}
@@ -432,12 +485,70 @@ func (s *State) MyUpcomingPicks(n int) []int {
 }
 
 // Need returns the urgency weight for a position given my roster.
+//
+// The endgame slack multiplies the BENCH weight and nothing else: needFrom has
+// already returned for anyone who fills an open slot, and for a suppressed k/def
+// whose weight is zero either way. Keeping the multiplier here rather than
+// inside needFrom is what lets the two-pick plan price a pair without it — see
+// BestPlan, where feasibility is modelled exactly instead of approximated.
 func (s *State) Need(pos string) float64 {
-	// Nobody needs a tool to tell them to draft a kicker in round 6.
-	if (pos == "K" || pos == "DEF") && s.RoundsRemaining() > KDefLastRounds {
+	filled, _ := s.FilledSlots(s.MySlot)
+	n := s.needFrom(pos, filled)
+	if n == NeedBench {
+		n *= endgameSlack(s.MyPicksLeft(), unfilledCount(filled))
+	}
+	return n
+}
+
+// MyPicksLeft counts the picks I still have, including this one when it's mine.
+func (s *State) MyPicksLeft() int { return len(s.MyUpcomingPicks(s.Rounds)) }
+
+// NeedAfter is Need as it would read with playerID already on my roster. The
+// second leg of a two-pick plan is chosen against the lineup the first leg
+// leaves behind — taking a rb with the first pick is exactly what drops rb to
+// flex weight for the second — so the lookahead needs this and the board does
+// not.
+//
+// The id goes onto a copy with its own backing array. Appending straight onto
+// Rosters[MySlot] would write into that slice's spare capacity: invisible to any
+// equality check on State, and still a write into live state during a render.
+//
+// No endgame slack, deliberately, and Need's leg of the same plan does not apply
+// it either. The slack is a one-pick proxy for "a bench pick is a starting slot
+// you didn't fill", and a pair already models that exactly through mustFill.
+// Charging it on top made the pair score depend on the ORDER of two legs that
+// end at the same roster: at R == U+1 leg one saw an open starter and paid
+// NeedBench*EndgameSlack, leg two saw the lineup already complete and paid the
+// full NeedBench, so the plan preferred to spend the fungible pick first. On the
+// real board at 14.10 that printed "k at 14.10 -> rb at 15.03" while the pane
+// under it put the accent border on rb.
+func (s *State) NeedAfter(pos, playerID string) float64 {
+	mine := s.Rosters[s.MySlot]
+	ids := make([]string, 0, len(mine)+1)
+	ids = append(ids, mine...)
+	ids = append(ids, playerID)
+	filled, _ := s.fillSlots(ids)
+	return s.needFrom(pos, filled)
+}
+
+// Suppressed reports whether the k/def hold is on: nobody needs a tool to tell
+// them to draft a kicker in round 6.
+//
+// Exported because it is not the same question as Need == 0 and callers kept
+// asking the wrong one. Need reaches zero for a skill position too once the
+// endgame guard bites, so a ui check written as "Need == 0 means k/def" started
+// silently covering half the board the moment MustFillStarters turned true.
+func (s *State) Suppressed(pos string) bool {
+	return (pos == "K" || pos == "DEF") && s.RoundsRemaining() > KDefLastRounds
+}
+
+// needFrom is the need rule itself, over an already-filled lineup. The endgame
+// slack is applied by Need, not here — see NeedAfter for why the plan wants this
+// number without it.
+func (s *State) needFrom(pos string, filled []string) float64 {
+	if s.Suppressed(pos) {
 		return 0
 	}
-	filled, _ := s.FilledSlots(s.MySlot)
 	for i, want := range s.Roster.Slots {
 		if want == pos && filled[i] == "" {
 			return NeedStarter
@@ -449,6 +560,68 @@ func (s *State) Need(pos string) float64 {
 		}
 	}
 	return NeedBench
+}
+
+// endgameSlack is the feasibility guard: late enough in a draft, a bench pick is
+// a starting slot you didn't fill.
+//
+// It applies only to a position that fills NONE of my open starting slots: Need
+// reaches it only when needFrom came back with the bench weight, and needFrom
+// has already returned for everyone who fills one — dedicated or flex. That
+// ordering is the whole reason this can be a multiplier instead of a membership
+// test: FLEX is a slot name, not a position, so "is rb among my unfilled
+// starters" is false in the one case that matters most, when the flex slot an rb
+// would fill is the thing still open.
+//
+// One caller, deliberately. The two-pick plan does NOT apply it — see NeedAfter.
+//
+// With R = my remaining picks and U = my unfilled starters:
+//
+//	R <  U    already lost. Nothing changes: the hole cannot be filled, and
+//	          suppressing the rest of the board over it would bury the value
+//	          still there behind a demand that can no longer be met.
+//	R == U    every remaining pick must fill a starter, so a bench flier is worth
+//	          exactly nothing. Zero need hides the position outright, and the
+//	          board says why in one line.
+//	R == U+1  one pick of slack. Half weight — a flier is still affordable, but
+//	          it costs the only spare pick left.
+func endgameSlack(picksLeft, unfilled int) float64 {
+	if unfilled == 0 {
+		return 1 // lineup complete: every pick left is a bench pick by definition
+	}
+	switch {
+	case picksLeft == unfilled:
+		return 0
+	case picksLeft == unfilled+1:
+		return EndgameSlack
+	default:
+		return 1
+	}
+}
+
+// unfilledCount is how many starting slots a filled lineup still has open.
+func unfilledCount(filled []string) int {
+	n := 0
+	for _, id := range filled {
+		if id == "" {
+			n++
+		}
+	}
+	return n
+}
+
+// MustFillStarters is the R == U state: I have exactly as many picks left as
+// open starting slots, so every one of them is spoken for. The board draws a
+// line saying so, and needFrom has already zeroed everything that can't fill one.
+//
+// False once R < U as well as when R > U — a lineup I can no longer complete is
+// a different situation, and telling someone every pick must fill a starter when
+// that is arithmetically impossible is just noise. A finished draft falls out of
+// the same test: R is 0 and U is not.
+func (s *State) MustFillStarters() bool {
+	filled, _ := s.FilledSlots(s.MySlot)
+	u := unfilledCount(filled)
+	return u > 0 && s.MyPicksLeft() == u
 }
 
 // isFlexSlot reports whether a lineup slot takes more than one position.

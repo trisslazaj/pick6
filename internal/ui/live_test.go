@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -170,6 +171,59 @@ func TestLiveRegistersUnknownPlayers(t *testing.T) {
 	}
 	if got.Tier != 0 || got.Value != 0 {
 		t.Error("an unranked player must stay untiered, so cliff logic ignores him")
+	}
+}
+
+// Anything drawn under the board has to be charged to the board's height budget
+// before the board is drawn. It was appended afterwards, so a stale board came
+// out exactly one row taller than the terminal: at 104x40 the frame went 40 -> 41
+// lines. Unlike a poll error that clears on the next tick, the stale line is
+// sticky by design, so the state the warning exists for was also the state that
+// scrolled the header — the round, the pick, the clock — off the top for the
+// whole draft.
+//
+// Both tabs, because the data tab sizes its own row count off Height too. The
+// heights below straddle the depth knob's steps; 28 is deliberately absent,
+// since there the left pane is already pinned at MinDepth and has no row to give
+// (a 24-line terminal renders 28 rows at HEAD — the separate, pre-existing
+// overflow).
+//
+// Counted with rowCount, not strings.Count of newlines: the models used to
+// append a trailing newline, which made the two agree by accident. It is gone —
+// bubbletea counts that newline as a line and clips the header to fit — and a
+// test that measures separators instead of rows is one row too generous.
+//
+// Tab 1 at 18 and 20 is here because visibleDataRows floors at 8 and cannot
+// shrink further, so the data pane overflowed once Reserve was charged for a
+// two-line trailer: it was exempt from the clamp on the assumption it always fit.
+func TestStaleLineFitsInsideTheHeightBudget(t *testing.T) {
+	cases := []struct {
+		tab, height int
+	}{
+		{0, 30}, {0, 33}, {0, 37}, {0, 40}, {0, 41}, {0, 48}, {0, 60},
+		{1, 18}, {1, 20}, {1, 24}, {1, 30}, {1, 40}, {1, 60},
+	}
+	for _, c := range cases {
+		m := liveModel(testState(), &fakeFeed{})
+		m.board.Width, m.board.Height, m.board.Tab = 104, c.height, c.tab
+		base := rowCount(m.View())
+		stale := rowCount(
+			m.WithFreshness(Freshness{
+				FetchedAt: time.Now().Add(-(engine.StaleADPHours + 7) * time.Hour),
+			}).View())
+
+		if base > c.height {
+			t.Fatalf("tab %d h %d: the plain board already renders %d rows", c.tab, c.height, base)
+		}
+		if stale > c.height {
+			t.Errorf("tab %d h %d: stale board renders %d rows, over the terminal by %d",
+				c.tab, c.height, stale, stale-c.height)
+		}
+		if !strings.Contains(ansi.ReplaceAllString(
+			m.WithFreshness(Freshness{FetchedAt: time.Now().Add(-31 * time.Hour)}).View(), ""),
+			"stale — adp and injury flags are") {
+			t.Errorf("tab %d h %d: the warning itself went missing", c.tab, c.height)
+		}
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/trisslazaj/pick6/internal/adp"
 	"github.com/trisslazaj/pick6/internal/cache"
@@ -70,6 +71,23 @@ func runFetch(args []string) error {
 	// 5. merge ---------------------------------------------------------------
 	players, unmatched := adp.Merge(ix, primary, crosschecks, cw)
 
+	// Injury truth rides along from the dump. It is copied here rather than
+	// inside Merge because Merge takes a rankings.Index, which deliberately
+	// exposes only identity (name/pos/team/bye) — the ADP sources have no
+	// opinion about anyone's health, and this is the one place that holds both
+	// the merged board and the raw sleeper pool.
+	flagged := 0
+	for id, p := range players {
+		sp, ok := pool[id]
+		if !ok {
+			continue
+		}
+		p.InjuryStatus, p.Status, p.NewsUpdated = sp.InjuryStatus, sp.Status, sp.NewsUpdated
+		if adp.InjuryAlarm(p.InjuryStatus, p.Status) {
+			flagged++
+		}
+	}
+
 	// 6. user rankings override ----------------------------------------------
 	tierOrigin := "value gaps (no rankings file)"
 	if *rankFile != "" {
@@ -123,7 +141,7 @@ func runFetch(args []string) error {
 	fmt.Printf("merged %d players — %d/%d matched to sleeper (%.1f%%), %d with a value\n",
 		len(players), matched, len(primary.Entries),
 		100*float64(matched)/float64(len(primary.Entries)), valued)
-	fmt.Printf("tiers from %s: %s\n", tierOrigin, tierSummary(tiered))
+	fmt.Printf("tiers from %s: %s\n", tierOrigin, posSummary(tiered))
 
 	if len(unmatched) > 0 {
 		fmt.Printf("%d unmatched\n", len(unmatched))
@@ -137,7 +155,7 @@ func runFetch(args []string) error {
 		}
 	}
 
-	// 6. write ---------------------------------------------------------------
+	// 7. write ---------------------------------------------------------------
 	dir, err := cache.Dir()
 	if err != nil {
 		return err
@@ -148,10 +166,36 @@ func runFetch(args []string) error {
 	}
 	fmt.Printf("\nwrote %s\n", strings.ToLower(outPath))
 
+	// The freshness record, next to the board and never inside it. Everything
+	// downstream is a photograph taken right here: adp, tiers, and injury status
+	// all stop updating the moment this file is written, and the only defence is
+	// knowing when that was.
+	_, windowEnd, _ := windowDays(primary.Window)
+	meta := adp.Meta{
+		FetchedAt:    time.Now(),
+		Format:       *format,
+		Season:       *year,
+		Players:      len(players),
+		TotalDrafts:  primary.TotalDrafts,
+		ADPWindowEnd: windowEnd,
+		TiersFile:    *rankFile,
+		TiersMod:     adp.ModTime(*rankFile),
+		SleeperMod:   adp.ModTime(filepath.Join(dir, sleeper.PlayersCache)),
+	}
+	if err := adp.WriteMeta(dir, meta); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s\n", strings.ToLower(filepath.Join(dir, adp.MetaName)))
+
 	if err := writeMappingStub(dir, unmatched); err != nil {
 		return err
 	}
 	printPreview(players)
+	printKDefValues(players)
+	printReplacement(players)
+	printInjuryFlags(players, flagged)
+	printTierDisagreements(players)
+	printRoomCurve(players)
 	return nil
 }
 
@@ -160,10 +204,12 @@ func say(source string, fetched bool, detail string) {
 	if fetched {
 		where = "fetched"
 	}
-	fmt.Printf("  %-12s %-8s %s\n", source, where, detail)
+	note(source, where, detail)
 }
 
-func tierSummary(byPos map[string]int) string {
+// posSummary renders any per-position count in lineup order: "qb 8, rb 12".
+// Zero counts are omitted, so a position nothing landed on stays quiet.
+func posSummary(byPos map[string]int) string {
 	order := []string{"QB", "RB", "WR", "TE", "K", "DEF"}
 	var parts []string
 	for _, p := range order {
@@ -208,13 +254,27 @@ func writeMappingStub(dir string, unmatched []string) error {
 	return os.WriteFile(path, b, 0o644)
 }
 
+// sortedByADP is the order players.json is written in, so the tie-break is not
+// cosmetic: the list comes out of a map, sort.Slice is not stable, and six
+// players share an adp with somebody on the 2026 board. Without the id the same
+// cache wrote a different file on every fetch and two runs could not be diffed.
+// Same rule Available uses — adp asc, then id.
 func sortedByADP(players map[string]*adp.Player) []*adp.Player {
 	list := make([]*adp.Player, 0, len(players))
 	for _, p := range players {
 		list = append(list, p)
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].ADP < list[j].ADP })
+	sortByADP(list)
 	return list
+}
+
+func sortByADP(list []*adp.Player) {
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].ADP != list[j].ADP {
+			return list[i].ADP < list[j].ADP
+		}
+		return list[i].SleeperID < list[j].SleeperID
+	})
 }
 
 func printPreview(players map[string]*adp.Player) {
@@ -243,6 +303,241 @@ func printPreview(players map[string]*adp.Player) {
 		fmt.Printf("  %-22s %-4s %6.1f adp, swings %.0f picks\n",
 			trunc(strings.ToLower(p.Name), 22), strings.ToLower(p.Pos), p.ADP, p.FormatSpread)
 	}
+}
+
+// injuryReportDepth is how deep the injury report looks, as an adp cutoff (105
+// players today, since adp is a price and not a rank). Pick 100 ends round eight
+// of a 12-team draft: the range where believing a stale adp costs you a starter
+// rather than a bench flier.
+const injuryReportDepth = 100
+
+// printInjuryFlags lists board players carrying an injury or roster-status alarm
+// who are still priced inside the top 100. Those are the traps, and the single
+// worst failure this whole tool can have is recommending the man who tore his
+// acl last night — adp is a trailing weekly average and has not heard the news.
+//
+// Expect this list to be SHORT — two names on 2026-07-29. That is the correct
+// answer, not a broken query: six players inside the cutoff carry any injury
+// note at all, and four of those are Questionable, which InjuryAlarm excludes on
+// purpose. A busy-looking report would mean the alarm set had been widened until
+// it stopped meaning anything.
+//
+// Every number here is frozen at fetch time, which is exactly why meta.json
+// exists and why refetching on draft morning is the ritual.
+func printInjuryFlags(players map[string]*adp.Player, flagged int) {
+	var list, deeper []*adp.Player
+	for _, p := range players {
+		if p.ADP <= 0 || !adp.InjuryAlarm(p.InjuryStatus, p.Status) {
+			continue
+		}
+		if p.ADP <= injuryReportDepth {
+			list = append(list, p)
+		} else {
+			deeper = append(deeper, p)
+		}
+	}
+	sortByADP(list)
+	sortByADP(deeper)
+
+	fmt.Printf("\ninjury flags — top %d adp (%d flagged across the whole board):\n",
+		injuryReportDepth, flagged)
+	if len(list) == 0 {
+		fmt.Println("  none. nobody the room still drafts early is listed out, ir, pup, na or inactive.")
+	}
+	for _, p := range list {
+		fmt.Printf("  %6.1f %-22s %-4s %-4s %-18s news %s\n",
+			p.ADP, trunc(strings.ToLower(p.Name), 22), strings.ToLower(p.Pos), p.Team,
+			adp.InjuryNote(p.InjuryStatus, p.Status), newsAge(p.NewsUpdated))
+	}
+	// Name the rest rather than leaving the count above unexplained. They are
+	// outside the trap zone by price, not by importance — a round-10 tight end
+	// on pup is still someone you want to have read about first.
+	if len(deeper) > 0 {
+		var names []string
+		for i, p := range deeper {
+			if i >= 6 {
+				names = append(names, fmt.Sprintf("+%d more", len(deeper)-i))
+				break
+			}
+			names = append(names, fmt.Sprintf("%s (%s, %.0f)",
+				strings.ToLower(p.Name), strings.ToLower(p.Pos), p.ADP))
+		}
+		fmt.Printf("  also flagged, priced deeper than %d: %s\n",
+			injuryReportDepth, strings.Join(names, ", "))
+	}
+	fmt.Println("  (questionable is not an alarm — 93 active players carry it in july)")
+}
+
+// newsAge renders how long ago sleeper last had something to say about a player.
+func newsAge(ms int64) string {
+	if ms <= 0 {
+		return "never"
+	}
+	d := time.Since(time.UnixMilli(ms))
+	switch {
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
+// printTierDisagreements shows where the tier board and the market rank a player
+// most differently, within his own position.
+//
+// The chore this serves: re-transcribing the tier graphic in the week before the
+// draft. A tier typed one row off is invisible on the board — it doesn't look
+// wrong, it just silently sorts a player into the wrong group and quietly moves
+// urgency with him. Disagreement with adp doesn't prove a typo, but a typo will
+// almost always be in here, and so will the genuinely contrarian calls that are
+// the reason you trusted the file in the first place.
+func printTierDisagreements(players map[string]*adp.Player) {
+	gaps := adp.TierADPGaps(players, adp.TierAdpGapFlag)
+	fmt.Printf("\ntiers vs market — biggest rank disagreements within a position (>= %d places):\n",
+		adp.TierAdpGapFlag)
+	if len(gaps) == 0 {
+		fmt.Println("  none. your tiers and the room agree everywhere, to within a round.")
+		return
+	}
+	fmt.Printf("  %-4s %-22s %5s %8s %7s %7s  %s\n",
+		"pos", "name", "tier", "by tier", "by adp", "delta", "tiers")
+	for i, g := range gaps {
+		if i >= 10 {
+			break
+		}
+		p := g.Player
+		fmt.Printf("  %-4s %-22s %5d %8d %7d %+7d  %s\n",
+			strings.ToLower(p.Pos), trunc(strings.ToLower(p.Name), 22),
+			p.Tier, g.TierRank, g.ADPRank, g.Delta, string(p.TierSrc))
+	}
+	// The top 10 skew to whichever position is deepest, because rank gaps have
+	// more room to open up there — today that is receiver, twelve of fifteen.
+	// The tail line stops a shallow position's one real disagreement from being
+	// invisible just because it was crowded out.
+	if len(gaps) > 10 {
+		byPos := map[string]int{}
+		for _, g := range gaps[10:] {
+			byPos[g.Player.Pos]++
+		}
+		fmt.Printf("  %d more at or over %d places: %s\n",
+			len(gaps)-10, adp.TierAdpGapFlag, posSummary(byPos))
+	}
+	fmt.Println("  negative delta = your tiers rank him ahead of the market; positive = the market does.")
+	fmt.Println("  rows marked derived have no hand-typed tier to check — that gap is value vs adp.")
+}
+
+// roomCurveKs are the ranks the room table prints: the top of a position, where
+// the fight actually is, plus one deep enough to show the curve flattening.
+var roomCurveKs = []int{1, 2, 4, 8}
+
+// printRoomCurve shows where this league takes the k-th player at a position
+// against where the national market prices him, and caches the drafts it read.
+//
+// This is the human-readable face of the warp the board now prices. The signal
+// is real and measured — over the first five at each position this room takes
+// quarterbacks 17.4 picks and tight ends 13.4 picks earlier than the market
+// prices them, and defenses 30.0 picks LATER, while backs and receivers track it
+// to within a pick — and restricted to that same top-of-position range it wins
+// the 2024 backtest's cross-validated gate, so mock and live blend it into
+// survival unless you pass `-room=false` (see `pick6 calibrate`, the 3a gate).
+// Deeper k are printed here and priced nowhere: past the room's appetite the
+// curve measured worse than the market.
+//
+// A read like this is worth more than it looks: knowing the room takes tight ends
+// early is a reason to move one up your own board, and that is a judgement the
+// tool should hand over rather than make.
+func printRoomCurve(players map[string]*adp.Player) {
+	drafts, sources := adp.LoadRoomDrafts(leagueDrafts)
+	var seasons []string
+	picks := 0
+	for _, s := range sources {
+		if s.Err != nil {
+			note("room", "skipped", fmt.Sprintf("%s · %s", s.ID, strings.ToLower(s.Err.Error())))
+			continue
+		}
+		seasons = append(seasons, s.Season)
+		picks += s.Picks
+	}
+
+	fmt.Printf("\nroom curve — where the k-th player at a position really goes in your league:\n")
+	curve := adp.RoomCurveOf(drafts)
+	if curve.Empty() {
+		fmt.Println("  no cached drafts loaded. the ids live in cmd/pick6/calibrate.go.")
+		return
+	}
+	note("drafts", "cached", fmt.Sprintf("%d drafts, %d picks · seasons %s",
+		curve.Drafts, picks, strings.Join(seasons, ", ")))
+
+	// The market side of every comparison: the adp of the k-th best player at the
+	// position on the board fetch just built. Same rank, both sides — adp_room(WR, 5)
+	// is where the fifth receiver went, so it can only be compared against the
+	// fifth receiver's price.
+	market := map[string][]float64{}
+	for _, p := range players {
+		if p.ADP > 0 && p.Pos != "" {
+			market[p.Pos] = append(market[p.Pos], p.ADP)
+		}
+	}
+	for _, list := range market {
+		sort.Float64s(list)
+	}
+
+	fmt.Printf("  %-5s %5s %6s", "pos", "depth", fmt.Sprintf("gap%d", adp.RoomWarpTopK))
+	for _, k := range roomCurveKs {
+		fmt.Printf(" %-14s", fmt.Sprintf("k%d", k))
+	}
+	fmt.Println()
+	for _, pos := range []string{"QB", "RB", "WR", "TE", "K", "DEF"} {
+		depth := curve.Depth(pos)
+		if depth == 0 {
+			continue
+		}
+		// The gap is the mean of (room - market) over the TOP of the position only,
+		// and the cutoff is load-bearing rather than tidy. Averaged over every k the
+		// number inverts: national adp ranks more players at a position than a
+		// 15-round draft ever takes, so past the room's appetite the curve is later
+		// than the market by construction and the tail swamps the head. Over all k
+		// quarterback reads +9.8 here; over the top five it reads -17.4, and the
+		// second number is the one that matches what the room actually does — it is
+		// the figure room.go's header quotes, and not to be confused with the 3a
+		// gate's qb price SHIFT of +11.5, which is a different quantity with the
+		// opposite sign. adp.RoomWarpTopK carries the measurement behind the cutoff.
+		var gap float64
+		var n int
+		for k := 1; k <= depth && k <= len(market[pos]) && k <= adp.RoomWarpTopK; k++ {
+			if room, _, ok := curve.At(pos, k); ok {
+				gap += room - market[pos][k-1]
+				n++
+			}
+		}
+		if n > 0 {
+			gap /= float64(n)
+		}
+		fmt.Printf("  %-5s %5d %+6.1f", strings.ToLower(pos), depth, gap)
+		for _, k := range roomCurveKs {
+			room, _, ok := curve.At(pos, k)
+			if !ok || k > len(market[pos]) {
+				fmt.Printf(" %-14s", "-")
+				continue
+			}
+			fmt.Printf(" %-14s", fmt.Sprintf("%.1f / %.1f", room, market[pos][k-1]))
+		}
+		fmt.Println()
+	}
+	fmt.Println("  cells are room pick / market adp for the k-th player at the position.")
+	fmt.Printf("  gap%d is the mean of (room - market) over the first %d: negative means this room\n",
+		adp.RoomWarpTopK, adp.RoomWarpTopK)
+	fmt.Println("  takes the position earlier than the national market prices it. deeper k are")
+	fmt.Println("  shown but not averaged — a ranked list runs deeper than any finite draft, so")
+	fmt.Println("  down there the room is later than adp about everyone and the mean flips sign.")
+	fmt.Println("  depth is the deepest k the room ever reached; past it the curve says nothing.")
+	fmt.Printf("  survival on mock and live blends the first %d of each position toward these\n",
+		adp.RoomWarpTopK)
+	fmt.Println("  numbers by default; everyone deeper keeps raw national adp, and -room=false")
+	fmt.Println("  puts the whole board back on it. `pick6 calibrate` prints the gate that decided")
+	fmt.Println("  that — two drafts building the curve and one scoring it, so read it as thin.")
 }
 
 func dash(n int) string {

@@ -32,3 +32,5 @@ go.work.sum
 # .vscode/
 
 CLAUDE.md
+# Built binary (a bare `go build` drops a 10MB pick6 in the repo root)
+/pick6

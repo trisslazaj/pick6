@@ -5,20 +5,31 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/trisslazaj/pick6/internal/cache"
 )
 
 const apiBase = "https://api.sleeper.app/v1"
 
 // Draft is the subset of Sleeper's draft metadata we use.
 type Draft struct {
-	DraftID  string `json:"draft_id"`
-	Type     string `json:"type"`   // must be "snake"
-	Status   string `json:"status"` // pre_draft | drafting | paused | complete
-	Season   string `json:"season"`
-	Settings struct {
+	DraftID string `json:"draft_id"`
+	Type    string `json:"type"`   // must be "snake"
+	Status  string `json:"status"` // pre_draft | drafting | paused | complete
+	Season  string `json:"season"`
+	// LeagueID is empty on a mock draft, which is how `pick6 scout` tells a
+	// league's real draft from twelve strangers practising.
+	LeagueID string `json:"league_id"`
+	// StartTime is epoch millis. The backtester compares it against the adp
+	// snapshot's window: prices from a different week are a different market,
+	// and that gap belongs in the output rather than in an assumption.
+	StartTime int64 `json:"start_time"`
+	Settings  struct {
 		Teams          int `json:"teams"`
 		Rounds         int `json:"rounds"`
 		ReversalRound  int `json:"reversal_round"`
@@ -109,6 +120,127 @@ func getPicks(url string) ([]DraftPick, error) {
 	}
 	sort.Slice(picks, func(i, j int) bool { return picks[i].PickNo < picks[j].PickNo })
 	return picks, nil
+}
+
+// completedDraftAge is the cache lifetime for a finished draft. A completed
+// draft's metadata and picks never change again, so the only reason not to use
+// forever is that the file should eventually age out of the cache dir; 30 days
+// covers a whole offseason of backtest runs on one fetch.
+const completedDraftAge = 30 * 24 * time.Hour
+
+// DraftCacheAge is how long a draft may be trusted off disk, given the status
+// the directory listing reported for it.
+//
+// completedDraftAge is only honest about a draft that is over. `pick6 scout`
+// walks every draft it can find, and this user's 2026 league sat at "pre_draft"
+// with an empty draft_order and an empty pick list on 2026-07-29 — cached for 30
+// days, that empty answer would still be what scout read all through September,
+// hiding the one draft the profile is actually for. Anything not complete gets
+// the directory's own daily lifetime instead, so it self-heals the day after the
+// draft ends.
+func DraftCacheAge(status string) time.Duration {
+	if status == "complete" {
+		return completedDraftAge
+	}
+	return directoryAge
+}
+
+// CachedDraft is GetDraft off disk, for the historical drafts the backtester
+// replays. Live drafting must keep using GetDraft — status and draft_order
+// change while a draft is running.
+//
+// "Cached" means may-refresh: a copy older than maxAge is refetched, and only a
+// failed fetch falls back to the stale bytes. Readers on a render path want
+// DiskDraft instead.
+func CachedDraft(id string) (*Draft, error) { return CachedDraftAge(id, completedDraftAge) }
+
+// CachedDraftAge is CachedDraft with the lifetime the caller's own knowledge of
+// the draft justifies. See DraftCacheAge.
+func CachedDraftAge(id string, maxAge time.Duration) (*Draft, error) {
+	var d Draft
+	if err := cachedJSON("draft_"+id+".json", apiBase+"/draft/"+id, maxAge, &d); err != nil {
+		return nil, err
+	}
+	if d.DraftID == "" {
+		return nil, fmt.Errorf("draft %s not found", id)
+	}
+	return &d, nil
+}
+
+// CachedPicks is GetPicks off disk, sorted by pick number for the same reason
+// getPicks sorts: one out-of-order pick would corrupt the roster it lands on.
+func CachedPicks(id string) ([]DraftPick, error) { return CachedPicksAge(id, completedDraftAge) }
+
+// CachedPicksAge is CachedPicks with a caller-chosen lifetime.
+func CachedPicksAge(id string, maxAge time.Duration) ([]DraftPick, error) {
+	var picks []DraftPick
+	err := cachedJSON("draft_"+id+"_picks.json", apiBase+"/draft/"+id+"/picks", maxAge, &picks)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(picks, func(i, j int) bool { return picks[i].PickNo < picks[j].PickNo })
+	return picks, nil
+}
+
+// DiskDraft and DiskPicks read a completed draft off disk and NEVER touch the
+// network, whatever the file's age.
+//
+// The board uses these. cache.Get refetches once its copy ages out, with a 120s
+// client timeout and a fallback to the stale bytes only when the request
+// ERRORS — so against a host that blackholes packets rather than refusing them,
+// six month-old draft files are twelve minutes of blank screen before `pick6
+// mock` renders anything. A draft party's wifi is exactly that kind of bad, and
+// the room curve is a nicety even though it is now on by default: a missing file
+// costs the board a lineup-shape replacement level and the room's prices, and
+// what is left is a board on raw national adp — degraded, still correct, still
+// instant. `pick6 fetch` is where these files get pulled.
+func DiskDraft(id string) (*Draft, error) {
+	var d Draft
+	if err := diskJSON("draft_"+id+".json", &d); err != nil {
+		return nil, err
+	}
+	if d.DraftID == "" {
+		return nil, fmt.Errorf("draft %s not found", id)
+	}
+	return &d, nil
+}
+
+func DiskPicks(id string) ([]DraftPick, error) {
+	var picks []DraftPick
+	if err := diskJSON("draft_"+id+"_picks.json", &picks); err != nil {
+		return nil, err
+	}
+	sort.Slice(picks, func(i, j int) bool { return picks[i].PickNo < picks[j].PickNo })
+	return picks, nil
+}
+
+func cachedJSON(name, url string, maxAge time.Duration, v any) error {
+	b, _, err := cache.Get(name, url, maxAge)
+	if err != nil {
+		return err
+	}
+	return decodeCached(name, b, v)
+}
+
+func diskJSON(name string, v any) error {
+	dir, err := cache.Dir()
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		return fmt.Errorf("%s is not cached — run `pick6 fetch`", name)
+	}
+	return decodeCached(name, b, v)
+}
+
+func decodeCached(name string, b []byte, v any) error {
+	// Sleeper answers unknown ids with a bare `null` and a 200, so the cache
+	// happily stores it; catch it here rather than returning an empty result.
+	if string(b) == "null" {
+		return fmt.Errorf("%s: not found", name)
+	}
+	return json.Unmarshal(b, v)
 }
 
 // GetUser resolves a username (or user id) to a user.

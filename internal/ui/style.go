@@ -25,6 +25,11 @@ const (
 	ColDim    = "#565F89"
 	ColBorder = "#414868"
 	ColAccent = "#7DCFFF"
+
+	// ColInk is what goes ON an alert colour — the background is doing the
+	// shouting, so the text has to step back out of its way. Shared by the alert
+	// banner and the injury chip so the two cannot drift apart.
+	ColInk = "#1A1B26"
 )
 
 var posColor = map[string]string{
@@ -55,4 +60,15 @@ var (
 	Wait   = lipgloss.NewStyle().Foreground(lipgloss.Color(ColWait))
 	Accent = lipgloss.NewStyle().Foreground(lipgloss.Color(ColAccent))
 	Bold   = lipgloss.NewStyle().Bold(true)
+
+	// ChipAlarm is the injury badge: ink on the cliff red, the same treatment the
+	// cliff banner gets, so the two loudest things on the board read as one
+	// family. Reverse video rather than red text follows the deny chip's
+	// precedent — a chip is a badge, not a category — and a filled badge survives
+	// the 256-colour downgrade legibly, which three letters of red text beside a
+	// coloured name does not.
+	ChipAlarm = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColInk)).
+			Background(lipgloss.Color(ColCliff)).
+			Bold(true)
 )

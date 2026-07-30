@@ -134,18 +134,48 @@ func (m LiveModel) View() string {
 	if m.quit {
 		return ""
 	}
-	out := m.board.View()
+	// Built before the board is drawn, because the board has to be charged for
+	// it. Board.View() fills Height exactly; appending afterwards without paying
+	// pushed the frame one row over the terminal and scrolled the header off the
+	// top. That was permanent for the stale line, which is sticky by design —
+	// a board past StaleADPHours warned about being old for the whole draft while
+	// costing the reader the round and the pick number.
+	trailer := m.trailer()
+	m.board.Reserve = len(trailer) // m is a value; this is local to the frame
 
+	out := m.board.View()
+	for _, line := range trailer {
+		out += "\n" + line
+	}
+	// No trailing newline, for the same reason Model.View has none: bubbletea
+	// counts it as an extra line and clips the header to make room.
+	return out
+}
+
+// trailer is every line drawn under the board, in priority order. One slice so
+// the count and the content cannot disagree — a line added here that the height
+// budget never saw is the bug this shape exists to prevent.
+func (m LiveModel) trailer() []string {
+	var out []string
 	if m.desync != "" {
-		out += "\n" + Cliff.Bold(true).Render("  desync — board is not trustworthy: "+strings.ToLower(m.desync))
+		out = append(out, Cliff.Bold(true).Render(
+			"  desync — board is not trustworthy: "+strings.ToLower(m.desync)))
+	}
+	// Sticky, because staleness does not go away on its own the way a failed poll
+	// does — it is a fact about the data until somebody refetches. Amber and not
+	// red: the board is still the best information in the room, it is just older
+	// than it should be, and blocking on it would be the one outcome worse than
+	// showing it. Same principle as the poll loop keeping the last good frame up.
+	if note, ok := m.board.Fresh.Stale(); ok {
+		out = append(out, Run.Render("  "+trunc(note, m.board.Width-4)))
 	}
 	if m.pollErr != "" {
-		out += "\n" + Run.Render("  "+strings.ToLower(trunc(m.pollErr, 88)))
+		out = append(out, Run.Render("  "+strings.ToLower(trunc(m.pollErr, 88))))
 	}
 	if m.complete {
-		out += "\n" + Wait.Render("  draft complete — polling stopped")
+		out = append(out, Wait.Render("  draft complete — polling stopped"))
 	}
-	return out + "\n"
+	return out
 }
 
 // Snapshot renders one frame without a TTY, for replaying a finished draft.
@@ -167,6 +197,14 @@ func pickToPlayer(p sleeper.DraftPick) engine.Player {
 // actually receives the player.
 func (m LiveModel) WithDraft(d *sleeper.Draft) LiveModel {
 	m.draft = d
+	return m
+}
+
+// WithFreshness attaches how old the cached board is, for the footer's age
+// clause and the sticky stale warning. A zero value is the honest state of a
+// board with no meta.json and renders as nothing.
+func (m LiveModel) WithFreshness(f Freshness) LiveModel {
+	m.board.Fresh = f
 	return m
 }
 
