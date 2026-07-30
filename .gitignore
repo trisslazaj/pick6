@@ -34,3 +34,13 @@ go.work.sum
 CLAUDE.md
 # Built binary (a bare `go build` drops a 10MB pick6 in the repo root)
 /pick6
+
+# LaTeX build litter from `make paper`. The .pdf is deliberately NOT ignored —
+# the paper is a deliverable and a reader shouldn't need a TeX install.
+docs/*.aux
+docs/*.fdb_latexmk
+docs/*.fls
+docs/*.log
+docs/*.out
+docs/*.toc
+docs/*.synctex.gz

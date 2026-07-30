@@ -7,6 +7,7 @@
 package rankings
 
 import (
+	"sort"
 	"strings"
 	"unicode"
 
@@ -72,25 +73,51 @@ type Key struct {
 type Index struct {
 	byKey  map[Key]string    // normalized name + pos -> player_id
 	byTeam map[string]string // team abbrev -> DEF player_id
-	pool   map[string]sleeper.Player
+	// byDefName is the same 32 defenses keyed on their normalized TEAM NAME,
+	// for sources that give one instead of a code. See LookupExact.
+	byDefName map[string]string
+	pool      map[string]sleeper.Player
 }
 
-// NewIndex builds the lookup. Defenses are indexed by team abbreviation only —
-// in the Sleeper dump all 32 have full_name: null, so name matching cannot reach them.
+// NewIndex builds the lookup. Defenses are indexed by team abbreviation and by
+// team name — in the Sleeper dump all 32 have full_name: null and carry the city
+// and nickname in first_name/last_name ("Denver"/"Broncos"), so a name-based
+// matcher aimed at Name() reaches them and one aimed at FullName never does.
+//
+// Ids are SORTED before the loop, and that is not tidiness. "First writer wins"
+// over a Go map range means "whichever entry this process happened to visit
+// first", so a colliding (name, position) key resolved differently run to run.
+// Measured on the current 3,223-player active pool there are 8 such keys —
+// "nick williams" WR (1604 / 11530), "chase cota" WR (11347 / 11554), "frank
+// gore" RB, and five more — and rebuilding the index 20 times in one process
+// flipped them 62 times between the two ids. The 2024 ffc board hits none of
+// them; the 389-name 2025 fantasypros board hits two, and a 389-deep board
+// against a 192-pick draft makes deep names draftable. If the wrong twin is
+// looked up, his id never appears in the picks, he is labeled "survived forever"
+// at every vantage of all twelve seats, and the fold's brier moves between runs
+// with the join count unchanged at 387/389. Sorted, the lowest id wins, always.
 func NewIndex(pool map[string]sleeper.Player) *Index {
 	ix := &Index{
-		byKey:  make(map[Key]string, len(pool)),
-		byTeam: make(map[string]string, 32),
-		pool:   pool,
+		byKey:     make(map[Key]string, len(pool)),
+		byTeam:    make(map[string]string, 32),
+		byDefName: make(map[string]string, 32),
+		pool:      pool,
 	}
-	for id, p := range pool {
+	ids := make([]string, 0, len(pool))
+	for id := range pool {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		p := pool[id]
 		if p.Position == "DEF" {
 			ix.byTeam[strings.ToUpper(p.Team)] = id
+			ix.byDefName[Normalize(p.Name())] = id
 			continue
 		}
 		k := Key{Normalize(p.Name()), p.Position}
-		// First writer wins; the pool is already filtered to active players so
-		// genuine duplicate name+position collisions are vanishingly rare.
+		// First writer wins, and after the sort the first writer is a fact about
+		// the pool rather than about this run.
 		if _, seen := ix.byKey[k]; !seen {
 			ix.byKey[k] = id
 		}
@@ -119,10 +146,22 @@ func (ix *Index) Lookup(name, pos, team string) (string, bool) {
 // id never appears in the 2024 picks — so he'd be labeled "survived forever"
 // and quietly bias every calibration number. A name with no exact match is one
 // to print and drop, not one to guess at.
+//
+// Defenses get two exact paths, tried in that order, because sources disagree
+// about what identifies one. FFC gives a team code and a name nobody can match
+// ("Seattle Defense"), so the code is the join and always has been. FantasyPros'
+// adp export gives the reverse: the team NAME in the name field ("Denver
+// Broncos") and the literal string "DST" where a code belongs, which resolves to
+// nothing at all. Falling through to the normalized team name catches those 30
+// rows and took that join from 91.8% to 99.5%. It cannot change an existing
+// answer — the code path still wins whenever it hits — and it is still exact.
 func (ix *Index) LookupExact(name, pos, team string) (string, bool) {
 	pos = NormalizePos(pos)
 	if pos == "DEF" {
-		id, ok := ix.byTeam[strings.ToUpper(team)]
+		if id, ok := ix.byTeam[strings.ToUpper(team)]; ok {
+			return id, true
+		}
+		id, ok := ix.byDefName[Normalize(name)]
 		return id, ok
 	}
 	id, ok := ix.byKey[Key{Normalize(name), pos}]
@@ -130,6 +169,12 @@ func (ix *Index) LookupExact(name, pos, team string) (string, bool) {
 }
 
 // fuzzy is the Levenshtein <= 2 fallback, scoped to the same position.
+//
+// Ties break on the lowest id for the same reason NewIndex sorts: this ranges a
+// map, so "the first one at distance 2" is whichever the runtime visited first,
+// and two equally-close names would resolve differently run to run. This is on
+// the shipped `fetch` path, where the answer is written into mapping.json and
+// then trusted forever.
 func (ix *Index) fuzzy(norm, pos string) (string, bool) {
 	best, bestDist := "", 3
 	for k, id := range ix.byKey {
@@ -141,7 +186,7 @@ func (ix *Index) fuzzy(norm, pos string) (string, bool) {
 			continue
 		}
 		d := levenshtein(k.Name, norm)
-		if d < bestDist {
+		if d < bestDist || (d == bestDist && id < best) {
 			best, bestDist = id, d
 		}
 	}

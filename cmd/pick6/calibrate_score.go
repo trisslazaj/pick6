@@ -13,6 +13,10 @@ import (
 // pred is one labeled prediction: standing at pick `from`, the engine said the
 // player survives to `to` with probability q, and the draft said y.
 type pred struct {
+	// id is the sleeper player id, carried so a model can be repriced off a
+	// different warp without re-walking the draft — which is what the cutoff
+	// sweep does, eleven times per fold.
+	id    string
 	pos   string
 	adp   float64
 	stdev float64 // 0 when ffc reported none, i.e. the sigma fallback fired
@@ -35,11 +39,19 @@ type pred struct {
 	// player, built from the OTHER drafts only; qRoom is the engine's survival off
 	// it, recorded during the walk through engine.Player.ADPEff so the graded
 	// number comes out of the shipped reader. adpRoomTop is the same warp applied
-	// only to the top adp.RoomWarpTopK players at each position — the variant the
+	// only to the top retractedCutoff players at each position — the variant the
 	// board actually prices, and the one the shipped row is scored on.
 	adpRoom    float64
 	adpRoomTop float64
 	qRoom      float64
+
+	// The source's second adp column, when it has one, warped the same way. A
+	// fantasypros export prices every player twice — sleeper's own adp and the
+	// three-platform consensus — and the drafts being scored were run on sleeper,
+	// so which one predicts them better is a real question. Zero on any board with
+	// a single price, and columnGate checks that before printing anything.
+	adpAlt    float64
+	adpAltTop float64
 
 	// The tilt is not a per-player transform — it is one exponent solved over a
 	// whole vantage's board at once — so a flat list of predictions is not enough
@@ -133,6 +145,27 @@ func modelUnconditional(p pred) float64 {
 // floor. Anything that cannot beat it is theater.
 func modelConstant(rate float64) func(pred) float64 {
 	return func(pred) float64 { return rate }
+}
+
+// modelRoomTopFlat is the shipped model with sigma forced to SigmaDefault for
+// every player.
+//
+// It exists because it is the only regime EVERY fold can run in. A fantasypros
+// export carries no stdev, so a fold priced off one has no per-player spread to
+// shrink or clamp and runs flat whether anyone asks it to or not. Comparing that
+// fold's brier against an ffc fold's per-player-sigma brier would be comparing
+// two different models on two different drafts and calling the difference a
+// finding, so crossFold forces every fold onto this one and reports it beside
+// each fold's own best available.
+func modelRoomTopFlat(p pred) float64 {
+	return psurvive(p.from, p.to, p.adpRoom, engine.SigmaDefault)
+}
+
+// modelAltTop is the shipped model priced off the source's OTHER adp column.
+// Same sigma, same warp, same tilt when it is tilted — the only thing that
+// changes is the price, which is what makes the comparison a comparison.
+func modelAltTop(p pred) float64 {
+	return psurvive(p.from, p.to, p.adpAltTop, p.sigmaShrunk)
 }
 
 // ---- 4b: the two support-driven corrections, each scorable on its own ----
@@ -349,9 +382,48 @@ func sigmaOf(stdev, def, lo, hi float64) float64 {
 
 // ---- the report ----
 
-func report(preds []pred, drafts, vantages int) {
+// foldHeader says which draft the tables below grade and what they grade it
+// against. With more than one fold in the output, every table is ambiguous
+// without it — and the room-warp exclusion line is the one piece of provenance
+// that, if it were wrong, would make all of them meaningless.
+func foldHeader(f *fold, byID map[string]*fold) {
+	name := f.id
+	if f.league != "" {
+		name += " · " + strings.ToLower(f.league)
+	}
+	fmt.Printf("\nfold %s — %s\n", f.label, name)
+	note("draft", "scored", fmt.Sprintf("%s · %d teams, %d rounds, %d picks · %s",
+		f.season, f.draft.Settings.Teams, f.draft.Settings.Rounds, f.picks,
+		strings.ReplaceAll(f.draft.Metadata.ScoringType, "_", "-")))
+
+	b := f.board
+	switch b.source {
+	case "fantasypros":
+		note("board", "csv", fmt.Sprintf("fantasypros · %d joined players · %s column · %d rows fell back to avg",
+			len(b.players), b.col, b.fallbacks))
+	default:
+		note("board", b.source, fmt.Sprintf("%d joined players, %d drafts (%s)",
+			len(b.players), b.drafts, b.res.Window))
+	}
+	if b.truncatedFrom > 0 {
+		// Loud and on the fold's own header, not only in the flag's help text. A
+		// truncated board is a controlled experiment, and every number under this
+		// line answers "what if the boards were the same size" rather than "how
+		// did the model do" — which is the reading error the whole line prevents.
+		note("depth", "truncated", fmt.Sprintf(
+			"board cut from %d to %d cheapest · diagnostic only, not this fold's result",
+			b.truncatedFrom, len(b.players)+len(b.dropped)))
+	}
+	note("era check", eraTag(f.draft, b), eraDetail(f.draft, b))
+	note("room warp", roomWarpTag(f), roomWarpDetail(f, byID))
+}
+
+func report(f *fold, byID map[string]*fold) {
+	preds := f.preds
+	foldHeader(f, byID)
+
 	base := scoreOf(preds, modelEngine)
-	fmt.Printf("\nscored %d predictions · %d draft(s) · %d vantages\n", base.n, drafts, vantages)
+	fmt.Printf("\nscored %d predictions · %d vantages\n", base.n, f.vantages)
 	fmt.Printf("observed survival rate %.4f — a model that beats nothing scores brier %.4f\n",
 		base.obs, base.obs*(1-base.obs))
 
@@ -363,6 +435,7 @@ func report(preds []pred, drafts, vantages int) {
 	roomTiltFn, _ := tilted(preds, modelRoom)
 	roomShrunkTiltFn, _ := tilted(preds, modelRoomShrunk)
 	roomTopTiltFn, _ := tilted(preds, modelRoomTopShrunk)
+	roomTopFlatTiltFn, _ := tilted(preds, modelRoomTopFlat)
 	plain := namedModel{"engine", modelEngine}
 	tilt := namedModel{"tilted", tiltFn}
 	// The previous default, kept as a column rather than dropped: 3a's warp is a
@@ -370,11 +443,11 @@ func report(preds []pred, drafts, vantages int) {
 	// dropping the middle model would leave the shrink's contribution
 	// indistinguishable from the tilt's.
 	current := namedModel{"shrunk+tilt", shrunkTiltFn}
-	// What ships: that model with the top-of-position room warp on its price. The
-	// label carries a plus because the reliability columns read as a progression —
-	// each one is the column before it plus one correction — and a bare "room
-	// warp" would collide with the model table's untilted 3a row.
-	shipped := namedModel{"+room warp", roomTopTiltFn}
+	// What ships: that model with the room warp on its price, at every depth the
+	// curve reaches. The label carries a plus because the reliability columns read
+	// as a progression — each one is the column before it plus one correction —
+	// and a bare "room warp" would collide with the model table's untilted 3a row.
+	shipped := namedModel{"+room warp", roomShrunkTiltFn}
 
 	// What the marker is measured against. It used to be the first row — the
 	// pre-4x engine — which after this milestone is not what ships: eleven of
@@ -382,10 +455,9 @@ func report(preds []pred, drafts, vantages int) {
 	// baseline that beat the then-shipped model on log-loss (flat sigma 6.0 under
 	// the tilt, 0.2233 against 0.2250) read like all the others. The whole point
 	// of running this is that the fancy math doesn't get to grade itself, so it is
-	// graded against the fancy math that ships — which since 3a shipped is the
-	// top-5 warp row, and that same flat baseline no longer clears it (0.2233
-	// against 0.2222).
-	ship := scoreOf(preds, roomTopTiltFn)
+	// graded against the fancy math that ships — the full-depth warp row, since
+	// the top-5 cap was retracted on the two causal folds.
+	ship := scoreOf(preds, roomShrunkTiltFn)
 	better := betterPrinted
 	fmt.Printf("\n%-34s %8s %9s %10s %10s\n", "model", "brier", "log-loss", "predicted", "d brier")
 	line := func(label string, s score, tag string) {
@@ -393,9 +465,14 @@ func report(preds []pred, drafts, vantages int) {
 		if s.brier != base.brier {
 			delta = fmt.Sprintf("%+.4f", s.brier-base.brier)
 		}
-		beat := tag
+		// The marker is APPENDED to a row's own label, never replaced by it. A
+		// named row can still beat what ships — the flat-sigma warp row does, on
+		// log-loss, on the 2024 fold — and swallowing the marker because the row
+		// already had something to say would hide exactly the comparison this
+		// column exists to make. Rows compared against themselves never trigger
+		// it, since betterPrinted is strict.
+		beat := ""
 		switch {
-		case tag != "":
 		case better(s.brier, ship.brier) && better(s.logLoss, ship.logLoss):
 			beat = "   <- beats what ships"
 		case better(s.brier, ship.brier):
@@ -403,7 +480,7 @@ func report(preds []pred, drafts, vantages int) {
 		case better(s.logLoss, ship.logLoss):
 			beat = "   <- beats what ships on log-loss"
 		}
-		fmt.Printf("  %-32s %8.4f %9.4f %10.4f %10s%s\n", label, s.brier, s.logLoss, s.mean, delta, beat)
+		fmt.Printf("  %-32s %8.4f %9.4f %10.4f %10s%s%s\n", label, s.brier, s.logLoss, s.mean, delta, tag, beat)
 	}
 	row := func(label string, s score) { line(label, s, "") }
 	row("engine (per-player sigma)", base)
@@ -415,17 +492,33 @@ func report(preds []pred, drafts, vantages int) {
 	row("4b: shrunk + floor + tilt", scoreOf(preds, bothTiltFn))
 	row("3a: room-warped adp", scoreOf(preds, modelRoom))
 	row("3a: room warp + tilt", scoreOf(preds, roomTiltFn))
-	// The full-depth warp, scored and not shipped — it loses to the row above it
-	// and to the row below. It stays on the table because "the warp is wrong" and
-	// "the warp is wrong past the fifth man at a position" are different findings.
-	row("3a: room warp + shrunk + tilt", scoreOf(preds, roomShrunkTiltFn))
-	line(fmt.Sprintf("3a: top-%d warp + shrunk + tilt", adp.RoomWarpTopK), ship, "   <- ships")
+	line("3a: room warp + shrunk + tilt", ship, "   <- ships")
+	// The retracted cap, kept on the table because "the warp is wrong" and "the
+	// warp is wrong past the fifth man at a position" are different findings, and
+	// this row is what tells them apart.
+	row(fmt.Sprintf("3a: top-%d warp + shrunk + tilt (retracted)", retractedCutoff),
+		scoreOf(preds, roomTopTiltFn))
+	// The same model with every sigma forced flat. Not a baseline and not a
+	// candidate: it is the one regime a board with no stdev can run in, so it is
+	// what crossFold compares folds on. On a flat-sigma fold it IS the shipped
+	// row, printed twice on purpose — the tie is the proof the fold is really flat.
+	line(fmt.Sprintf("3a: room warp + flat %.1f + tilt", engine.SigmaDefault),
+		scoreOf(preds, roomTopFlatTiltFn), "   <- the cross-fold regime")
 	row(fmt.Sprintf("baseline: constant %.3f", base.obs), scoreOf(preds, modelConstant(base.obs)))
 	row(fmt.Sprintf("baseline: sigma %.1f flat", engine.SigmaDefault), scoreOf(preds, modelFlatSigma))
 	row(fmt.Sprintf("baseline: sigma %.1f flat + tilt", engine.SigmaDefault), scoreOf(preds, flatTiltFn))
 	row("baseline: unconditional", scoreOf(preds, modelUnconditional))
 	fmt.Println("  the tilt ships, so the rows to compare 4b against are the tilted ones.")
+	if f.board.flatSigma {
+		// Said here rather than left for the reader to spot: on this board the
+		// per-player, shrunk, floored and flat rows are literally one model, so
+		// the ties above are structural and not a finding about sigma.
+		fmt.Println("  this board reports no stdev, so every sigma above is sigmadefault — the")
+		fmt.Println("  per-player, shrunk, floored and flat rows are one model printed five times.")
+		fmt.Println("  read the tilt, the warp and the conditioning here; read nothing about sigma.")
+	}
 
+	columnGate(f)
 	supportReport(preds)
 	tiltReport(vts)
 	// Every model shares one set of bins — the engine's — so the tails line up
@@ -449,7 +542,116 @@ func report(preds []pred, drafts, vantages int) {
 	// position and the market's everywhere else.
 	roomGate(preds, current,
 		namedModel{"room warp", roomShrunkTiltFn},
-		namedModel{fmt.Sprintf("top-%d warp", adp.RoomWarpTopK), roomTopTiltFn})
+		namedModel{fmt.Sprintf("top-%d warp", retractedCutoff), roomTopTiltFn})
+}
+
+// columnGate answers the question having two adp columns exists to answer: does
+// sleeper's own adp predict a SLEEPER draft better than the cross-platform
+// consensus does?
+//
+// It is a fair fight by construction. Both columns price the same players in the
+// same order, both go through the same top-of-position warp, both carry the same
+// sigma, both get their own exponent solved over their own board at every
+// vantage. The only thing that differs is the price, so the delta is the columns
+// and nothing else.
+//
+// The fallback count matters as much as the score: where a platform never ranked
+// a player his price IS the consensus, so on the deep board the two columns are
+// partly the same number and the comparison is diluted exactly there.
+func columnGate(f *fold) {
+	b := f.board
+	if b.altCol == "" {
+		return
+	}
+	var priced int
+	for _, p := range f.preds {
+		if p.adpAlt > 0 {
+			priced++
+		}
+	}
+	if priced == 0 {
+		return
+	}
+	primary, _ := tilted(f.preds, modelRoomTopShrunk)
+	alt, _ := tilted(f.preds, modelAltTop)
+	sp, sa := scoreOf(f.preds, primary), scoreOf(f.preds, alt)
+
+	fmt.Printf("\nadp column — the same board priced twice, %s (scored) against %s\n", b.col, b.altCol)
+	// Both fallback counts, because they are the dilution: where a column was
+	// blank the player's price IS the consensus, so on those rows the two models
+	// are literally the same number and the comparison is weakest exactly there.
+	note("reach", "priced", fmt.Sprintf(
+		"%d of %d predictions carry both prices · blank source rows filled from avg: %s %d, %s %d",
+		priced, len(f.preds), b.col, b.fallbacks, b.altCol, b.altFallbacks))
+	note("brier", verdict(sp.brier, sa.brier), fmt.Sprintf("%s %.4f -> %s %.4f (%+.4f)",
+		b.col, sp.brier, b.altCol, sa.brier, sa.brier-sp.brier))
+	note("log-loss", verdict(sp.logLoss, sa.logLoss), fmt.Sprintf("%s %.4f -> %s %.4f (%+.4f)",
+		b.col, sp.logLoss, b.altCol, sa.logLoss, sa.logLoss-sp.logLoss))
+	segmentTable("adp column by position", f.preds, positionSegs(),
+		namedModel{b.col, primary}, namedModel{b.altCol, alt})
+	fmt.Println("  a platform's own adp is not automatically the better price for a draft run on")
+	fmt.Println("  that platform: its column is a ranking, the consensus is an average of three,")
+	fmt.Println("  and averages are usually better calibrated. the table decides, not the intuition.")
+}
+
+// crossFold is the whole point of a second fold.
+//
+// Every gate in this project rested on one draft, and a single fold cannot tell
+// a real edge from a lucky one. Two can start to — but only if they are compared
+// in a regime they can both run, and a board with no stdev can only run flat. So
+// this table forces every fold onto sigma 6.0 and prints each fold's own best
+// available beside it. Where those two columns are identical, the fold really
+// was flat all along, which is the visible proof rather than a claim.
+//
+// It does NOT pool the folds. Different rooms, different round counts, different
+// boards: pooling would let one fold's vantages be tilted against another fold's
+// prices, and the average of two folds is not a third measurement.
+func crossFold(folds []*fold) {
+	if len(folds) < 2 {
+		fmt.Println("\ncross-fold — one fold, so there is nothing to cross. every number above")
+		fmt.Println("  rests on a single draft night and cannot tell a real edge from a lucky one.")
+		return
+	}
+	fmt.Printf("\ncross-fold — %d folds in the one regime they share: sigma flat at %.1f\n",
+		len(folds), engine.SigmaDefault)
+	fmt.Printf("  %-8s %-16s %6s %6s %8s %9s %19s %19s\n",
+		"fold", "board", "depth", "picks", "n", "observed", "brier", "log-loss")
+	for _, f := range folds {
+		flatFn, _ := tilted(f.preds, modelRoomTopFlat)
+		ownFn, _ := tilted(f.preds, modelRoomTopShrunk)
+		flat, own := scoreOf(f.preds, flatFn), scoreOf(f.preds, ownFn)
+		board := f.board.source
+		if f.board.col != "" {
+			board += " " + f.board.col
+		}
+		fmt.Printf("  %-8s %-16s %6d %6d %8d %9.4f %19s %19s\n",
+			f.label, board, len(f.board.players), f.picks, flat.n, flat.obs,
+			pair(flat.brier, own.brier), pair(flat.logLoss, own.logLoss))
+	}
+	fmt.Println("  each metric cell reads flat -> own. 'flat' is the shipped model with every")
+	fmt.Println("  sigma forced to sigmadefault; 'own' is that fold's best available price for")
+	fmt.Println("  sigma. they are equal exactly when the board carries no stdev at all, which")
+	fmt.Println("  is why the equality is left visible rather than collapsed into one column.")
+	// The depth column is not decoration and this paragraph is the reason it is
+	// there. Ffc publishes ~178 names and fantasypros 389, so a fantasypros fold
+	// grades hundreds of players nobody was ever going to take. They survive
+	// trivially, which lifts the observed rate and shrinks every brier on that
+	// row for free. Two folds' briers are therefore NOT comparable as numbers,
+	// only as distances from their own floors — which is why the floors print.
+	fmt.Println("  depth is the joined board size against a draft of `picks` picks. a board far")
+	fmt.Println("  deeper than the draft is mostly players nobody was ever taking: they survive")
+	fmt.Println("  trivially, the observed rate rises and every brier on that row falls for free.")
+	fmt.Println("  so do not compare briers across rows. compare each against its own floor:")
+	for _, f := range folds {
+		s := scoreOf(f.preds, modelEngine)
+		flatFn, _ := tilted(f.preds, modelRoomTopFlat)
+		flat := scoreOf(f.preds, flatFn)
+		note(f.label, "floor", fmt.Sprintf(
+			"obs %.4f · constant predictor %.4f · flat model %.4f · %.0f%% of the floor",
+			s.obs, s.obs*(1-s.obs), flat.brier, 100*flat.brier/(s.obs*(1-s.obs))))
+	}
+	fmt.Println("  the last column is the only cross-fold comparison this data supports: what")
+	fmt.Println("  fraction of a no-model baseline the model still pays. lower is better.")
 }
 
 // supportReport says what 4b's two corrections were allowed to touch, counted

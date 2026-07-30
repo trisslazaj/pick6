@@ -78,29 +78,37 @@ half the rooms had taken him by then.
 The width comes from the measured standard deviation of his real draft slot (for a logistic
 distribution $\mathrm{stdev} = \sigma \pi / \sqrt{3}$):
 
-$$\sigma = \frac{\sqrt{3}}{\pi}\,\mathrm{stdev} \approx \frac{\mathrm{stdev}}{1.8138},
+$$\sigma = \frac{\sqrt{3}}{\pi}\thinspace\mathrm{stdev} \approx \frac{\mathrm{stdev}}{1.8138},
 \qquad \sigma \ \text{clamped to} \ [0.5,\ 25]$$
 
 So a locked-in star (stdev ≈ 1) gets a near-step-function — one pick past his ADP and he is
 simply gone — while a volatile flier (stdev ≈ 40) gets a nearly flat curve: stop panicking, he
 keeps.
 
-**Your room, not the market.** ADP is a thousand strangers; your league is twelve people who
-draft the same way every year. Measured over three of their completed drafts, this room takes
-its first quarterback at pick 23.0 and its first tight end at 23.3, against 26.1 and 39.5
-nationally. So at the top of each position — where that appetite actually lives — the curve is
-centred on a blend of the two prices instead:
+**Your room, not the market.** ADP is a thousand strangers; a home league is a dozen people who
+already know what each other do. Measured over three completed drafts from this user's leagues,
+they take the first quarterback at pick 23.0 and the first tight end at 23.3, against 26.1 and
+39.5 nationally. So at the top of each position — where that appetite actually lives — the curve
+is centred on a blend of the two prices instead:
 
-$$\mathrm{adp}_{\text{eff}} = w \cdot \mathrm{adp}_{\text{room}}(P, k) + (1 - w) \cdot \mathrm{adp},
+$$\mathrm{adp_{eff}} = w \cdot \mathrm{adp_{room}}(P, k) + (1 - w) \cdot \mathrm{adp},
 \qquad w = \frac{n}{n + 2}$$
 
-where $\mathrm{adp}_{\text{room}}(P, k)$ is the mean pick at which this league took the $k$-th
-player at position $P$, over the $n$ drafts that ever got that deep. Only the first five at each
-position are repriced: a national ranked list runs far deeper than any finite draft, so past the
-room's appetite that curve is later than ADP about everyone and backtests worse. Restricted to
-the top five it wins — Brier 0.0670 → 0.0660, log-loss 0.2250 → 0.2222, and no position
-regresses at the four decimals the backtest prints — but that is one fold of two drafts, which
-is thin. `-room=false` prices the whole board on the market's numbers.
+where $\mathrm{adp_{room}}(P, k)$ is the mean pick at which those drafts took the $k$-th player
+at position $P$, over the $n$ of them that ever got that deep. Every player the curve reaches is
+repriced.
+
+**And this is the shakiest thing in the tool, so it says so.** Those three drafts are three
+*different* leagues — 9, 5 and 6 shared managers out of 12 — so the curve is a portrait of
+casual home leagues, not of one room. It used to reprice only the first five at each position,
+on the theory that a ranked list runs deeper than any finite draft and the tail is therefore
+junk. That cutoff won cleanly on the first backtest fold and then lost on both folds that
+arrived later — on both metrics, on the per-position gate, and at a common board size — so it
+was removed. Worse, the fold that chose it had a curve built entirely from drafts that happened
+a year *after* it, which no live board could ever have; holding out each fold's future leaves
+that fold with no curve at all. So the argument for a cap is still readable and the measurement
+never backed it. `pick6 calibrate` re-derives all of this on every run, and `-room=false` prices
+the whole board on the market's numbers.
 
 One honesty adjustment: a player who's on the board *right now* can only be taken by the picks
 between now and your turn. So the number shown is survival **conditioned on the present**:
@@ -115,12 +123,12 @@ flatten; see `internal/engine/urgency.go`.)
 
 One correction on top of that. Exactly $N$ players come off the board before your turn — that's
 what a draft is — but treating every survival as independent "expects" $\sum_j (1 - p_j)$ of them
-to go, and that sum is measurably not $N$. Backtested against a real draft, the model was
-pessimistic across the board. So raise every probability to the single power that reconciles
+to go, and that sum is measurably not $N$. Backtested against three real drafts, the model was
+pessimistic on all of them. So raise every probability to the single power that reconciles
 them:
 
-$$\text{find } c > 0 \ \text{ with } \ \sum_j \big(1 - p_j^{\,c}\big) = N,
-\qquad \tilde p_j = p_j^{\,c}$$
+$$\text{find } c \gt 0 \ \text{ with } \ \sum_j \big(1 - p_j^{\thinspace c}\big) = N,
+\qquad \tilde p_j = p_j^{\thinspace c}$$
 
 It's the gentlest fix there is: $\ln p$ is a player's hazard over those picks, so $p^c$ scales
 everyone's hazard by the same factor. Certainties stay certain ($1^c = 1$), nobody overtakes
@@ -130,7 +138,7 @@ anybody, and $\tilde p$ is what every number on screen means.
 is still there at your next pick. Line the position up best-first — the best survivor is #1 if he
 survives, #2 only if #1 is gone *and* #2 survives, and so on:
 
-$$\mathbb{E}[\text{best later}] = \sum_j v_j\, \tilde p_j \prod_{i<j} \big(1 - \tilde p_i\big)$$
+$$\mathbb{E}[\text{best later}] = \sum_j v_j\thinspace \tilde p_j \prod_{i \lt j} \big(1 - \tilde p_i\big)$$
 
 $$\text{urgency} = \Big( v(\text{bestNow}) - \mathbb{E}[\text{best later}] \Big) \times \text{need}$$
 
@@ -144,7 +152,7 @@ likely than not to still be sitting there.
 **Counting.** Tiers come from human rankings; where no file covers, they're derived by breaking
 the value curve wherever it genuinely drops:
 
-$$\frac{v_{i-1} - v_i}{v_{i-1}} > 0.10
+$$\frac{v_{i-1} - v_i}{v_{i-1}} \gt 0.10
 \quad\text{and}\quad
 v_{i-1} - v_i \ \ge\ 0.015 \cdot v_{\max}$$
 
@@ -161,6 +169,12 @@ $$\frac{\text{pickNo} - \mathrm{adp}}{\sigma} \ \ge\ 1,$$
 
 is *falling*: the draft moved past his price and he's still here. His numbers turn amber.
 That's a discount.
+
+The long version is [`docs/pick6-engine.tex`](docs/pick6-engine.tex) — every formula above
+derived from its definition, the calibration methodology and the measured backtest results,
+and the ideas that were tried and didn't work. It's written for someone who likes math but
+hasn't formally studied it, so every symbol gets introduced before it's used; `make paper`
+builds the PDF.
 
 ## data sources
 

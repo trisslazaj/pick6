@@ -828,7 +828,7 @@ func scoutPrintShare(base scoutBaseline) {
 // where the warp failed its gate — which at full depth it did (brier 0.0670 ->
 // 0.0671, log-loss 0.2250 -> 0.2327 cross-validated on the 2024 draft; those are
 // the numbers `pick6 calibrate` prints today, and every other citation in the
-// tree quotes the same pair). The board prices only the top adp.RoomWarpTopK at
+// tree quotes the same pair). The board prices only the top adp.RoomGapTopK at
 // each position, so most of what this table shows is still a read for the human
 // and nothing else. It prints every depth on purpose: knowing where the room's
 // opinion runs out is the same information as knowing where it is worth pricing.
@@ -871,7 +871,7 @@ func scoutPrintRoom(drafts map[string]adp.RoomDraft, teamsOf map[string]int, tea
 	}
 	fmt.Printf("  mean over %d drafts of where the k-th player at the position went, monotonized.\n", curve.Drafts)
 	fmt.Printf("  survival blends the first %d of each position toward these numbers; deeper k are a\n",
-		adp.RoomWarpTopK)
+		adp.RoomGapTopK)
 	fmt.Println("  read only. `pick6 fetch` prints the same curve against market adp, and")
 	fmt.Println("  `pick6 calibrate` prints the gate that drew the line where it is.")
 }
