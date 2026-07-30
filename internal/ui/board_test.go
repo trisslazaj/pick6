@@ -826,3 +826,89 @@ func TestEndgameLineNamesTheStartersSuppressionIsHiding(t *testing.T) {
 		t.Errorf("no short endgame line at 80 columns\n%s", narrow)
 	}
 }
+
+// The board tab must never render taller than the terminal. bubbletea clips
+// from the top, so an overshoot costs the header and the alert banner — during
+// a run, at 24 rows, which is exactly when someone is looking. This was broken
+// for the whole of milestones 2-4: only the data tab had height coverage, and
+// late in a draft the sidebar alone (nine lineup slots, six bench, the insight
+// lines and a ticker) ran to 36 rows in a 24-row terminal.
+//
+// Deep in the draft is the case that matters, so this walks a real 180-pick
+// draft rather than rendering pick 1.
+func TestBoardTabNeverExceedsTerminalHeight(t *testing.T) {
+	cases := []struct{ picks, w, h int }{
+		{0, 80, 24}, {0, 104, 24}, {0, 92, 30},
+		{40, 80, 24}, {40, 100, 30}, {40, 140, 40},
+		{120, 80, 24}, {120, 96, 30}, {120, 104, 40},
+		{170, 80, 24}, {170, 96, 24}, {170, 104, 30}, {170, 140, 50},
+		{179, 92, 24}, {179, 92, 30},
+	}
+	for _, c := range cases {
+		s := testState()
+		for i := 0; i < c.picks && !s.Done(); i++ {
+			id, ok := firstAvailable(s)
+			if !ok {
+				break
+			}
+			s.Draft(id)
+		}
+		b := Board{State: s, Width: c.w, Height: c.h}
+		view := ansi.ReplaceAllString(b.View(), "")
+		if got := rowCount(view); got > c.h {
+			t.Errorf("%d picks in at %dx%d: frame is %d rows, exceeds the terminal:\n%s",
+				c.picks, c.w, c.h, got, view)
+		}
+	}
+}
+
+// Reserve is what live mode charges for the sticky lines it draws below the
+// board. A frame that fits exactly must still fit once those rows are promised,
+// or a stale-adp warning pushes the header off the top for the whole draft.
+func TestBoardTabHonoursReserve(t *testing.T) {
+	for _, reserve := range []int{1, 2, 3} {
+		s := testState()
+		for i := 0; i < 170 && !s.Done(); i++ {
+			id, ok := firstAvailable(s)
+			if !ok {
+				break
+			}
+			s.Draft(id)
+		}
+		b := Board{State: s, Width: 96, Height: 30, Reserve: reserve}
+		view := ansi.ReplaceAllString(b.View(), "")
+		if got := rowCount(view); got > 30-reserve {
+			t.Errorf("reserve %d: frame is %d rows, leaves no room for the caller's lines",
+				reserve, got)
+		}
+	}
+}
+
+// The lineup and the insight lines are the sidebar's reason to exist, so a
+// tight terminal collapses the bench to a count rather than dropping either.
+func TestTightSidebarKeepsTheLineupAndCollapsesTheBench(t *testing.T) {
+	s := testState()
+	for i := 0; i < 170 && !s.Done(); i++ {
+		id, ok := firstAvailable(s)
+		if !ok {
+			break
+		}
+		s.Draft(id)
+	}
+	b := Board{State: s, Width: 96, Height: 24}
+	view := ansi.ReplaceAllString(b.View(), "")
+
+	if !strings.Contains(view, "more on the bench") {
+		t.Errorf("a 24-row terminal should collapse the bench to a count, got:\n%s", view)
+	}
+	// Every lineup slot label must survive, or the pane you look at most is lying
+	// about your team.
+	for _, slot := range s.Roster.Slots {
+		if !strings.Contains(view, strings.ToLower(slot)) {
+			t.Errorf("lineup slot %q was cut from a tight frame:\n%s", slot, view)
+		}
+	}
+	if !strings.Contains(view, "need ") {
+		t.Errorf("the need line was cut from a tight frame:\n%s", view)
+	}
+}

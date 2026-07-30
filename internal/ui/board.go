@@ -108,13 +108,30 @@ func (b Board) View() string {
 		)
 	}
 
-	block := strings.Join([]string{
-		b.header(content),
-		b.banner(content), // "" when nothing is active; filtered below
-		body,
-		b.footer(content),
-	}, "\n")
-	block = strings.ReplaceAll(block, "\n\n\n", "\n\n")
+	head, banner, foot := b.header(content), b.banner(content), b.footer(content)
+	assemble := func(body string) string {
+		block := strings.Join([]string{head, banner, body, foot}, "\n")
+		// An absent banner still contributes its separator, and a body that opens
+		// on a blank line then collapses it again — so the chrome is 4 rows or 5
+		// depending on state, which is why the clamp below measures instead of
+		// subtracting a constant.
+		return strings.ReplaceAll(block, "\n\n\n", "\n\n")
+	}
+	block := assemble(body)
+
+	// Never render taller than the terminal. bubbletea clips from the TOP, so an
+	// overshoot costs the header and the alert banner — during a run, which is
+	// the exact moment someone is looking. depth() and tickerRows() both budget
+	// by arithmetic that overshoots (a full nine-slot lineup, six bench and a
+	// ticker genuinely do not fit 24 rows late in a draft), so this measures the
+	// assembled frame and takes the difference off the bottom of the body, where
+	// it costs the oldest ticker rows and the least urgent group. The data tab
+	// sizes itself off visibleDataRows and has always fit.
+	if b.Tab != 1 && b.Height > 0 {
+		if over := rowCount(block) + b.Reserve - b.Height; over > 0 {
+			block = assemble(clampRows(body, rowCount(body)-over))
+		}
+	}
 
 	// Centre the board when the terminal is wider than it needs to be, rather
 	// than letting the panes drift to opposite edges.
@@ -122,6 +139,37 @@ func (b Board) View() string {
 		block = lipgloss.NewStyle().MarginLeft(pad).Render(block)
 	}
 	return block
+}
+
+// bodyRows is the sidebar's row budget: the terminal less the chrome it cannot
+// have. Approximate on purpose — it decides how much bench to show, and the
+// clamp in View is what actually guarantees the frame fits.
+func (b Board) bodyRows() int {
+	if b.Height <= 0 {
+		return 1 << 30 // unset height means "don't budget", as in snapshot tests
+	}
+	if n := b.Height - 5 - b.Reserve; n > 1 {
+		return n
+	}
+	return 1
+}
+
+// rowCount is visible rows: a trailing newline is a terminator, not a row.
+func rowCount(s string) int {
+	return len(strings.Split(strings.TrimSuffix(s, "\n"), "\n"))
+}
+
+// clampRows drops trailing rows past n. It never pads: a short frame should
+// stay short rather than pushing the footer to the bottom of the terminal.
+func clampRows(s string, n int) string {
+	if n < 1 {
+		n = 1
+	}
+	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	if len(lines) <= n {
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(lines[:n], "\n")
 }
 
 // divider is the vertical rule between the panes.
@@ -687,10 +735,21 @@ func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
 // ---- right pane: roster + ticker ----
 
 func (b Board) sidebar(w int) string {
+	// Spend the rows in priority order. The lineup is the sidebar's reason to
+	// exist and the insight lines are the "so what" under it, so neither is ever
+	// cut; the bench collapses to a count first, and the ticker takes whatever
+	// the body clamp still has to remove. Late in a draft a full nine-slot
+	// lineup plus six bench plus a ticker genuinely does not fit 24 rows, and
+	// bench depth is the least useful thing on screen at that moment — you know
+	// who you drafted.
+	insight := b.insight()
+	fixed := 1 + len(b.State.Roster.Slots) + strings.Count(insight, "\n") + 2
+	benchCap := b.bodyRows() - fixed - MinTickerN
+
 	var sb strings.Builder
 	sb.WriteString(sectionHead("your roster", w-2) + "\n")
-	sb.WriteString(b.roster(w))
-	sb.WriteString(b.insight())
+	sb.WriteString(b.roster(w, benchCap))
+	sb.WriteString(insight)
 	sb.WriteString("\n" + sectionHead("recent picks", w-2) + "\n")
 	sb.WriteString(b.ticker(w))
 	return sb.String()
@@ -749,7 +808,7 @@ func (b Board) insight() string {
 	return sb.String()
 }
 
-func (b Board) roster(w int) string {
+func (b Board) roster(w, benchCap int) string {
 	s := b.State
 	filled, bench := s.FilledSlots(s.MySlot)
 
@@ -778,11 +837,25 @@ func (b Board) roster(w int) string {
 		sb.WriteString(fmt.Sprintf("  %s %s%s\n", label,
 			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), nameW)), byeNote))
 	}
-	for i, id := range bench {
+	// A negative cap means the sidebar has no room for the bench at all, but the
+	// count line still earns its row: "six on the bench" is the difference
+	// between a full roster and a rendering fault.
+	shown := len(bench)
+	if benchCap < shown {
+		shown = benchCap
+	}
+	if shown < 0 {
+		shown = 0
+	}
+	for i, id := range bench[:shown] {
 		p := s.Players[id]
 		sb.WriteString(fmt.Sprintf("  %s %s\n",
 			Dim.Render(fmt.Sprintf("bn%-3d", i+1)),
 			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), nameW))))
+	}
+	if hidden := len(bench) - shown; hidden > 0 {
+		sb.WriteString(fmt.Sprintf("  %s\n",
+			Dim.Render(fmt.Sprintf("+%d more on the bench", hidden))))
 	}
 	return sb.String()
 }
