@@ -355,3 +355,64 @@ func TestSmallButUntouchedTierIsNotACliff(t *testing.T) {
 		t.Errorf("after depletion got %v (n=%d), want none/1 — nobody is taking him", level, n)
 	}
 }
+
+// K and DEF are tier 0 permanently, by design, with a full board of players on
+// it. TierBroke used to be inferred from "Cliff returned tier 0", which is true
+// of them at every pick of every draft, so a def run in round 13 reported the
+// tier broken with eight defenses still available — and the ui turns TierBroke
+// into "no value left", printed directly above the def group it had just sorted
+// to the top of the pane. Exhausted and untiered are different states.
+func TestUntieredRunDoesNotReportABrokenTier(t *testing.T) {
+	players := map[string]Player{}
+	for k, v := range board("DEF", 0, 8, 0) {
+		players[k] = v
+	}
+	for k, v := range board("RB", 1, 8, 100) {
+		players[k] = v
+	}
+	s := New(players, 12, 15, 1)
+	for i := 0; i < 4; i++ {
+		s.Draft(fmt.Sprintf("DEF%d", i))
+	}
+	run, ok := s.DetectRun()
+	if !ok || run.Pos != "DEF" {
+		t.Fatalf("expected a def run, got %+v ok=%v", run, ok)
+	}
+	if run.TierBroke {
+		t.Error("4 defenses still available; the run must not claim the tier broke")
+	}
+	if run.Tier != 0 {
+		t.Errorf("def carries no tier, got %d", run.Tier)
+	}
+
+	// ...and a position with nobody left still does report it.
+	for i := 4; i < 8; i++ {
+		s.Draft(fmt.Sprintf("DEF%d", i))
+	}
+	if run, _ := s.DetectRun(); !run.TierBroke {
+		t.Error("every defense is gone; that is what TierBroke means")
+	}
+}
+
+// TierHold prices to my next chance to act, which ON THE CLOCK is the pick after
+// this one — every survival is 1 across zero intervening picks, so the alarm
+// would go silent on the frame where I am choosing. The horizon is therefore not
+// the one PSurviveTilted uses, and the copy has to be able to name it or the
+// board prints "holds 3%" above three men reading 100% with nothing to
+// distinguish them.
+func TestTierHoldPickNamesItsOwnHorizon(t *testing.T) {
+	s := New(board("RB", 1, 8, 100), 12, 15, 3)
+
+	s.PickNo = 1 // slot 3 picks at 3: off the clock
+	if got, want := s.TierHoldPick(), s.NextPick(); got != want {
+		t.Errorf("off the clock the horizon is my next pick: got %d, want %d", got, want)
+	}
+
+	s.PickNo = 3 // on the clock
+	if got, want := s.TierHoldPick(), s.FollowingPick(); got != want {
+		t.Errorf("on the clock the horizon is the pick after: got %d, want %d", got, want)
+	}
+	if s.TierHoldPick() == s.NextPick() {
+		t.Error("on the clock the two horizons must differ, or nothing needs labelling")
+	}
+}

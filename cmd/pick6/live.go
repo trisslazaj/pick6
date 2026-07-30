@@ -68,7 +68,10 @@ func runLive(args []string) error {
 
 	fmt.Printf("draft %s — %d teams, %d rounds, %s\n",
 		draftID, draft.Settings.Teams, draft.Settings.Rounds, draft.Status)
-	fmt.Printf("your slot: %d   lineup: %v\n", mySlot, s.Roster.Slots)
+	// Lowercase like everything else the tool prints; team codes are the only
+	// uppercase text anywhere, and a slot name is not one.
+	fmt.Printf("your slot: %d   lineup: %s\n", mySlot,
+		strings.ToLower(strings.Join(s.Roster.Slots, " ")))
 
 	feed := sleeper.NewFeed(draftID)
 	interval := *poll

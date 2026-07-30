@@ -113,9 +113,15 @@ func (m *Model) step() {
 	m.board.Status = ""
 }
 
+// View returns the frame with NO trailing newline. bubbletea splits the view on
+// "\n" and drops lines from the TOP when the result is taller than the terminal,
+// and a trailing newline is an extra (empty) element — so a board that fills
+// Height exactly, which is what the clamp in Board.View now guarantees, came out
+// one element over and cost the header row. Measured: at height 24 the frame
+// split into 25 and "round 4  pick 4.05 … 5 picks until yours" was never drawn.
 func (m Model) View() string {
 	if m.quit {
 		return ""
 	}
-	return m.board.View() + "\n"
+	return m.board.View()
 }

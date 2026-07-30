@@ -441,3 +441,30 @@ func lastLine(view string) string {
 	}
 	return ""
 }
+
+// The tripwire's suppression gate asks the k/def rule, not Need.
+//
+// It used to ask Need == 0 on the premise that only k and def ever read zero.
+// The endgame guard broke that premise: once my remaining picks equal my open
+// starting slots, Need drops to zero for every bench-weight skill position too.
+// The board tab hides those groups, but the data tab still lists their players —
+// so the chip, and the legend line that follows it, vanished from rows that were
+// still on screen and still past every observed draft's worst price.
+func TestTripwireSurvivesTheEndgameGuard(t *testing.T) {
+	// Round 15 of 15, slot 3: pick 171 is my last, so R is 1. Every slot but K is
+	// filled, so U is 1 too — the R == U regime, where a bench pick is worth
+	// nothing and needFrom's bench weight gets multiplied to zero. Both receiver
+	// slots and the flex are taken, so wr is squarely a bench position here.
+	s := endgameBoard(171, []string{"QB", "RB", "RB", "WR", "WR", "TE", "RB", "DEF"})
+	id := "trip"
+	s.Players[id] = engine.Player{ID: id, Name: "fake tripper", Pos: "WR",
+		Team: "AAA", Value: 1, ADP: 60, Sigma: 6, Low: 90}
+	b := Board{State: s, Width: 92, Height: 40, Now: pinnedNow}
+
+	if s.Need("WR") != 0 {
+		t.Fatalf("fixture no longer exercises the guard: need(wr) = %v", s.Need("WR"))
+	}
+	if !b.tripwire(s.Players[id]) {
+		t.Error("a wr 81 picks past his worst observed price must still trip")
+	}
+}

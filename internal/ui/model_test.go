@@ -222,3 +222,33 @@ func TestTallerTerminalShowsMorePlayers(t *testing.T) {
 		t.Errorf("tall terminal showed %d players, short showed %d; expected more", tall, short)
 	}
 }
+
+// What bubbletea actually receives, not what Board.View returns. The renderer
+// splits the view on "\n" and, when the result has more elements than the
+// terminal has rows, keeps only the LAST height of them — so a trailing newline
+// is an extra element and it costs the first row: round, overall pick, who is on
+// the clock, and how many picks until yours. Both models appended one, and the
+// height clamp added in this milestone is exactly what made it bite, by filling
+// Height to the row instead of coming in under it.
+//
+// The existing height tests all assert on Board{...}.View() directly, which is
+// correct and cannot see this. This goes through the models.
+func TestModelViewFitsTheTerminalExactly(t *testing.T) {
+	for _, h := range []int{20, 24, 28, 30, 32, 40, 50} {
+		m := NewModel(testState(), firstAvailable, false)
+		m = send(m, tea.WindowSizeMsg{Width: 92, Height: h})
+		for i := 0; i < 120; i++ {
+			m.step()
+		}
+		if got := len(strings.Split(m.View(), "\n")); got > h {
+			t.Errorf("mock model at height %d hands bubbletea %d lines; the header is clipped", h, got)
+		}
+
+		lm := liveModel(testState(), &fakeFeed{})
+		lm.board.Width, lm.board.Height = 92, h
+		lm.complete = true
+		if got := len(strings.Split(lm.View(), "\n")); got > h {
+			t.Errorf("live model at height %d hands bubbletea %d lines; the header is clipped", h, got)
+		}
+	}
+}

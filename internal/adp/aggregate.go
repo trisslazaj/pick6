@@ -215,9 +215,21 @@ func Blend(stdev, prior float64, drafts int, pseudo float64) float64 {
 // source's raw number so the data tab still reports what FFC said; sigma is
 // therefore no longer exactly stdev/SigmaFromStdev, and that gap is the shrink.
 func ShrinkSigma(players map[string]*Player) StdevPrior {
+	// Ids are sorted before the fit so the sums accumulate in a fixed order and
+	// two runs over the same cache write the same digits — the discipline
+	// RoomCurveOf and PositionDemand already state. Ranging the map directly made
+	// every Sigma in players.json differ in the last ulps run to run: no
+	// behavioural effect at 1e-15, and no way to diff two fetches either.
+	ids := make([]string, 0, len(players))
+	for id := range players {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
 	adps := make([]float64, 0, len(players))
 	stdevs := make([]float64, 0, len(players))
-	for _, p := range players {
+	for _, id := range ids {
+		p := players[id]
 		if p.Stdev > 0 && p.ADP > 0 {
 			adps = append(adps, p.ADP)
 			stdevs = append(stdevs, p.Stdev)

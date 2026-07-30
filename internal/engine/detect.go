@@ -33,12 +33,7 @@ func (s *State) TierHold(pos string) (float64, bool) {
 	if !ok || best.Tier == 0 {
 		return 0, false
 	}
-	at := s.NextPick()
-	if at <= s.PickNo {
-		if q2 := s.FollowingPick(); q2 > 0 {
-			at = q2
-		}
-	}
+	at := s.TierHoldPick()
 	c := s.survivalTilt(at, s.opponentPicksBefore(at))
 	allGone := 1.0
 	for id, p := range s.Players {
@@ -48,6 +43,22 @@ func (s *State) TierHold(pos string) (float64, bool) {
 		allGone *= 1 - math.Pow(s.PSurviveAt(p, at), c)
 	}
 	return 1 - allGone, true
+}
+
+// TierHoldPick is the pick TierHold prices to, exported because the copy has to
+// name it. Off the clock it is NextPick — the same horizon PSurviveTilted uses,
+// so the header and the survival column below it agree and nothing needs saying.
+// On the clock they diverge by design (see TierHold), and a hold of 3% printed
+// directly above three survival cells reading 100% is two horizons one line
+// apart with nothing marking which is which. Naming the pick is what marks it.
+func (s *State) TierHoldPick() int {
+	at := s.NextPick()
+	if at <= s.PickNo {
+		if q2 := s.FollowingPick(); q2 > 0 {
+			at = q2
+		}
+	}
+	return at
 }
 
 // Cliff reports the tier state of the best available player at a position.
@@ -119,7 +130,13 @@ func (s *State) DetectRun() (Run, bool) {
 	r := Run{Pos: best, Count: bestN}
 	if _, tier, remaining := s.Cliff(best); tier != 0 {
 		r.Tier, r.TierLeft = tier, remaining
-	} else {
+	} else if _, ok := s.BestNow(best); !ok {
+		// Tier 0 has two causes and only one of them is "no value left". A
+		// position with nobody available is genuinely exhausted; K and DEF are
+		// tier 0 permanently, by design, with a full board of players still on
+		// it. Inferring TierBroke from the tier alone put "def run — tier broke,
+		// no value left." above an accent-bordered def group listing eight
+		// defenses, on exactly the rounds this league drafts them.
 		r.TierBroke = true
 	}
 	return r, true

@@ -125,9 +125,13 @@ func (b Board) View() string {
 	// by arithmetic that overshoots (a full nine-slot lineup, six bench and a
 	// ticker genuinely do not fit 24 rows late in a draft), so this measures the
 	// assembled frame and takes the difference off the bottom of the body, where
-	// it costs the oldest ticker rows and the least urgent group. The data tab
-	// sizes itself off visibleDataRows and has always fit.
-	if b.Tab != 1 && b.Height > 0 {
+	// it costs the oldest ticker rows and the least urgent group.
+	//
+	// The data tab is clamped too. visibleDataRows budgets for the chrome but
+	// floors at 8 rows, so it cannot shrink past that: at height 20 with live
+	// mode drawing a two-line trailer the pane came out one row over, and at 18
+	// three over, which costs the header the same way.
+	if b.Height > 0 {
 		if over := rowCount(block) + b.Reserve - b.Height; over > 0 {
 			block = assemble(clampRows(body, rowCount(body)-over))
 		}
@@ -331,7 +335,7 @@ func (b Board) banner(w int) string {
 		}
 		hold, _ := s.TierHold(pos)
 		if u := s.Urgency(pos); worst == nil || u > worstU {
-			worst = &c{pos, cliffMsg(strings.ToLower(pos), tier, remaining, hold)}
+			worst = &c{pos, cliffMsg(strings.ToLower(pos), tier, remaining, b.holdNote(hold), w)}
 			worstU = u
 		}
 	}
@@ -351,17 +355,49 @@ const CliffLastLevel = engine.CliffLast
 // fires with three men left when all three are contested. Calling three players
 // "last one" would be flatly untrue, so that wording is kept for the case that
 // earns it and the probabilistic case says what it actually knows.
-func cliffMsg(pos string, tier, remaining int, hold float64) string {
+//
+// The imperative is dropped rather than truncated when the row can't hold it —
+// the long-form-then-short rule the footer, the group header and the endgame
+// line all follow. Naming the horizon costs eight cells and at 80 columns the
+// banner had about two to spare, so it is the tail that gives.
+func cliffMsg(pos string, tier, remaining int, hold string, w int) string {
+	head := fmt.Sprintf("%s tier %d unlikely to hold — %s.", pos, tier, hold)
+	tail := " take one or lose the tier."
 	if remaining == 1 {
-		return fmt.Sprintf("%s tier %d — last one. take him or lose the tier.", pos, tier)
+		head = fmt.Sprintf("%s tier %d — last one.", pos, tier)
+		tail = " take him or lose the tier."
 	}
-	return fmt.Sprintf("%s tier %d unlikely to hold — holds %s. take one or lose the tier.",
-		pos, tier, pct(hold))
+	if barFits("cliff", head+tail, w) {
+		return head + tail
+	}
+	return head
+}
+
+// barFits reports whether a banner body survives bar's truncation at this width.
+func barFits(tag, msg string, w int) bool {
+	return len([]rune(fmt.Sprintf(" %s  %s ", tag, msg))) <= w-4
 }
 
 // pct renders a probability the way every other number on the board is
 // rendered: whole percent, no decimals, nothing to read past.
 func pct(p float64) string { return fmt.Sprintf("%.0f%%", 100*p) }
+
+// holdNote is a tier's hold probability, with the pick it is measured to named
+// only when that pick is not the one the survival column beside it uses.
+//
+// Off the clock the two horizons are the same and the extra words are noise. On
+// the clock they are not: survival is priced to my next pick, which IS this one,
+// so every cell reads 100%, while the tier's hold is priced to the pick after —
+// the one passing actually costs me. Both numbers are right for their own
+// horizon and neither said which, which is how "holds 3%" ended up printed
+// directly above three men each reading 100%.
+func (b Board) holdNote(hold float64) string {
+	at := b.State.TierHoldPick()
+	if at == b.State.NextPick() {
+		return "holds " + pct(hold)
+	}
+	return fmt.Sprintf("holds %s to %s", pct(hold), b.pickLabel(at))
+}
 
 func (b Board) runBanner(run engine.Run, w int) string {
 	pos := strings.ToLower(run.Pos)
@@ -372,6 +408,14 @@ func (b Board) runBanner(run engine.Run, w int) string {
 			msg += fmt.Sprintf(" best value now: %s.", alt)
 		}
 		return bar(w, ColCliff, "run", msg)
+	}
+	// K and DEF carry no value from any source, so they carry no tier, so a run
+	// on them has no tier state to report — no count, no hold probability, and
+	// nothing that could break. The run itself is the whole message, and amber
+	// rather than red: the room is moving, it is not costing you a tier.
+	if run.Tier == 0 {
+		return bar(w, ColRun, "run", fmt.Sprintf("%s run — %d of the last %d picks.",
+			pos, run.Count, engine.RunWindow))
 	}
 	// The count is the run's evidence. Whether it costs you anything is the
 	// tier's hold probability, and "act now or lose it" is a claim about that
@@ -388,7 +432,7 @@ func (b Board) runBanner(run engine.Run, w int) string {
 		// much as a copy choice: the alarm wording plus a percentage overruns
 		// the banner's single row and truncates. When the alarm fires the group
 		// header below is carrying the same number anyway.
-		msg += fmt.Sprintf(", holds %s.", pct(hold))
+		msg += ", " + b.holdNote(hold) + "."
 	} else {
 		msg += ". act now or lose it."
 	}
@@ -616,6 +660,7 @@ func (b Board) tierLabel(pos string) (long, short string, style lipgloss.Style) 
 		return "untiered", "untiered", Dim
 	}
 	hold, _ := s.TierHold(pos) // cannot fail once Cliff found a tiered player
+	note := b.holdNote(hold)
 	switch {
 	case level == engine.CliffLast && remaining == 1:
 		// A count claim, and still a true one — keep the wording that says it.
@@ -623,13 +668,13 @@ func (b Board) tierLabel(pos string) (long, short string, style lipgloss.Style) 
 		return short, short, Cliff.Bold(true)
 	case level == engine.CliffLast:
 		short = fmt.Sprintf("tier %d unlikely to hold", tier)
-		return short + " — holds " + pct(hold), short, Cliff.Bold(true)
+		return short + " — " + note, short, Cliff.Bold(true)
 	case level == engine.CliffWarning:
 		short = fmt.Sprintf("%d left in tier %d — ending", remaining, tier)
-		return short + " · holds " + pct(hold), short, Run
+		return short + " · " + note, short, Run
 	default:
 		short = fmt.Sprintf("%d left in tier %d", remaining, tier)
-		return short + " · holds " + pct(hold), short, Dim
+		return short + " · " + note, short, Dim
 	}
 }
 

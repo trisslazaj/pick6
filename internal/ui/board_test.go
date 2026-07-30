@@ -912,3 +912,63 @@ func TestTightSidebarKeepsTheLineupAndCollapsesTheBench(t *testing.T) {
 		t.Errorf("the need line was cut from a tight frame:\n%s", view)
 	}
 }
+
+// K and DEF carry no value from any source, so they carry no tier — and the
+// banner used to read that as the tier having BROKEN, which is the one wording
+// that claims a position is finished. On the shipped board it printed "def run —
+// tier broke, no value left." in round 13 with eight defenses available, sitting
+// directly above the accent-bordered def group listing them, on exactly the
+// rounds this league drafts defenses.
+//
+// A six-team board so the run window is reachable in five picks, and round 13 so
+// the k/def suppression is off and the group is on screen to contradict.
+func TestUntieredRunBannerDoesNotClaimTheValueIsGone(t *testing.T) {
+	players, add := newBoard()
+	for i := 1; i <= 10; i++ {
+		add(fmt.Sprintf("d%d", i), "DEF", 200-i, float64(70+i), 8, 0)
+	}
+	add("r1", "RB", 100, 60, 8, 1)
+	add("r2", "RB", 96, 62, 8, 1)
+	add("w1", "WR", 90, 61, 8, 1)
+	s := engine.New(players, 6, 15, 5)
+	s.PickNo = 73 // round 13 of 15: k and def are out of suppression
+	for i := 1; i <= 4; i++ {
+		s.Draft(fmt.Sprintf("d%d", i))
+	}
+	view := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
+
+	if !strings.Contains(view, "def run — 4 of the last 6 picks") {
+		t.Errorf("expected a plain def run banner, got:\n%s", view)
+	}
+	if strings.Contains(view, "no value left") {
+		t.Errorf("six defenses are still available; the banner must not say the value is gone:\n%s", view)
+	}
+	if !strings.Contains(view, "def  untiered") {
+		t.Fatalf("fixture proves nothing unless the def group is on screen:\n%s", view)
+	}
+}
+
+// On the clock, tier-hold is priced to the pick AFTER this one (passing is the
+// decision being priced) while the survival column beside it is priced to this
+// pick, where nothing intervenes and everyone reads 100%. Both are right for
+// their own horizon; neither said which, so the board printed "holds 3%" above
+// three men each reading 100%. Naming the pick is what separates them, and it
+// appears only when the two horizons differ — off the clock it would be noise.
+func TestHoldClauseNamesItsHorizonOnlyOnTheClock(t *testing.T) {
+	s := cliffState()
+	s.PickNo = s.MyPick(2) // 2.10 from slot 3: on the clock, next chance is 3.03
+	view := ansi.ReplaceAllString(Board{State: s, Width: 100, Height: 40}.View(), "")
+	if head := groupLine(view, "wr"); !strings.Contains(head, "% to 3.03") {
+		t.Errorf("on the clock the hold must name the pick it is measured to, got %q", head)
+	}
+
+	s2 := cliffState() // pick 1: my next pick is the horizon and needs no label
+	view2 := ansi.ReplaceAllString(Board{State: s2, Width: 100, Height: 40}.View(), "")
+	head := groupLine(view2, "wr")
+	if !strings.Contains(head, "holds ") {
+		t.Fatalf("fixture proves nothing without a hold clause, got %q", head)
+	}
+	if strings.Contains(head, "% to ") {
+		t.Errorf("off the clock the two horizons agree and the label is noise, got %q", head)
+	}
+}

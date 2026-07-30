@@ -356,24 +356,43 @@ func report(preds []pred, drafts, vantages int) {
 	// leave the shrink's contribution indistinguishable from the tilt's.
 	current := namedModel{"shrunk+tilt", shrunkTiltFn}
 
+	// What the marker is measured against. It used to be the first row — the
+	// pre-4x engine — which after this milestone is not what ships: eleven of
+	// fifteen rows beat it, the marker stopped separating anything, and the one
+	// baseline that actually beats the SHIPPED model on log-loss (flat sigma 6.0
+	// under the tilt, 0.2233 against 0.2250) read like all the others. The whole
+	// point of running this is that the fancy math doesn't get to grade itself,
+	// so it is graded against the fancy math that ships.
+	ship := scoreOf(preds, shrunkTiltFn)
+	// Compared at the precision the row prints. A win too small to show up in
+	// four decimals is a win nobody can check, and "beats what ships" next to two
+	// columns of identical digits reads as a bug in the table — which is exactly
+	// what the support-floor row does, since the floor bites on no predictions at
+	// all against the shrunk curve.
+	better := func(a, b float64) bool { return math.Round(a*1e4) < math.Round(b*1e4) }
 	fmt.Printf("\n%-34s %8s %9s %10s %10s\n", "model", "brier", "log-loss", "predicted", "d brier")
-	row := func(label string, s score) {
-		// A baseline that wins says so on its own line. The whole point of
-		// running this is that the fancy math doesn't get to grade itself — and
-		// that applies hardest to the tilt row, which is here to be gated.
-		beat, delta := "", "-"
+	line := func(label string, s score, tag string) {
+		delta := "-"
 		if s.brier != base.brier {
 			delta = fmt.Sprintf("%+.4f", s.brier-base.brier)
 		}
-		if s.brier < base.brier {
-			beat = "   <- beats the engine"
+		beat := tag
+		switch {
+		case tag != "":
+		case better(s.brier, ship.brier) && better(s.logLoss, ship.logLoss):
+			beat = "   <- beats what ships"
+		case better(s.brier, ship.brier):
+			beat = "   <- beats what ships on brier"
+		case better(s.logLoss, ship.logLoss):
+			beat = "   <- beats what ships on log-loss"
 		}
 		fmt.Printf("  %-32s %8.4f %9.4f %10.4f %10s%s\n", label, s.brier, s.logLoss, s.mean, delta, beat)
 	}
+	row := func(label string, s score) { line(label, s, "") }
 	row("engine (per-player sigma)", base)
 	row("engine + exactly-n tilt", scoreOf(preds, tiltFn))
 	row("4b: shrunk sigma", scoreOf(preds, modelShrunkSigma))
-	row("4b: shrunk sigma + tilt", scoreOf(preds, shrunkTiltFn))
+	line("4b: shrunk sigma + tilt", ship, "   <- ships")
 	row("4b: support floor", scoreOf(preds, modelSupportFloor))
 	row("4b: support floor + tilt", scoreOf(preds, floorTiltFn))
 	row("4b: shrunk + floor + tilt", scoreOf(preds, bothTiltFn))
@@ -493,7 +512,8 @@ func tiltReport(vts []vantageTilt) {
 
 	fmt.Printf("\ntilt — one exponent per vantage, solved so expected removals equal the window\n")
 	note("solve", "checked", fmt.Sprintf(
-		"local solve matches engine.PSurviveTilted to %.1e over %d players (c %.6f)", worst, players, c))
+		"local solve matches the engine's tilted survival to %.1e over %d players (c %.6f)",
+		worst, players, c))
 	note("exponent c", "solved", fmt.Sprintf(
 		"%.4f / %.4f / %.4f (min / median / max over %d vantages) · %d clamped",
 		cs[0], cs[len(cs)/2], cs[len(cs)-1], len(vts), clamped))

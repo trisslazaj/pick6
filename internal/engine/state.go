@@ -525,12 +525,22 @@ func (s *State) NeedAfter(pos, playerID string) float64 {
 	return s.needFrom(pos, filled)
 }
 
+// Suppressed reports whether the k/def hold is on: nobody needs a tool to tell
+// them to draft a kicker in round 6.
+//
+// Exported because it is not the same question as Need == 0 and callers kept
+// asking the wrong one. Need reaches zero for a skill position too once the
+// endgame guard bites, so a ui check written as "Need == 0 means k/def" started
+// silently covering half the board the moment MustFillStarters turned true.
+func (s *State) Suppressed(pos string) bool {
+	return (pos == "K" || pos == "DEF") && s.RoundsRemaining() > KDefLastRounds
+}
+
 // needFrom is the need rule itself, over an already-filled lineup. The endgame
 // slack is applied by Need, not here — see NeedAfter for why the plan wants this
 // number without it.
 func (s *State) needFrom(pos string, filled []string) float64 {
-	// Nobody needs a tool to tell them to draft a kicker in round 6.
-	if (pos == "K" || pos == "DEF") && s.RoundsRemaining() > KDefLastRounds {
+	if s.Suppressed(pos) {
 		return 0
 	}
 	for i, want := range s.Roster.Slots {

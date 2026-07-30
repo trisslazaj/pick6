@@ -147,7 +147,9 @@ func (m LiveModel) View() string {
 	for _, line := range trailer {
 		out += "\n" + line
 	}
-	return out + "\n"
+	// No trailing newline, for the same reason Model.View has none: bubbletea
+	// counts it as an extra line and clips the header to make room.
+	return out
 }
 
 // trailer is every line drawn under the board, in priority order. One slice so

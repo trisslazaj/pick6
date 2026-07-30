@@ -789,7 +789,7 @@ func scoutPrintFirst(base scoutBaseline, managers []scoutManager) {
 	fmt.Printf("  %-8s %4.0f%%\n", "-", 100*scoutRatio(base.AutoPicks, base.Picks))
 
 	fmt.Printf("  the column is the expected round of his first at the position, off a curve shrunk\n")
-	fmt.Printf("  toward the room: (count + %.0f*leagueRate) / (n + %.0f). a manager seen once keeps a\n",
+	fmt.Printf("  toward the room: (count + %.0f*league rate) / (n + %.0f). a manager seen once keeps a\n",
 		scoutShrink, scoutShrink)
 	fmt.Printf("  third of his own evidence, which is deliberate — one draft is an anecdote.\n")
 	fmt.Printf("  %d means he usually finishes the draft without one.\n", base.Rounds+1)

@@ -131,15 +131,19 @@ func (b Board) tripwire(p engine.Player) bool {
 	if p.Low <= 0 {
 		return false // no sample: nothing to be past
 	}
-	// A suppressed position gets no tripwire. Need is zero only for k and def
-	// before the last rounds, and every one of them is past his national low from
-	// about round 9 onward — the engine holds them, the mock's picker holds them
-	// and this league holds them (first def in round 11, measured). The tool is
-	// the reason they are still on the board, so chipping them would be the board
-	// raising an alarm about its own design, on six rows of the data tab, every
-	// frame. Once it is kicker o'clock and need turns on they trip like anyone
-	// else.
-	if b.State.Need(p.Pos) == 0 {
+	// A suppressed position gets no tripwire. Every k and def is past his
+	// national low from about round 9 onward — the engine holds them, the mock's
+	// picker holds them and this league holds them (first def in round 11,
+	// measured). The tool is the reason they are still on the board, so chipping
+	// them would be the board raising an alarm about its own design, on six rows
+	// of the data tab, every frame. Once it is kicker o'clock the hold lifts and
+	// they trip like anyone else.
+	//
+	// Asked of the k/def rule directly and not of Need: the endgame guard drops
+	// Need to zero for bench-weight skill positions too, so this gate used to
+	// take the chip off rb/wr/te/qb rows the data tab was still listing — the
+	// legend went with it — from the first frame where MustFillStarters is true.
+	if b.State.Suppressed(p.Pos) {
 		return false
 	}
 	return b.State.PickNo > p.Low+engine.TripwireSlack

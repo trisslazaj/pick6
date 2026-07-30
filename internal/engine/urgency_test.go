@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -451,5 +452,41 @@ func TestFalling(t *testing.T) {
 		if got := s.Falling(p); got != c.want {
 			t.Errorf("Falling(adp=%v, sigma=%v) at pick 21 = %v, want %v", c.adp, c.sigma, got, c.want)
 		}
+	}
+}
+
+// Past my last pick there is nothing to wait for. NextPick has no answer there
+// and falls back to the final pick of the draft, which is still in the FUTURE
+// for every seat but the last, so PicksUntilMine keeps counting down toward a
+// turn that never comes — and every group read "safe to wait" on the same frame
+// whose header already said "no picks left".
+func TestNothingIsSafeToWaitOnceIAmOutOfPicks(t *testing.T) {
+	// Four pads at 5% carry the removals the two backs don't, so sum(1 - p) is
+	// exactly the four intervening picks and the tilt is a no-op.
+	board := func(pickNo int) *State {
+		s := newTestState(12, 15, 3)
+		s.PickNo = pickNo
+		survivor(s, "a", "RB", 1, 100, 0.9)
+		survivor(s, "b", "RB", 1, 60, 0.9)
+		for i := 0; i < 4; i++ {
+			survivor(s, fmt.Sprintf("pad%d", i), "WR", 1, 10, 0.05)
+		}
+		return s
+	}
+	// Pick 167 from slot 3, with 171 still to come: waiting is real.
+	if s := board(167); !s.SafeToWait("RB") {
+		t.Fatal("fixture proves nothing unless rb is safe while I still have a pick")
+	}
+	// One past 171, my last: NextPick falls back to 180 and PicksUntilMine
+	// cheerfully reports 8.
+	s := board(172)
+	if len(s.MyUpcomingPicks(1)) != 0 {
+		t.Fatalf("fixture is wrong: pick %d is still mine to make", s.MyUpcomingPicks(1)[0])
+	}
+	if s.PicksUntilMine() <= 0 {
+		t.Fatal("fixture proves nothing unless PicksUntilMine still counts a phantom turn")
+	}
+	if s.SafeToWait("RB") {
+		t.Error("no picks left, so no position can be safe to wait for")
 	}
 }

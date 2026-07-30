@@ -254,13 +254,27 @@ func writeMappingStub(dir string, unmatched []string) error {
 	return os.WriteFile(path, b, 0o644)
 }
 
+// sortedByADP is the order players.json is written in, so the tie-break is not
+// cosmetic: the list comes out of a map, sort.Slice is not stable, and six
+// players share an adp with somebody on the 2026 board. Without the id the same
+// cache wrote a different file on every fetch and two runs could not be diffed.
+// Same rule Available uses — adp asc, then id.
 func sortedByADP(players map[string]*adp.Player) []*adp.Player {
 	list := make([]*adp.Player, 0, len(players))
 	for _, p := range players {
 		list = append(list, p)
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].ADP < list[j].ADP })
+	sortByADP(list)
 	return list
+}
+
+func sortByADP(list []*adp.Player) {
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].ADP != list[j].ADP {
+			return list[i].ADP < list[j].ADP
+		}
+		return list[i].SleeperID < list[j].SleeperID
+	})
 }
 
 func printPreview(players map[string]*adp.Player) {
@@ -322,9 +336,8 @@ func printInjuryFlags(players map[string]*adp.Player, flagged int) {
 			deeper = append(deeper, p)
 		}
 	}
-	byADP := func(l []*adp.Player) { sort.Slice(l, func(i, j int) bool { return l[i].ADP < l[j].ADP }) }
-	byADP(list)
-	byADP(deeper)
+	sortByADP(list)
+	sortByADP(deeper)
 
 	fmt.Printf("\ninjury flags — top %d adp (%d flagged across the whole board):\n",
 		injuryReportDepth, flagged)

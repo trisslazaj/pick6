@@ -187,21 +187,30 @@ func TestLiveRegistersUnknownPlayers(t *testing.T) {
 // since there the left pane is already pinned at MinDepth and has no row to give
 // (a 24-line terminal renders 28 rows at HEAD — the separate, pre-existing
 // overflow).
+//
+// Counted with rowCount, not strings.Count of newlines: the models used to
+// append a trailing newline, which made the two agree by accident. It is gone —
+// bubbletea counts that newline as a line and clips the header to fit — and a
+// test that measures separators instead of rows is one row too generous.
+//
+// Tab 1 at 18 and 20 is here because visibleDataRows floors at 8 and cannot
+// shrink further, so the data pane overflowed once Reserve was charged for a
+// two-line trailer: it was exempt from the clamp on the assumption it always fit.
 func TestStaleLineFitsInsideTheHeightBudget(t *testing.T) {
 	cases := []struct {
 		tab, height int
 	}{
 		{0, 30}, {0, 33}, {0, 37}, {0, 40}, {0, 41}, {0, 48}, {0, 60},
-		{1, 24}, {1, 30}, {1, 40}, {1, 60},
+		{1, 18}, {1, 20}, {1, 24}, {1, 30}, {1, 40}, {1, 60},
 	}
 	for _, c := range cases {
 		m := liveModel(testState(), &fakeFeed{})
 		m.board.Width, m.board.Height, m.board.Tab = 104, c.height, c.tab
-		base := strings.Count(m.View(), "\n")
-		stale := strings.Count(
+		base := rowCount(m.View())
+		stale := rowCount(
 			m.WithFreshness(Freshness{
 				FetchedAt: time.Now().Add(-(engine.StaleADPHours + 7) * time.Hour),
-			}).View(), "\n")
+			}).View())
 
 		if base > c.height {
 			t.Fatalf("tab %d h %d: the plain board already renders %d rows", c.tab, c.height, base)

@@ -198,6 +198,13 @@ func (s *State) SafeToWait(pos string) bool {
 	if s.PicksUntilMine() <= 0 {
 		return false
 	}
+	// Nothing is safe to wait for once I have no picks left to wait with. Past
+	// my last pick NextPick has no answer and falls back to the final pick of the
+	// draft, so PicksUntilMine keeps counting down toward a turn that is never
+	// coming — the header already asks this question and prints "no picks left".
+	if len(s.MyUpcomingPicks(1)) == 0 {
+		return false
+	}
 	now, ok := s.BestNow(pos)
 	if !ok || now.Tier == 0 {
 		return false

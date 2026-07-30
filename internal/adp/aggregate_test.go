@@ -1,6 +1,7 @@
 package adp
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -247,5 +248,39 @@ func TestDerivedTiersContinueAfterRankingsTiers(t *testing.T) {
 	}
 	if players["d"].Tier < players["c"].Tier {
 		t.Errorf("worse player got a better tier: c=%d d=%d", players["c"].Tier, players["d"].Tier)
+	}
+}
+
+// Two fetches over the same cache must write the same digits. The prior is a
+// least-squares fit summed over the pool, and the pool arrives as a map — so
+// ranging it directly accumulated mx/my/sxy/sxx in a different order every run
+// and every Sigma in players.json differed in the last ulps. No behavioural
+// effect at 1e-15, and no way to diff two fetches either, which is the point:
+// RoomCurveOf and PositionDemand already sort before summing for this reason.
+//
+// Repeated because map order is random per range: one pair of runs agreeing by
+// luck is likely, twenty is not.
+func TestShrinkSigmaIsReproducible(t *testing.T) {
+	build := func() map[string]*Player {
+		out := map[string]*Player{}
+		for i := 1; i <= 40; i++ {
+			id := fmt.Sprintf("p%02d", i)
+			adp := float64(i) * 4.7
+			out[id] = &Player{SleeperID: id, Pos: "RB", ADP: adp,
+				Stdev: 0.83 + 0.0913*adp, TimesDrafted: 7 * i}
+		}
+		return out
+	}
+	first := build()
+	ShrinkSigma(first)
+	for run := 0; run < 20; run++ {
+		again := build()
+		ShrinkSigma(again)
+		for id, p := range again {
+			if p.Sigma != first[id].Sigma {
+				t.Fatalf("run %d: %s sigma %.17g, first run %.17g",
+					run, id, p.Sigma, first[id].Sigma)
+			}
+		}
 	}
 }
