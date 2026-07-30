@@ -2,7 +2,7 @@
 # `go test ./...` are the real build; this file exists so the paper has one
 # obvious way to be produced.
 
-.PHONY: paper paper-clean test build
+.PHONY: paper paper-open paper-clean test build
 
 build:
 	go build ./...
@@ -17,6 +17,13 @@ paper: docs/pick6-engine.pdf
 
 docs/pick6-engine.pdf: docs/pick6-engine.tex
 	cd docs && latexmk -pdf -interaction=nonstopmode -halt-on-error pick6-engine.tex
+
+# Zed has no pdf viewer, so opening the file in the editor shows you nothing
+# useful. Hand it to whatever the OS uses instead.
+paper-open: paper
+	@open docs/pick6-engine.pdf 2>/dev/null \
+		|| xdg-open docs/pick6-engine.pdf 2>/dev/null \
+		|| echo "no viewer found — the pdf is at docs/pick6-engine.pdf"
 
 paper-clean:
 	cd docs && latexmk -C pick6-engine.tex
