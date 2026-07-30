@@ -60,22 +60,18 @@ func TestRoomFlagIsOnAndOptsOutWithEquals(t *testing.T) {
 
 // The whole of phase 3a's shipped behaviour, through the real call site.
 //
-// The cutoff is the finding: the room's curve is right at the top of a position
-// and structurally wrong past it, so the warp must stop at adp.RoomWarpTopK even
-// where the curve runs deeper. This fixture's curve covers seven backs and only
-// five of them may move — a warp that read curve depth instead of the cutoff
-// would pass every other assertion here and reprice the two the gate says to
-// leave alone.
+// THE CURVE'S REACH IS THE LIMIT, and nothing else. There used to be a cap at
+// adp.RoomWarpTopK = 5 and this test asserted it; both 2025 folds beat it on
+// both metrics AND regressed fewer positions than it did, so it was removed —
+// see internal/adp/room.go's RoomGapTopK comment for the numbers. This fixture's
+// curve covers seven backs, so all seven must move: a warp that still stopped at
+// five would pass every other assertion here.
 //
 // Hand-computed. One draft takes running backs at picks 1..7, so adp_room(RB, k)
 // is k over n = 1 draft, and w = n/(n + RoomWarpPseudo) = 1/3. Against fake adps
 // of 10k that is (k + 2*10k)/3 = 7k: 7, 14, 21, 28, 35. Non-decreasing, so the
 // blend's running max never fires and each number is the blend alone.
-func TestLoadBoardWarpsOnlyTheTopOfEachPosition(t *testing.T) {
-	if adp.RoomWarpTopK != 5 {
-		t.Fatalf("this fixture is written for a top-5 warp; roomwarptopk is now %d — "+
-			"extend the table below rather than deleting it", adp.RoomWarpTopK)
-	}
+func TestLoadBoardWarpsAsDeepAsTheCurveReaches(t *testing.T) {
 	fakeBoardHome(t, 7)
 
 	board, err := loadBoard(true, "")
@@ -91,10 +87,10 @@ func TestLoadBoardWarpsOnlyTheTopOfEachPosition(t *testing.T) {
 		{"rb2", "rb2", 14},
 		{"rb3", "rb3", 21},
 		{"rb4", "rb4", 28},
-		{"rb5 is the last one the cutoff allows", "rb5", 35},
-		// The curve reaches both of these. The cutoff is what stops them.
-		{"rb6 is past the cutoff, not past the curve", "rb6", 0},
-		{"rb7 likewise", "rb7", 0},
+		{"rb5", "rb5", 35},
+		// Past the old cutoff and still inside the curve, so both move now.
+		{"rb6 is past the retracted cutoff", "rb6", 42},
+		{"rb7 likewise", "rb7", 49},
 		// No receiver was ever taken in the fixture draft, so the curve has no
 		// opinion about him at any rank.
 		{"a position the room never took", "wr1", 0},

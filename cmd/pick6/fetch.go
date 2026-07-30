@@ -497,7 +497,7 @@ func printRoomCurve(players map[string]*adp.Player) {
 		sort.Float64s(list)
 	}
 
-	fmt.Printf("  %-5s %5s %6s", "pos", "depth", fmt.Sprintf("gap%d", adp.RoomWarpTopK))
+	fmt.Printf("  %-5s %5s %6s", "pos", "depth", fmt.Sprintf("gap%d", adp.RoomGapTopK))
 	for _, k := range roomCurveKs {
 		fmt.Printf(" %-14s", fmt.Sprintf("k%d", k))
 	}
@@ -516,10 +516,10 @@ func printRoomCurve(players map[string]*adp.Player) {
 		// second number is the one that matches what the room actually does — it is
 		// the figure room.go's header quotes, and not to be confused with the 3a
 		// gate's qb price SHIFT of +11.5, which is a different quantity with the
-		// opposite sign. adp.RoomWarpTopK carries the measurement behind the cutoff.
+		// opposite sign. adp.RoomGapTopK carries the measurement behind the cutoff.
 		var gap float64
 		var n int
-		for k := 1; k <= depth && k <= len(market[pos]) && k <= adp.RoomWarpTopK; k++ {
+		for k := 1; k <= depth && k <= len(market[pos]) && k <= adp.RoomGapTopK; k++ {
 			if room, _, ok := curve.At(pos, k); ok {
 				gap += room - market[pos][k-1]
 				n++
@@ -541,13 +541,13 @@ func printRoomCurve(players map[string]*adp.Player) {
 	}
 	fmt.Println("  cells are room pick / market adp for the k-th player at the position.")
 	fmt.Printf("  gap%d is the mean of (room - market) over the first %d: negative means this room\n",
-		adp.RoomWarpTopK, adp.RoomWarpTopK)
+		adp.RoomGapTopK, adp.RoomGapTopK)
 	fmt.Println("  takes the position earlier than the national market prices it. deeper k are")
 	fmt.Println("  shown but not averaged — a ranked list runs deeper than any finite draft, so")
 	fmt.Println("  down there the room is later than adp about everyone and the mean flips sign.")
 	fmt.Println("  depth is the deepest k the room ever reached; past it the curve says nothing.")
 	fmt.Printf("  survival on mock and live blends the first %d of each position toward these\n",
-		adp.RoomWarpTopK)
+		adp.RoomGapTopK)
 	fmt.Println("  numbers by default; everyone deeper keeps raw national adp, and -room=false")
 	fmt.Println("  puts the whole board back on it. `pick6 calibrate` prints the gate that decided")
 	fmt.Println("  that — two drafts building the curve and one scoring it, so read it as thin.")

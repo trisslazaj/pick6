@@ -828,13 +828,13 @@ func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, curve adp.Ro
 	eff := curve.EffectiveADP(rows)
 	// The same warp restricted to the top of each position — the variant the board
 	// ships, through the same adp.EffectiveADPTopK call `loadBoard` makes, so the
-	// graded model and the priced one cannot drift apart. adp.RoomWarpTopK carries
+	// graded model and the priced one cannot drift apart. retractedCutoff carries
 	// the cutoff sweep and how thin one fold of evidence is.
-	effTop := curve.EffectiveADPTopK(rows, adp.RoomWarpTopK)
+	effTop := curve.EffectiveADPTopK(rows, retractedCutoff)
 	// And the same again over the alternate adp column, when the source has one.
 	// Ranked on its own prices, because rank within a position is what adp_room
 	// is indexed by and the two columns do not agree about it.
-	effTopAlt := curve.EffectiveADPTopK(b.altRows, adp.RoomWarpTopK)
+	effTopAlt := curve.EffectiveADP(b.altRows)
 
 	for seat := 1; seat <= teams; seat++ {
 		// The state is here for its snake math and its PickNo; PSurviveAt reads

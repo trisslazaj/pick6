@@ -11,8 +11,9 @@ import (
 
 // Phase 3a's gate, and the evidence behind a default. The room warp shifts a
 // player's price toward where these leagues' own drafts took the k-th man at his
-// position; this section is what decided that the survival model believes it for
-// the top adp.RoomWarpTopK at each position and nowhere deeper.
+// position; this section is what decided that the survival model believes it at
+// every depth the curve reaches. It used to believe it only for the top five —
+// see retractedCutoff, and adp.RoomGapTopK for what is left of that idea.
 //
 // The cross-validation is not optional and it has two halves, both in splitPool.
 // A warp built from the draft it is scored on would report a skill it does not
@@ -27,16 +28,24 @@ import (
 // this grades the field the board reads rather than a second copy of the blend.
 func modelRoom(p pred) float64 { return p.qRoom }
 
-// modelRoomShrunk is the full-depth warp on top of the shrunk sigma. It is the
-// fair comparison for the gate — swapping the price AND the sigma at once would
-// leave two changes tangled in one brier delta — and it is the row that loses.
+// modelRoomShrunk is the full-depth warp on top of the shrunk sigma: what the
+// board ships. It is paired with the shrunk sigma rather than the raw one
+// because swapping the price AND the sigma at once would leave two changes
+// tangled in one brier delta.
 func modelRoomShrunk(p pred) float64 {
 	return psurvive(p.from, p.to, p.adpRoom, p.sigmaShrunk)
 }
 
-// modelRoomTopShrunk is the warp restricted to the top adp.RoomWarpTopK players
-// at each position: what the board ships. See adp.RoomWarpTopK for the cutoff
-// sweep, the structural reason the tail is wrong, and how thin one fold is.
+// retractedCutoff is the cap the board used to price, kept only so the sweep and
+// the comparison row can still show what it scored. It is not a tuning knob and
+// nothing reads it at the clock; adp.RoomGapTopK holds the reason the number 5
+// still means something for the fetch-time READ of the curve.
+const retractedCutoff = 5
+
+// modelRoomTopShrunk is that retracted variant — the warp restricted to the top
+// retractedCutoff players at each position. It stays on the table because "the
+// warp is wrong" and "the warp is wrong past the fifth man at a position" are
+// different findings, and this row is what distinguishes them.
 func modelRoomTopShrunk(p pred) float64 {
 	return psurvive(p.from, p.to, p.adpRoomTop, p.sigmaShrunk)
 }
@@ -146,7 +155,7 @@ func heldOut(f *fold, byID map[string]*fold) string {
 // It does not, and neither does the opposite. Measured, the warp moves qb LATER
 // on average — +11.0 picks — even though it moves qb1 through qb5 earlier by 1.7
 // to 3.7. The mean is dominated by deep quarterbacks, where mapping rank to room
-// pick is structurally wrong (see adp.RoomWarpTopK), and there are far more of
+// pick is structurally wrong (see retractedCutoff), and there are far more of
 // them on the board than there are early ones. Pushing them later happens to
 // point the same way as the measured error, so qb BRIER improves (0.0970 ->
 // 0.0923) while qb log-loss gets worse (0.2966 -> 0.3200): the tail is being
@@ -213,12 +222,12 @@ func roomGate(preds []pred, prior, full, top namedModel) {
 	// row whose log-loss column, three characters further along the same line, had
 	// got worse — which is the exact reading error this whole section exists to
 	// prevent.
-	note(fmt.Sprintf("top %d only", adp.RoomWarpTopK),
+	note(fmt.Sprintf("top %d only", retractedCutoff),
 		verdictBoth(base.brier, tk.brier, base.logLoss, tk.logLoss), fmt.Sprintf(
-			// "the one the board prices" rather than "this one ships": it is true
-			// at whatever adp.RoomWarpTopK is set to, including a value that loses
+			// "the retracted cutoff" rather than "this one ships": it is true
+			// at whatever retractedCutoff is set to, including a value that loses
 			// this gate, and the verdict below is the thing entitled to say ships.
-			"brier %.4f -> %.4f (%+.4f) · log-loss %.4f -> %.4f (%+.4f) · the one the board prices",
+			"brier %.4f -> %.4f (%+.4f) · log-loss %.4f -> %.4f (%+.4f) · the retracted cutoff",
 			base.brier, tk.brier, tk.brier-base.brier,
 			base.logLoss, tk.logLoss, tk.logLoss-base.logLoss))
 	pg := roomPosGate(preds, prior, top)
@@ -242,24 +251,22 @@ func roomGate(preds []pred, prior, full, top namedModel) {
 		fmt.Println("  than any finite draft, so past the room's appetite rank->room-pick puts")
 		fmt.Println("  players later than the market by construction and the tail swamps the head.")
 	} else {
-		fmt.Println("  verdict, full depth: not worse on this fold. it is worse on the fold the cap")
-		fmt.Println("  was chosen from — which has no causal curve and so no row in the sweep below.")
-		fmt.Println("  the deep warp stays unpriced on the structural argument in adp.roomwarptopk,")
-		fmt.Println("  not on a measurement that still points that way.")
+		fmt.Println("  verdict, full depth: not worse on this fold, and this is what the board")
+		fmt.Println("  prices. it was once capped at the top five of each position; that cap lost")
+		fmt.Println("  to full depth on both causal folds, on both metrics and on this per-position")
+		fmt.Println("  gate, so it was retracted. the row below it is what it used to score.")
 	}
 	if betterPrinted(tk.brier, base.brier) && betterPrinted(tk.logLoss, base.logLoss) && pg.passes() {
-		fmt.Printf("  verdict, top %d: better on both metrics overall, and no position regresses at\n",
-			adp.RoomWarpTopK)
-		fmt.Println("  the precision these tables print, so it ships — mock and live blend the")
-		fmt.Println("  room's price into survival for the top of each position by default, and")
-		fmt.Println("  everyone deeper keeps raw national adp. `-room=false` puts the whole board")
-		fmt.Println("  back on the market's numbers.")
+		fmt.Printf("  verdict, top %d (retracted): it would clear the gate on this fold too. it is\n",
+			retractedCutoff)
+		fmt.Println("  still not what ships, because full depth clears it by more on every fold")
+		fmt.Println("  that has a causal curve. the row is kept to show what the cap scored.")
 	} else {
-		fmt.Printf("  verdict, top %d: it does not clear the full gate on this fold. that is the\n",
-			adp.RoomWarpTopK)
-		fmt.Println("  result the default was originally gated on — but the default is a constant")
-		fmt.Println("  across folds and one fold cannot set it, so the cutoff sweep below is where")
-		fmt.Println("  it is decided. do not flip -room off from this line.")
+		fmt.Printf("  verdict, top %d (retracted): does not clear the full gate on this fold. the\n",
+			retractedCutoff)
+		fmt.Println("  cap was the default until both causal folds beat it — on both metrics and")
+		fmt.Println("  on this per-position gate, at native depth and at `-depth 178`. this row is")
+		fmt.Println("  the record of that, not a live candidate.")
 	}
 	fmt.Println("  caveat: this verdict is one fold and one fold only. the drafts before it build")
 	fmt.Println("  the curve, this one scores it, and a single draft night cannot tell a real edge")
@@ -270,7 +277,7 @@ func roomGate(preds []pred, prior, full, top namedModel) {
 	fmt.Println("  than on a 387-name one. the mean shift's sign above is where that shows up.")
 }
 
-// roomCutoffSweep is adp.RoomWarpTopK's evidence, per fold, rather than the
+// roomCutoffSweep is retractedCutoff's evidence, per fold, rather than the
 // single-fold sweep its doc comment used to cite.
 //
 // The cutoff is the one fitted number in the room warp: the curve, the blend and
@@ -357,14 +364,14 @@ func roomCutoffSweep(folds []*fold) {
 		fmt.Printf("  %s has no row: every cached draft started after it, so at its own clock\n",
 			strings.Join(noCurve, "/"))
 		fmt.Println("  there was no curve to build. `-lookahead` scores it against a curve made of")
-		fmt.Println("  its own future, which is where the shipped cutoff came from and is the only")
+		fmt.Println("  its own future, which is where the retracted cutoff came from and is the only")
 		fmt.Println("  regime any of that evidence exists in.")
 	}
 	if scored == 0 {
 		fmt.Println("  no fold has a curve, so the cutoff has no evidence at all in this regime.")
 		return
 	}
-	fmt.Printf("  the shipped cutoff is %d. a row only ships if it beats the `none` row on both\n", adp.RoomWarpTopK)
+	fmt.Printf("  the board is uncapped. %d is the retracted cutoff, shown for comparison only.\n", retractedCutoff)
 	fmt.Println("  metrics and carries a zero in the worse column — the gate is a conjunction.")
 	if scored < 2 {
 		fmt.Println("  one fold cannot identify a constant. read the row above as a single draft")
@@ -400,7 +407,7 @@ func roomCutoffSweep(folds []*fold) {
 	}
 	if len(safe) > 0 {
 		fmt.Printf("  never worse than unwarped on any fold: %s\n", strings.Join(safe, ", "))
-		fmt.Printf("  that band, not one number in it, is what the evidence supports. %d is inside\n", adp.RoomWarpTopK)
+		fmt.Printf("  that band, not one number in it, is what the evidence supports. %d is inside\n", retractedCutoff)
 		fmt.Println("  it, which is why the default stays where it is rather than moving to whichever")
 		fmt.Println("  value wins on whichever fold is in front of you.")
 		// The band only argues for a CAP while it excludes the uncapped warp. Once
@@ -425,7 +432,7 @@ func roomCutoffSweep(folds []*fold) {
 // every scored fold. When it did not, the "never worse" band is doing all the
 // work and the paragraph above says so instead of leaving the reader to notice.
 func betterEverywhere(wins map[int]int, scored int) bool {
-	return wins[adp.RoomWarpTopK] == scored
+	return wins[retractedCutoff] == scored
 }
 
 func contains(list []string, want string) bool {

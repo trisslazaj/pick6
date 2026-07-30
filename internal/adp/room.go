@@ -56,15 +56,23 @@ import (
 // the finished number off Player.ADPEff.
 const RoomWarpPseudo = 2.0
 
-// RoomWarpTopK is where the warp stops being right, and it is the warp the board
-// prices by default: `loadBoard` reprices the first five players at each position
-// and leaves everyone deeper on the raw national number.
+// THERE IS NO LONGER A CUTOFF. The board warps every player it has a curve for.
+// `RoomWarpTopK = 5` used to cap it at the top five of each position; it was
+// removed once a second and third fold could test it, and this comment is the
+// record of why, because the number moved meaning three times.
 //
-// READ THIS CONSTANT AS UNIDENTIFIED. It is not measured, it is bounded, and the
-// bound is weak. What follows is the whole history, because the number moved
-// meaning twice and only the last version is true.
+// WHAT THE CAUSAL FOLDS SAY. On both 2025 folds — the only two with a curve
+// built entirely from drafts that started before them — uncapped beats k<=5 on
+// both metrics at native depth (a: 0.0197/0.0698 -> 0.0175/0.0616; b:
+// 0.0209/0.0790 -> 0.0200/0.0738) and at a common board size (`-depth 178`, a:
+// 0.0559/0.2103 -> 0.0502/0.1929; b: 0.0579/0.1913 -> 0.0559/0.1815). It also
+// regresses FEWER positions than the cap did — 1 and 2 against the cap's 5 and
+// 5 — so the cap lost on the per-position half of its own gate, not just the
+// aggregate. The sweep is monotone toward no cap on both.
 //
-// THE STRUCTURAL ARGUMENT, which is the only part nothing has undermined.
+// THE STRUCTURAL ARGUMENT, which is the case FOR a cap and which the measurement
+// did not vindicate. It is kept because it is still the reason to expect the
+// tail to be junk, and because it is what a future fold would have to overturn:
 // National adp ranks far more players at a position than any finite draft takes:
 // the 2024 board priced its 12th quarterback at adp 89.6, while that room's 12th
 // quarterback went at pick 126.5, because 12 teams over 15 rounds only ever take
@@ -96,21 +104,29 @@ const RoomWarpPseudo = 2.0
 //     with no curve at all and the sweep with two folds, both 2025 and both
 //     monotone toward no cap. `calibrate -lookahead` reprints the old regime.
 //
-// SO WHY IS IT STILL 5, AND STILL ON BY DEFAULT? Not because the number is best
-// anywhere — on the causal folds it wins 1 of 2 while uncapped wins 2 of 2. It
-// stays because every k the sweep tries, including 5, is never worse than the
-// unwarped model on either causal fold on either metric, and because the
-// structural argument above says a ranked tail is priced wrong however good it
-// scores on two nights of one vendor's board. Moving it to whichever k wins the
-// cross-fold tally would be the same fitting error that produced the retracted
-// claim, committed with more data.
+// SO WHY REMOVE IT, WHEN THE STRUCTURAL ARGUMENT STILL READS WELL? Because the
+// argument predicted a specific measurable thing — that the tail prices players
+// worse — and on every fold that can test it causally, it does not. Keeping a
+// cap that loses on both metrics AND on the per-position gate, on both folds,
+// against an argument about what ought to happen, is preferring the reasoning to
+// the measurement. This project's rule is the other way round.
 //
-// The honest summary: the CAP is an argument, the BAND is the measurement, and
-// the band no longer excludes having no cap. What would settle it is a fold that
-// is ffc-priced, is not 2024, and has a draft before it in the cache — ffc's
-// archive still answers "no adp data found" for year=2025, so recheck once near
-// draft day. `-room=false` is the fallback and needs no code change.
-const RoomWarpTopK = 5
+// WHAT WOULD PUT IT BACK: a causal fold on which uncapped loses. The obvious
+// candidate is an ffc-priced fold that is not 2024 and has a draft before it in
+// the cache — ffc's archive still answers "no adp data found" for year=2025, so
+// recheck once near draft day. Season and vendor are still collinear here (2024
+// is ffc's 906 real drafts, both 2025 folds a three-platform ranking consensus),
+// so a fold that breaks that tie is worth more than a fourth of the same kind.
+// `EffectiveADPTopK` is retained for the sweep and needs no code change to
+// re-cap; `-room=false` remains the way to leave the room out entirely.
+//
+// RoomGapTopK is display only. `pick6 fetch` prints the room's curve against the
+// market, and averages the gap over the first five at each position because
+// averaging over ALL k inverts its sign for exactly the structural reason above:
+// a ranked list runs deeper than any finite draft, so down there the room is
+// "late" about everybody. That makes 5 a reasonable place to read the signal. It
+// no longer prices anything.
+const RoomGapTopK = 5
 
 // RoomDraft is one completed draft reduced to what the curve reads: the position
 // taken at each pick, in pick order. Index 0 is pick 1; "" is a pick whose

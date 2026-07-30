@@ -243,7 +243,7 @@ func roomWarp(out map[string]engine.Player, list []*adp.Player, replaying string
 	for _, p := range list {
 		rows = append(rows, adp.RoomRow{ID: p.SleeperID, Pos: p.Pos, ADP: p.ADP})
 	}
-	eff := curve.EffectiveADPTopK(rows, adp.RoomWarpTopK)
+	eff := curve.EffectiveADP(rows)
 	if len(eff) == 0 {
 		note("room", "off", "the curve reaches nobody on this board")
 		return
@@ -259,8 +259,8 @@ func roomWarp(out map[string]engine.Player, list []*adp.Player, replaying string
 		out[id] = p
 	}
 	note("room", "warped", fmt.Sprintf(
-		"top %d at each position repriced from %d drafts · %d of %d rows · moved %.1f picks each · -room=false for raw adp",
-		adp.RoomWarpTopK, curve.Drafts, len(eff), len(list), moved/float64(len(eff))))
+		"every depth the curve reaches, from %d drafts · %d of %d rows · moved %.1f picks each · -room=false for raw adp",
+		curve.Drafts, len(eff), len(list), moved/float64(len(eff))))
 }
 
 // loadFreshness reads meta.json for the footer's age clause and the live

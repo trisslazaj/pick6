@@ -95,20 +95,20 @@ $$\mathrm{adp_{eff}} = w \cdot \mathrm{adp_{room}}(P, k) + (1 - w) \cdot \mathrm
 \qquad w = \frac{n}{n + 2}$$
 
 where $\mathrm{adp_{room}}(P, k)$ is the mean pick at which those drafts took the $k$-th player
-at position $P$, over the $n$ of them that ever got that deep. Only the first five at each
-position are repriced: a national ranked list runs far deeper than any finite draft, so past the
-room's appetite that curve is later than ADP about everyone.
+at position $P$, over the $n$ of them that ever got that deep. Every player the curve reaches is
+repriced.
 
 **And this is the shakiest thing in the tool, so it says so.** Those three drafts are three
 *different* leagues — 9, 5 and 6 shared managers out of 12 — so the curve is a portrait of
-casual home leagues, not of one room. The cutoff of five won cleanly on one backtest fold and
-then failed to replicate on the two that arrived later, where warping the whole board wins
-instead. Worse, that first fold's curve was built entirely from drafts that happened a year
-*after* it, which no live board could ever have; holding out each fold's future leaves it with
-no curve at all. What survives is weak: on the folds that have a causal curve, every cutoff
-tried — including five, and including no cap — is never worse than not warping. `pick6
-calibrate` re-derives all of this on every run, and `-room=false` prices the whole board on the
-market's numbers.
+casual home leagues, not of one room. It used to reprice only the first five at each position,
+on the theory that a ranked list runs deeper than any finite draft and the tail is therefore
+junk. That cutoff won cleanly on the first backtest fold and then lost on both folds that
+arrived later — on both metrics, on the per-position gate, and at a common board size — so it
+was removed. Worse, the fold that chose it had a curve built entirely from drafts that happened
+a year *after* it, which no live board could ever have; holding out each fold's future leaves
+that fold with no curve at all. So the argument for a cap is still readable and the measurement
+never backed it. `pick6 calibrate` re-derives all of this on every run, and `-room=false` prices
+the whole board on the market's numbers.
 
 One honesty adjustment: a player who's on the board *right now* can only be taken by the picks
 between now and your turn. So the number shown is survival **conditioned on the present**:

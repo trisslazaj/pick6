@@ -39,7 +39,7 @@ type pred struct {
 	// player, built from the OTHER drafts only; qRoom is the engine's survival off
 	// it, recorded during the walk through engine.Player.ADPEff so the graded
 	// number comes out of the shipped reader. adpRoomTop is the same warp applied
-	// only to the top adp.RoomWarpTopK players at each position — the variant the
+	// only to the top retractedCutoff players at each position — the variant the
 	// board actually prices, and the one the shipped row is scored on.
 	adpRoom    float64
 	adpRoomTop float64
@@ -158,7 +158,7 @@ func modelConstant(rate float64) func(pred) float64 {
 // finding, so crossFold forces every fold onto this one and reports it beside
 // each fold's own best available.
 func modelRoomTopFlat(p pred) float64 {
-	return psurvive(p.from, p.to, p.adpRoomTop, engine.SigmaDefault)
+	return psurvive(p.from, p.to, p.adpRoom, engine.SigmaDefault)
 }
 
 // modelAltTop is the shipped model priced off the source's OTHER adp column.
@@ -443,11 +443,11 @@ func report(f *fold, byID map[string]*fold) {
 	// dropping the middle model would leave the shrink's contribution
 	// indistinguishable from the tilt's.
 	current := namedModel{"shrunk+tilt", shrunkTiltFn}
-	// What ships: that model with the top-of-position room warp on its price. The
-	// label carries a plus because the reliability columns read as a progression —
-	// each one is the column before it plus one correction — and a bare "room
-	// warp" would collide with the model table's untilted 3a row.
-	shipped := namedModel{"+room warp", roomTopTiltFn}
+	// What ships: that model with the room warp on its price, at every depth the
+	// curve reaches. The label carries a plus because the reliability columns read
+	// as a progression — each one is the column before it plus one correction —
+	// and a bare "room warp" would collide with the model table's untilted 3a row.
+	shipped := namedModel{"+room warp", roomShrunkTiltFn}
 
 	// What the marker is measured against. It used to be the first row — the
 	// pre-4x engine — which after this milestone is not what ships: eleven of
@@ -455,10 +455,9 @@ func report(f *fold, byID map[string]*fold) {
 	// baseline that beat the then-shipped model on log-loss (flat sigma 6.0 under
 	// the tilt, 0.2233 against 0.2250) read like all the others. The whole point
 	// of running this is that the fancy math doesn't get to grade itself, so it is
-	// graded against the fancy math that ships — which since 3a shipped is the
-	// top-5 warp row, and that same flat baseline no longer clears it (0.2233
-	// against 0.2222).
-	ship := scoreOf(preds, roomTopTiltFn)
+	// graded against the fancy math that ships — the full-depth warp row, since
+	// the top-5 cap was retracted on the two causal folds.
+	ship := scoreOf(preds, roomShrunkTiltFn)
 	better := betterPrinted
 	fmt.Printf("\n%-34s %8s %9s %10s %10s\n", "model", "brier", "log-loss", "predicted", "d brier")
 	line := func(label string, s score, tag string) {
@@ -493,16 +492,17 @@ func report(f *fold, byID map[string]*fold) {
 	row("4b: shrunk + floor + tilt", scoreOf(preds, bothTiltFn))
 	row("3a: room-warped adp", scoreOf(preds, modelRoom))
 	row("3a: room warp + tilt", scoreOf(preds, roomTiltFn))
-	// The full-depth warp, scored and not shipped — it loses to the row above it
-	// and to the row below. It stays on the table because "the warp is wrong" and
-	// "the warp is wrong past the fifth man at a position" are different findings.
-	row("3a: room warp + shrunk + tilt", scoreOf(preds, roomShrunkTiltFn))
-	line(fmt.Sprintf("3a: top-%d warp + shrunk + tilt", adp.RoomWarpTopK), ship, "   <- ships")
+	line("3a: room warp + shrunk + tilt", ship, "   <- ships")
+	// The retracted cap, kept on the table because "the warp is wrong" and "the
+	// warp is wrong past the fifth man at a position" are different findings, and
+	// this row is what tells them apart.
+	row(fmt.Sprintf("3a: top-%d warp + shrunk + tilt (retracted)", retractedCutoff),
+		scoreOf(preds, roomTopTiltFn))
 	// The same model with every sigma forced flat. Not a baseline and not a
 	// candidate: it is the one regime a board with no stdev can run in, so it is
 	// what crossFold compares folds on. On a flat-sigma fold it IS the shipped
 	// row, printed twice on purpose — the tie is the proof the fold is really flat.
-	line(fmt.Sprintf("3a: top-%d warp + flat %.1f + tilt", adp.RoomWarpTopK, engine.SigmaDefault),
+	line(fmt.Sprintf("3a: room warp + flat %.1f + tilt", engine.SigmaDefault),
 		scoreOf(preds, roomTopFlatTiltFn), "   <- the cross-fold regime")
 	row(fmt.Sprintf("baseline: constant %.3f", base.obs), scoreOf(preds, modelConstant(base.obs)))
 	row(fmt.Sprintf("baseline: sigma %.1f flat", engine.SigmaDefault), scoreOf(preds, modelFlatSigma))
@@ -542,7 +542,7 @@ func report(f *fold, byID map[string]*fold) {
 	// position and the market's everywhere else.
 	roomGate(preds, current,
 		namedModel{"room warp", roomShrunkTiltFn},
-		namedModel{fmt.Sprintf("top-%d warp", adp.RoomWarpTopK), roomTopTiltFn})
+		namedModel{fmt.Sprintf("top-%d warp", retractedCutoff), roomTopTiltFn})
 }
 
 // columnGate answers the question having two adp columns exists to answer: does

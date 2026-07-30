@@ -2070,10 +2070,14 @@ price implies, because the reaches are scattered across a wider set of names.
 A rank-based warp captures the first fact. It cannot capture the second, and at depth it
 actively fights it.
 
-\subsubsection*{The fix, and the sweep that no longer supports it}
+\subsubsection*{The fix that was tried, and then removed}
 
-Restrict the warp to the top $\texttt{RoomWarpTopK} = 5$ players at each position; everyone
-deeper keeps raw national ADP. On the 2024 fold that passes comfortably --- Brier
+The obvious response is a cap: restrict the warp to the top $K$ players at each position and
+leave everyone deeper on raw national ADP. That shipped for a while at
+$\texttt{RoomWarpTopK} = 5$, and \textbf{it has since been removed} --- on both folds with a
+causal curve, uncapped beats it on both metrics, at native depth and at a common board size,
+while regressing fewer positions (\S\ref{sec:crossfold}). What follows is the evidence that
+chose it, all of which is retracted. On the 2024 fold that passes comfortably --- Brier
 $0.0670 \to 0.0660$, log-loss $0.2250 \to 0.2222$ --- with an apparent plateau at $K = 4$--$5$
 and the sign flip well past it, and with five of six positions improving on both metrics.
 That is the sweep the constant was chosen from, and \textbf{every number in it is
@@ -2654,7 +2658,7 @@ that have already happened. A fold priced off a curve built from its own future 
 therefore measuring a tool nobody can run --- and this is not symmetric noise that averages
 out, because \textbf{the 2024 fold is the only one that ever preferred a capped warp}
 (\S\ref{sec:crossfold}), so the entire upper bound of the interval that defends
-\code{RoomWarpTopK} came from a curve made of that draft's future.
+the retracted cutoff came from a curve made of that draft's future.
 
 So each fold now builds its curve from the drafts that started \emph{before} it, and from
 nothing else. A draft with no start time is held out too: unknown order is not prior order.
@@ -2752,8 +2756,9 @@ engine + exactly-$N$ tilt              & 0.0677 & 0.2288 & 0.8734 \\
 3a: room-warped ADP (full depth)       & 0.0868 & 0.3007 & 0.8231 \\
 3a: room warp + tilt                   & 0.0677 & 0.2288 & 0.8734 \\
 3a: room warp + shrunk + tilt          & 0.0670 & 0.2250 & 0.8734 \\
-\textbf{3a: top-5 warp + shrunk + tilt} & \textbf{0.0670} & \textbf{0.2250} & 0.8734 \\
-3a: top-5 warp + flat 6.0 + tilt       & 0.0671 & \emph{0.2233} & 0.8734 \\
+\textbf{3a: room warp + shrunk + tilt} & \textbf{0.0670} & \textbf{0.2250} & 0.8734 \\
+3a: top-5 warp + shrunk + tilt (retracted) & 0.0670 & 0.2250 & 0.8734 \\
+3a: room warp + flat 6.0 + tilt        & 0.0671 & \emph{0.2233} & 0.8734 \\
 \midrule
 baseline: constant 0.884               & 0.1022 & 0.3580 & 0.8844 \\
 baseline: sigma 6.0 flat               & 0.0825 & 0.2675 & 0.8330 \\
@@ -2792,11 +2797,11 @@ $0.0677 / 0.2288$). Only once shrinkage is applied does per-player sigma draw le
 ($0.0670 / 0.2250$ --- better on Brier by $0.0001$, worse on log-loss by $0.0017$), and
 \textbf{there it stays}.
 
-The room warp used to be the thing that broke the tie: with the top-5 warp on top, the full
+The room warp used to be the thing that broke the tie: with the cap on top, the full
 stack scored $0.0660 / 0.2222$ and beat flat+tilt on both. That number required a curve
 built from this fold's future (\S\ref{sec:causal}) and is gone. What the tool prints today
 is the like-for-like comparison it always should have: the shipped stack with every
-$\sigma$ forced flat is the \code{3a: top-5 warp + flat 6.0 + tilt} row, and on this fold it
+$\sigma$ forced flat is the \code{3a: room warp + flat 6.0 + tilt} row, and on this fold it
 \textbf{beats what ships on log-loss}, $0.2233$ against $0.2250$. \code{calibrate} marks
 that row itself rather than leaving it to be noticed. So on the fold with the only
 per-player spread in the project, the per-player pipeline does not win on either metric that
@@ -2819,7 +2824,7 @@ structural.
 
 \item \textbf{The room warp is absent from this fold entirely}, and it used to be the
 headline of it. Under leave-one-out alone the full-depth warp lost here ($0.0671 / 0.2327$)
-while the top-5 warp won ($0.0660 / 0.2222$) --- and both of those curves were built from
+while the capped warp won ($0.0660 / 0.2222$) --- and both of those curves were built from
 drafts that ran a year after this draft. Under the time-order rule the fold has no curve, so
 all four \code{3a} rows tie their bases and the warp is decided in
 \S\ref{sec:crossfold} on the two folds that have one. \code{calibrate -lookahead} reprints
@@ -2949,7 +2954,7 @@ is the opposite. This is the segment where a draft is won, and the model is extr
 real signal from it.
 
 \item \textbf{Quarterbacks are the worst-calibrated position} (predicted $0.841$ against
-observed $0.917$ under shrunk+tilt), and the top-5 warp is aimed squarely at them. It is
+observed $0.917$ under shrunk+tilt), and the room warp is aimed squarely at them. It is
 the one position it helps on both metrics on both causal folds --- Brier
 $0.0379 \to 0.0375$ and log-loss $0.1183 \to 0.1161$ on 2025-a, $0.0384 \to 0.0375$ and
 $0.1228 \to 0.1184$ on 2025-b. It cannot be graded here, because this fold has no causal
@@ -3219,15 +3224,22 @@ look-ahead fold. On the two causal folds \textbf{every} $K$ the sweep tries is n
 including no cap at all, so the band no longer excludes anything and cannot be read as an
 argument for capping.
 
-\textbf{Nothing was moved anyway,} and the reason is now explicitly not a measurement.
-\code{RoomWarpTopK} stays at $5$ and \code{-room} stays on because (i) $K = 5$ is never
-worse than not warping on either causal fold, and (ii) the structural argument of
-\S\ref{sec:roomfail} --- a ranked list runs deeper than any finite draft, so past the room's
-appetite rank-to-room-pick prices players later than the market \emph{by construction} ---
-is an argument about the mechanism that no amount of FantasyPros-priced 2025 data speaks to.
-Moving $K$ to whichever value wins the cross-fold tally would repeat the exact error that
-produced the retracted claim, with more data. The honest one-line summary: \textbf{the cap
-is an argument, the band is the measurement, and the band is now empty of content.}
+\textbf{The cap was held for one round of evidence, then dropped.} It survived the first
+re-gate on (i) $K = 5$ being never worse than not warping on either causal fold, and (ii) the
+structural argument of \S\ref{sec:roomfail} --- a ranked list runs deeper than any finite
+draft, so past the room's appetite rank-to-room-pick prices players later than the market
+\emph{by construction}. Holding it there was the right call at the time: moving $K$ to
+whichever value won a cross-fold tally would have repeated the exact error that produced the
+retracted claim.
+
+What settled it was that the structural argument is not merely an argument --- it predicts a
+\emph{measurable} thing, namely that the warped tail prices players worse. On both folds that
+can test it causally, at native depth and at a common board size, it does not: uncapped wins
+both metrics and regresses fewer positions than $K=5$ does ($1$ and $2$ against $5$ and $5$).
+Preferring the mechanism story to that is preferring reasoning to measurement, which is the
+one thing this whole apparatus exists to stop. \textbf{The cap is gone; \code{-room} stays on,
+because uncapped is never worse on either causal fold.} What would restore it is a causal fold
+on which uncapped loses --- ideally an FFC-priced one, to break the season/vendor collinearity.
 
 \subsubsection*{Does league purity matter? No; sample size does}
 
@@ -3639,10 +3651,9 @@ The consequences, in the order they hurt:
 exclusively by 2024 as well. Both are gone. On the two causal folds every $K$ the sweep
 tries is never worse, including no cap, so the band identifies nothing
 (Table~\ref{tab:cutoffsweep}).
-\item \textbf{Both causal folds prefer the warp this paper rejected}, by margins ten times
-anything the cap moves. \code{RoomWarpTopK} therefore stays at $5$ on a structural argument
-about ranked lists and finite drafts, plus never-worse --- not on a score. \S\ref{sec:roomfail}
-says so in its own words now.
+\item \textbf{Both causal folds prefer the warp this paper originally rejected}, by margins
+ten times anything the cap moved --- so the cap was removed and the board now warps at every
+depth the curve reaches. \S\ref{sec:roomfail} says so in its own words.
 \item \textbf{The purity result thins to one fold} (Table~\ref{tab:purity}), because a fold
 can only be split over drafts that preceded it.
 \item \textbf{The remaining causal evidence is entirely FantasyPros-priced 2025 data},
@@ -3883,14 +3894,14 @@ precomputes sigma and tiers without importing the engine.
 \multicolumn{3}{@{}l}{\emph{Fetch-time --- \code{internal/adp}}}\\[0.2em]
 \code{ShrinkPseudoDrafts} & 25.0 & $n_0$ in \eqref{eq:shrinkvar}. The 2024 pool's median player was taken in $54$ drafts and the thinnest in $11$ (2026: $49$ and $5$); at $n_0 = 25$ the median player's own number outvotes the prior 2:1 and a thin player lands most of the way onto it. \\
 \code{RoomWarpPseudo} & 2.0 & $w = n/(n+2)$, so three drafts buy $60\%$ of the warp and a depth nobody reached buys none. Deliberately timid. \\
-\code{RoomWarpTopK} & 5 & \textbf{Unidentified.} It was chosen off a cutoff sweep on the 2024 fold ($K=5$ Brier $0.0660$, a plateau at 4--5); that sweep did not replicate on either 2025 fold, and 2024's curve came from drafts a year after it, so it no longer has a causal curve at all. On the two folds that do, every $K$ --- including no cap --- is never worse than not warping, so the sweep excludes nothing. Held at 5 on the structural argument of \S\ref{sec:roomfail} plus never-worse. Threat 1b. \\
+\code{RoomGapTopK} & 5 & \textbf{Display only.} The warp itself is uncapped. This is the depth over which \code{fetch} averages the room-versus-market gap for its headline, because averaging over all $k$ inverts the sign. A pricing cap \code{RoomWarpTopK} $=5$ was chosen off a cutoff sweep on the 2024 fold ($K=5$ Brier $0.0660$, a plateau at 4--5), then removed: that sweep did not replicate on either 2025 fold, and 2024's curve came from drafts a year after it, so it no longer has a causal curve at all. On the two folds that do, every $K$ --- including no cap --- is never worse than not warping, so the sweep excludes nothing. Held at 5 on the structural argument of \S\ref{sec:roomfail} plus never-worse. Threat 1b. \\
 \code{SigmaDefault}, \code{SigmaFromStdev}, \code{SigmaMin}, \code{SigmaMax}, \code{TierDropPct}, \code{TierFloorPct}, \code{TierMaxSize}, \code{TierMinSize} & --- & Deliberate duplicates of the engine values, so \code{fetch} can precompute sigma and tiers without importing the engine. Keep them in sync by hand; there are tests. \\
 \bottomrule
 \end{longtable}
 \endgroup
 
 The honest summary of this table: \textbf{exactly one constant was chosen by
-measurement} (\code{RoomWarpTopK}), one is a theorem (\code{SigmaFromStdev}), several
+measurement} (\code{RoomGapTopK}), one is a theorem (\code{SigmaFromStdev}), several
 are numerical-analysis facts with proofs attached (\code{SurvivalExpClamp},
 \code{EBestEpsilon}, \code{TiltTol}, \code{RuleOfThree}), a handful are grounded in a
 measured property of the data without being optimised against it
