@@ -21,6 +21,8 @@ func runFetch(args []string) error {
 	teams := fs.Int("teams", 12, "league size")
 	year := fs.Int("year", 2026, "season")
 	rankFile := fs.String("rankings", "", "path to a rankings csv; its tiers and points win over fetched data")
+	adpSrc := fs.String("adp", "sleeper", "which market prices the board: sleeper (fantasypros export, measured better) or ffc")
+	fpPath := fs.String("fp", "", "fantasypros adp export; defaults to the cached fantasypros_adp_<year>.csv")
 	verbose := fs.Bool("v", false, "list every unmatched name")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -70,6 +72,17 @@ func runFetch(args []string) error {
 
 	// 5. merge ---------------------------------------------------------------
 	players, unmatched := adp.Merge(ix, primary, crosschecks, cw)
+
+	// 5b. reprice off the market that actually drafts this league --------------
+	// FFC stays the primary because it is the only feed that publishes a spread,
+	// and stdev is what sigma, the shrinkage prior and the curve's whole width
+	// are built from. But the price itself comes from sleeper where we have it:
+	// scored against both real 2025 drafts, sleeper's own column beat the
+	// cross-platform consensus by an order of magnitude more than any model
+	// change in this repo. `-adp ffc` puts the board back on ffc's own price.
+	if err := repriceFromSleeper(players, ix, *adpSrc, *fpPath, *year, *verbose); err != nil {
+		return err
+	}
 
 	// Injury truth rides along from the dump. It is copied here rather than
 	// inside Merge because Merge takes a rankings.Index, which deliberately
@@ -552,4 +565,62 @@ func trunc(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
+}
+
+// repriceFromSleeper overlays sleeper's own adp onto the merged board.
+//
+// The export is the same FantasyPros file `pick6 calibrate` scores against, and
+// it lives in the cache dir rather than the repo because it is FantasyPros'
+// data, not ours. A missing file is not an error: the board simply keeps ffc's
+// price and says so, which is exactly what `-adp ffc` asks for on purpose.
+func repriceFromSleeper(players map[string]*adp.Player, ix *rankings.Index, src, path string, year int, verbose bool) error {
+	col, err := adp.ParseFPColumn(src)
+	if err != nil {
+		if src == "ffc" {
+			note("adp", "ffc", "board priced on ffc's own adp — sleeper's column not used")
+			return nil
+		}
+		return fmt.Errorf("-adp: %w (use sleeper or ffc)", err)
+	}
+	if path == "" {
+		dir, err := cache.Dir()
+		if err != nil {
+			return err
+		}
+		path = filepath.Join(dir, fmt.Sprintf("fantasypros_adp_%d.csv", year))
+	}
+	f, err := adp.LoadFantasyPros(path)
+	if err != nil {
+		note("adp", "ffc", fmt.Sprintf("no %d fantasypros export at %s — board stays on ffc's price",
+			year, strings.ToLower(path)))
+		return nil
+	}
+	board, ok := f.Boards[col]
+	if !ok {
+		note("adp", "ffc", fmt.Sprintf("export has no %s column — board stays on ffc's price", col))
+		return nil
+	}
+
+	r := adp.OverlayADP(players, board, ix)
+	// Sigma is derived from the raw stdev against a prior fitted on adp, and the
+	// adp just moved out from under that fit. Stdev is untouched, so this is a
+	// recompute rather than a second shrink.
+	adp.ShrinkSigma(players)
+
+	detail := fmt.Sprintf("%d of %d repriced from sleeper · moved %.1f picks each · %d kept ffc's price",
+		r.Repriced, r.Repriced+r.Kept, r.MeanMove, r.Kept)
+	if r.NoSpread > 0 {
+		detail += fmt.Sprintf(" · %d with no stdev run on the default sigma", r.NoSpread)
+	}
+	note("adp", "sleeper", detail)
+	if n := len(r.Unmatched); n > 0 {
+		if verbose {
+			for _, u := range r.Unmatched {
+				fmt.Printf("  %-12s %-8s %s\n", "", "off board", strings.ToLower(u))
+			}
+		} else {
+			note("", "", fmt.Sprintf("%d export rows are too deep for this board", n))
+		}
+	}
+	return nil
 }
