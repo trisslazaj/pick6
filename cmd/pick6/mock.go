@@ -162,49 +162,80 @@ func loadBoard(room bool, replaying string) (map[string]engine.Player, error) {
 // second field precisely so the display columns, Available's adp tie-break and
 // the mock's picker keep reading the raw market price.
 //
-// ONLY THE TOP adp.RoomWarpTopK AT EACH POSITION, and that restriction is the
-// whole reason this runs by default. Cross-validated on the 2024 draft with the
-// curve built from the two 2025 drafts only, the top-of-position warp moves
-// brier 0.0670 -> 0.0660 and log-loss 0.2250 -> 0.2222 against the previous
-// default, with no position regressing at the four decimals calibrate prints:
-// qb/rb/te/k/def improve on both metrics and wr improves on brier while its
-// log-loss moves +0.000032. Warping the whole board instead LOSES (0.0671 /
-// 0.2327) — a ranked list runs deeper than any finite draft, so past the room's
-// appetite rank->room-pick prices players later than the market by construction.
-// adp.RoomWarpTopK carries the cutoff sweep and the structural argument.
+// ONLY THE TOP adp.RoomWarpTopK AT EACH POSITION. Do not re-derive that cutoff
+// from anything written here — READ adp.RoomWarpTopK, which carries the whole
+// history and is the only place entitled to defend it. The short version, because
+// the long version has been wrong twice:
 //
-// One fold of two drafts is behind that, and it is thin: 2024 is the only season
-// with era adp. It ships because no position and no nearby cutoff points the
-// other way, not because the margin is large. `-room=false` is the way out and
-// `pick6 calibrate` is the referee — its 3a gate recomputes that per-position
-// claim on every run instead of trusting this paragraph.
+//   - The cutoff is UNIDENTIFIED. It was swept on the 2024 fold, where it won on
+//     both metrics with no position regressing. Both of those claims are
+//     retracted: they fail on both 2025 folds, and the 2024 curve was built
+//     entirely out of drafts that ran a year AFTER that draft, so no live board
+//     could ever have had it. `pick6 calibrate` now holds each fold's future out
+//     and 2024 has no curve left at all.
+//   - What survives is weaker: on the two folds that do have a causal curve,
+//     every cutoff the sweep tries — including 5, and including no cap — is never
+//     worse than the unwarped model. The cap itself rests on the structural
+//     argument, not on a score: a ranked list runs deeper than any finite draft,
+//     so past the room's appetite rank->room-pick prices players later than the
+//     market by construction.
+//
+// It ships on never-worse plus that argument, not on a margin. `-room=false` is
+// the way out and `pick6 calibrate` is the referee — its 3a gate and cutoff sweep
+// recompute all of this on every run instead of trusting any paragraph.
 //
 // A failure to load is a note, not an error: a board on raw adp is still a board,
 // so there is nothing to abort. The read is disk-only, and now that this is the
 // default path that matters more than it did — a blocking http call here is a
 // blank screen at a draft party. See adp.CachedRoomDrafts.
 //
-// replaying is held out of the curve. `live <id> -replay` over one of the three
-// league drafts would otherwise price that draft's own survival numbers off a
-// curve built partly from it, which is memorization wearing a backtest's clothes;
-// `pick6 calibrate` excludes the scored draft for exactly this reason and the
-// frame you eyeball afterwards has to agree with it. "" outside replay, where
-// nothing to hold out is the normal case.
+// replaying is held out of the curve, and so is everything that happened after
+// it. `live <id> -replay` over one of the league drafts would otherwise price
+// that draft's own survival numbers off a curve built partly from it, which is
+// memorization wearing a backtest's clothes — and off drafts that had not
+// happened yet, which is a frame no clock could ever have shown. `pick6
+// calibrate` holds out both for exactly these reasons and the frame you eyeball
+// afterwards has to agree with it: on the 2024 draft, both cached 2025 drafts
+// are the future, calibrate's 2024 fold therefore has no curve at all, and a
+// replay that warped anyway would disagree with the numbers in the paper.
+//
+// "" outside replay, where nothing to hold out is the normal case — a live draft
+// is by definition later than everything cached.
 func roomWarp(out map[string]engine.Player, list []*adp.Player, replaying string) {
 	drafts, sources := adp.CachedRoomDrafts(leagueDrafts)
+	started := map[string]int64{}
 	for _, s := range sources {
 		if s.Err != nil {
 			note("room", "skipped", fmt.Sprintf("%s · %s", s.ID, strings.ToLower(s.Err.Error())))
+			continue
 		}
+		started[s.ID] = s.Start
 	}
 	var except []string
 	if _, ours := drafts[replaying]; ours {
 		except = append(except, replaying)
 		note("room", "held out", replaying+" · replaying it, so it cannot price itself")
+		// splitByStart, not a second copy of the rule: calibrate's folds and this
+		// frame have to be built from the same pool or the eyeball check and the
+		// paper disagree. An undated draft is held out here too.
+		_, later, undated := splitByStart(drafts, started, replaying, started[replaying])
+		if held := append(later, undated...); len(held) > 0 {
+			sort.Strings(held)
+			except = append(except, held...)
+			note("room", "held out", strings.Join(held, ", ")+" · not yet drafted when this one ran, so no clock ever had them")
+		}
 	}
 	curve := adp.RoomCurveOf(drafts, except...)
 	if curve.Empty() {
-		note("room", "off", "no cached drafts loaded — board stays on raw adp")
+		// Two different situations, and telling them apart is the difference
+		// between "run fetch" and "this is correct". Replaying the oldest cached
+		// draft leaves nothing prior to build from, which is the same answer
+		// calibrate's 2024 fold gets.
+		why := "no cached drafts loaded"
+		if len(except) > 0 {
+			why = "every cached draft is this one or came after it"
+		}
+		note("room", "off", why+" — board stays on raw adp")
 		return
 	}
 

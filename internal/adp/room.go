@@ -8,22 +8,31 @@ import (
 	"github.com/trisslazaj/pick6/internal/sleeper"
 )
 
-// The room's own price curve, built from this user's completed drafts.
+// The price curve of the rooms this user drafts in, built from completed drafts.
 //
-// National ADP is the average of thousands of strangers. A fixed set of twelve
-// leaguemates is not the average of anything — measured over three of their
-// completed drafts, this room takes its first quarterback at pick 23.0 and its
-// first tight end at 23.3, against 26.1 and 39.5 on the 2026 half-ppr board. Over
-// the first five at each position the room runs 17.4 picks early on quarterbacks
-// and 13.4 early on tight ends, while running backs (+0.4) and receivers (-0.8)
-// track the market to within a pick. CLAUDE.md's per-round table says the same
-// thing less precisely; `pick6 fetch` prints this one.
+// National ADP is the average of thousands of strangers. A dozen leaguemates are
+// not the average of anything — measured over three completed drafts, they take
+// the first quarterback at pick 23.0 and the first tight end at 23.3, against
+// 26.1 and 39.5 on the 2026 half-ppr board. Over the first five at each position
+// they run 17.4 picks early on quarterbacks and 13.4 early on tight ends, while
+// running backs (+0.4) and receivers (-0.8) track the market to within a pick.
+// CLAUDE.md's per-round table says the same thing less precisely; `pick6 fetch`
+// prints this one.
+//
+// THREE DRAFTS, THREE LEAGUES. Measured manager overlap is 9/12 between the 2024
+// draft and the 2025 one this user will draft against again, 5/12 and 6/12 for
+// the third, and all three carry previous_league_id null — so this is a portrait
+// of casual home leagues, not of one room. The three curves agree closely (qb1 at
+// picks 21/29/19, te1 at 24/21/25), which is why pooling them is defensible; it
+// is also why "this room drafts weird" is not a claim this curve can support.
 //
 // The curve reads ONLY pick order and position. No historical national adp is
-// involved, so all 552 picks are usable and the era caveat that makes the two
-// 2025 drafts unscorable for `pick6 calibrate` does not apply here: "the fourth
-// quarterback went at pick 35" is as true in 2024 as in 2026, because it is a
-// statement about the room's behaviour and not about any player.
+// involved, so all 552 picks build a curve even for a season no era board exists
+// for: "the fourth quarterback went at pick 35" is as true in 2024 as in 2026,
+// because it is a statement about behaviour and not about any player. That is a
+// statement about ERA, and it is not a licence to ignore ORDER — a curve is only
+// usable at the clock if every draft in it already happened, which is why
+// RoomSource carries Start and calibrate holds each fold's future out.
 //
 //	adp_room(P, k) = mean over drafts of the overall pick at which the k-th
 //	                 player of position P was taken, monotonized over k.
@@ -47,46 +56,60 @@ import (
 // the finished number off Player.ADPEff.
 const RoomWarpPseudo = 2.0
 
-// RoomWarpTopK is where the warp stops being right, MEASURED, and it is the warp
-// the board prices by default: `loadBoard` reprices the first five players at
-// each position and leaves everyone deeper on the raw national number.
+// RoomWarpTopK is where the warp stops being right, and it is the warp the board
+// prices by default: `loadBoard` reprices the first five players at each position
+// and leaves everyone deeper on the raw national number.
 //
-// The full-depth warp fails its gate (brier 0.0670 -> 0.0671, log-loss 0.2250 ->
-// 0.2327 on the cross-validated 2024 backtest) and prices nothing. Restricted to
-// the first five players at each position it PASSES, and comfortably: brier
-// 0.0660, log-loss 0.2222. Sweeping the cutoff on the same backtest, the optimum
-// is a plateau at 4-5 and the flip is well past it — k<=1 0.0665/0.2237, k<=3
-// 0.0662/0.2227, k<=5 0.0660/0.2222, k<=8 0.0661/0.2229, k<=12 0.0674/0.2283
-// (worse), uncapped 0.0671/0.2327 (worse).
+// READ THIS CONSTANT AS UNIDENTIFIED. It is not measured, it is bounded, and the
+// bound is weak. What follows is the whole history, because the number moved
+// meaning twice and only the last version is true.
 //
-// Restricted that way no position regresses at the four decimals `pick6
-// calibrate` prints, and quarterbacks improve on both (brier 0.0970 -> 0.0952,
-// log-loss 0.2966 -> 0.2921) — which is the answer to the apparent contradiction
-// in CLAUDE.md, where the room takes qb slots early while named quarterbacks
-// survive longer than adp implies. Both are true at different depths of the
-// position. Five of the six positions improve on both metrics outright; wr
-// improves on brier and its log-loss moves +0.000032, which prints as 0.2450 ->
-// 0.2450. That is a tie the reader can check, not a win, and roomPosGate says so
-// on every run rather than leaving it to this comment.
+// THE STRUCTURAL ARGUMENT, which is the only part nothing has undermined.
+// National adp ranks far more players at a position than any finite draft takes:
+// the 2024 board priced its 12th quarterback at adp 89.6, while that room's 12th
+// quarterback went at pick 126.5, because 12 teams over 15 rounds only ever take
+// ~19 of them. So past the top of a position, rank->room-pick prices players
+// LATER than the market by construction, and the warp's mean shift flips sign —
+// qb +11.0 picks overall against -1.7 to -3.7 for qb1 through qb5. The
+// room-is-qb-early signal is real and lives entirely at the top; the tail is an
+// artifact of comparing a ranked list to a finite draft. A cap is the obvious
+// response to that, and 5 is a guess at where the top ends.
 //
-// The reason is structural, not a tuning accident. National adp ranks far more
-// players at a position than any finite draft takes: the 2024 board priced its
-// 12th quarterback at adp 89.6, while this room's 12th quarterback went at pick
-// 126.5, because 12 teams over 15 rounds only ever take ~19 of them. So past the
-// top of a position, rank->room-pick prices players LATER than the market and the
-// warp's mean shift flips sign — qb +11.0 picks overall against -1.7 to -3.7 for
-// qb1 through qb5. The room-is-qb-early signal is real and lives entirely at the
-// top; the tail is an artifact of comparing a ranked list to a finite draft.
+// WHAT WAS ONCE CLAIMED, AND IS NOW RETRACTED TWICE OVER. The cutoff was swept on
+// the 2024 fold, where k<=5 wins (brier 0.0670 -> 0.0660, log-loss 0.2250 ->
+// 0.2222) while the uncapped warp loses (0.0671 / 0.2327), and no position
+// regressed at four decimals. Two things happened to that:
 //
-// THE EVIDENCE BEHIND THE DEFAULT IS ONE FOLD. 2024 is the only season with era
-// adp, so two drafts build the curve, one scores it, and the whole margin is
-// -0.0009 brier and -0.0028 log-loss. It ships because it is the best number
-// available and no position or nearby cutoff points the other way — not because
-// a single fold can tell a real edge from a lucky one. What
-// would overturn it: a second scorable season in ffc's archive (year=2025 still
-// answers "no adp data found"; recheck once near draft day). Re-gate then. If
-// k<=5 stops winning, `-room=false` is already the fallback and the default
-// moves back.
+//   - It did not replicate. Two more folds arrived (the 2025 drafts, priced off
+//     a hand-exported fantasypros board). `k<=5` fails the per-position half of
+//     the gate on both, the uncapped warp wins outright on both, and no k clears
+//     the full gate on all three. Board depth was the obvious explanation and is
+//     not it: `calibrate -depth 178` puts every fold on a common board size and
+//     the verdict does not move. Season and vendor stay collinear — 2024 is
+//     ffc's sample of 906 real drafts, 2025 a three-platform ranking consensus.
+//   - The 2024 result was never causal. Measured start times: that draft ran
+//     2024-09-01 and BOTH cached drafts that built its curve ran a year later
+//     (2025-09-02, 2025-09-04). Leave-one-out held out the scored draft and
+//     nothing else, so the only fold that ever preferred a cap was priced off
+//     its own future — a regime the live tool cannot reach at the clock.
+//     `calibrate` now holds out each fold's future as well, which leaves 2024
+//     with no curve at all and the sweep with two folds, both 2025 and both
+//     monotone toward no cap. `calibrate -lookahead` reprints the old regime.
+//
+// SO WHY IS IT STILL 5, AND STILL ON BY DEFAULT? Not because the number is best
+// anywhere — on the causal folds it wins 1 of 2 while uncapped wins 2 of 2. It
+// stays because every k the sweep tries, including 5, is never worse than the
+// unwarped model on either causal fold on either metric, and because the
+// structural argument above says a ranked tail is priced wrong however good it
+// scores on two nights of one vendor's board. Moving it to whichever k wins the
+// cross-fold tally would be the same fitting error that produced the retracted
+// claim, committed with more data.
+//
+// The honest summary: the CAP is an argument, the BAND is the measurement, and
+// the band no longer excludes having no cap. What would settle it is a fold that
+// is ffc-priced, is not 2024, and has a draft before it in the cache — ffc's
+// archive still answers "no adp data found" for year=2025, so recheck once near
+// draft day. `-room=false` is the fallback and needs no code change.
 const RoomWarpTopK = 5
 
 // RoomDraft is one completed draft reduced to what the curve reads: the position
@@ -196,11 +219,12 @@ type RoomRow struct {
 // adp without deciding what "uncovered" means.
 //
 // `pick6 calibrate` is its only caller and the only one it should ever have: at
-// full depth this is the variant that FAILED the gate (brier 0.0670 -> 0.0671,
-// log-loss 0.2250 -> 0.2327), so it survives as a comparison row in the model
-// table and nothing else. The board prices EffectiveADPTopK. Keeping the loser
-// scored next to the winner is what stops the next reader assuming the warp was
-// never tried at depth — see RoomWarpTopK for why the tail is wrong.
+// full depth this is the variant the 2024 gate rejected, so it survives as a
+// comparison row in the model table and nothing else. The board prices
+// EffectiveADPTopK. Note that it is also the variant that WINS on both causal
+// folds — keeping the rejected model scored next to the shipped one is exactly
+// what made that visible, and RoomWarpTopK carries what is left of the case for
+// capping anyway.
 //
 // Rank is by adp WITHIN the position, over the board rows handed in, which is the
 // only rank that lines up with adp_room's own definition: adp_room(WR, 5) is where
@@ -304,10 +328,16 @@ func (c RoomCurve) effectiveADP(rows []RoomRow, maxK int) map[string]float64 {
 }
 
 // RoomSource is one draft the curve was built from, or the reason it wasn't.
+//
+// Start is the draft's own start time (ms since epoch, 0 when sleeper carries
+// none), and it is here because a curve is only usable at the clock if every
+// draft in it already happened. `pick6 calibrate` orders the pool by it and
+// refuses to price a fold off its own future; nothing else reads it.
 type RoomSource struct {
 	ID     string
 	Season string
 	Picks  int
+	Start  int64
 	Err    error
 }
 
@@ -363,7 +393,7 @@ func loadRoomDrafts(ids []string, offline bool) (map[string]RoomDraft, []RoomSou
 			sources = append(sources, src)
 			continue
 		}
-		src.Season = d.Season
+		src.Season, src.Start = d.Season, d.StartTime
 		picks, err := picksOf(id)
 		if err != nil {
 			src.Err = err

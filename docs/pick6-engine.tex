@@ -86,19 +86,24 @@ player who will still be there when your turn comes, and calls the difference
 \emph{urgency}.
 
 Every piece of that pipeline is derived from a definition rather than asserted, and
-every piece is graded. We backtest against one real completed 12-team half-PPR draft
-using era-correct 2024 average draft position, producing $15{,}923$ labelled
-predictions over $168$ vantages. The shipped model scores a Brier of $0.0660$ and a
-log-loss of $0.2222$ against $0.1022$ / $0.3580$ for a constant predictor and
-$0.1111$ / $0.5159$ for the unconditional logistic. Decomposing the Brier score shows
-where the gain came from: the reliability term falls from $0.0231$ to $0.0047$ while
-resolution barely moves, which is to say the work bought \emph{calibration}, not
-\emph{discrimination}.
+every piece is graded. We backtest against three real completed 12-team half-PPR drafts
+using era-correct average draft position, producing $15{,}923$ labelled predictions over
+$168$ vantages on the 2024 fold and roughly $52{,}000$ on each 2025 fold. On the 2024
+fold --- the only one with a per-player market spread, and so the only one that can grade
+the whole model --- the shipped model scores a Brier of $0.0670$ and a log-loss of
+$0.2250$ against $0.1022$ / $0.3580$ for a constant predictor and $0.1111$ / $0.5159$ for
+the unconditional logistic. Decomposing the Brier score shows where the gain came from:
+the reliability term falls from $0.0231$ to $0.0051$ while resolution barely moves, which
+is to say the work bought \emph{calibration}, not \emph{discrimination}.
 
 Three ideas were built, measured, and did not survive, and they get a section of their
 own, because the reasons they failed are more interesting than the reasons the survivors
-worked. The evidence for the headline change rests on a single draft, which we say
-plainly, repeatedly, and in the tool's own output.
+worked. One shipped feature --- the room-warped price of \S\ref{sec:room} --- has had its
+supporting evidence retracted in full: it did not replicate on the second and third folds,
+and the fold it was chosen on turned out to be priced off a curve built from drafts that
+happened a year later. It still ships, now on a structural argument rather than a score,
+and \S\ref{sec:threats} says so. The thinness of this evidence is stated plainly,
+repeatedly, and in the tool's own output.
 \end{abstract}
 
 \setcounter{tocdepth}{1}
@@ -1837,12 +1842,18 @@ seventeen picks earlier than the national market prices them, then every surviva
 probability computed from national ADP is wrong for quarterbacks in a knowable
 direction.
 
-We have this league's own completed drafts: three of them, $552$ picks. Crucially, the
-curve we build from them reads \emph{only pick order and position} --- never a player
-name, never a historical ADP. So the era caveat that makes the two 2025 drafts unusable
-for scoring survival (\S\ref{sec:backtest}) does not apply here. ``The fourth
-quarterback went at pick $34.7$'' is as true in 2024 as in 2026: it is a statement about
-the room's behaviour, not about any player.
+We have completed drafts from this user's leagues: three of them, $552$ picks. Crucially,
+the curve we build from them reads \emph{only pick order and position} --- never a player
+name, never a historical ADP. So no era-correct price board is needed to build one, and a
+season with no ADP archive still contributes: ``the fourth quarterback went at pick
+$34.7$'' is as true in 2024 as in 2026, because it is a statement about behaviour and not
+about any player.
+
+That is a statement about \emph{era}, and it is emphatically not a licence to ignore
+\emph{order}. A curve is only usable at the clock if every draft in it has already
+happened. \S\ref{sec:backtest} therefore holds each scored fold's \emph{future} out of its
+own curve as well as the fold itself, and \S\ref{sec:crossfold} reports what that costs
+--- which is most of the evidence that ever supported \S\ref{sec:roomfail}'s cutoff.
 
 \subsection{The room's price curve}
 
@@ -2027,8 +2038,12 @@ quarterback-early''. Applied at full depth, it says quarterbacks go \emph{later}
 market thinks --- the exact opposite of the signal it exists for --- because the eighteen
 tail quarterbacks outvote the five at the head.
 
-And it loses the gate: Brier $0.0670 \to 0.0671$, log-loss $0.2250 \to 0.2327$. Both
-worse.
+And on the fold this argument was developed against it loses the gate: Brier
+$0.0670 \to 0.0671$, log-loss $0.2250 \to 0.2327$, both worse. Read that pair with
+\S\ref{sec:causal} in hand --- it comes from a curve built out of that draft's future, and
+on the two folds whose curves predate them the full-depth warp \emph{wins}. The argument
+below is a mechanism, not a measurement, and after this section that distinction does all
+the work.
 
 \subsubsection*{Rank versus player: the apparent contradiction, resolved}
 
@@ -2055,48 +2070,45 @@ price implies, because the reaches are scattered across a wider set of names.
 A rank-based warp captures the first fact. It cannot capture the second, and at depth it
 actively fights it.
 
-\subsubsection*{The fix, and its sweep}
+\subsubsection*{The fix, and the sweep that no longer supports it}
 
-Restrict the warp to the top $\texttt{RoomWarpTopK} = 5$ players at each position;
-everyone deeper keeps raw national ADP. Then it passes, and comfortably: Brier
-$0.0670 \to 0.0660$, log-loss $0.2250 \to 0.2222$. Sweeping the cutoff on the same
-backtest:
+Restrict the warp to the top $\texttt{RoomWarpTopK} = 5$ players at each position; everyone
+deeper keeps raw national ADP. On the 2024 fold that passes comfortably --- Brier
+$0.0670 \to 0.0660$, log-loss $0.2250 \to 0.2222$ --- with an apparent plateau at $K = 4$--$5$
+and the sign flip well past it, and with five of six positions improving on both metrics.
+That is the sweep the constant was chosen from, and \textbf{every number in it is
+retracted}, for two independent reasons:
 
-\begin{center}
-\small
-\begin{tabular}{lrrrrrr}
-\toprule
-cutoff $K$ & 1 & 3 & 5 & 8 & 12 & uncapped \\
-\midrule
-Brier    & 0.0665 & 0.0662 & \textbf{0.0660} & 0.0661 & 0.0674 & 0.0671 \\
-log-loss & 0.2237 & 0.2227 & \textbf{0.2222} & 0.2229 & 0.2283 & 0.2327 \\
-\bottomrule
-\end{tabular}
-\end{center}
+\begin{enumerate}
+\item \textbf{It did not replicate.} Two 2025 folds are now scorable against a
+hand-exported board (\S\ref{sec:backtest}). On both, the $K \le 5$ restriction loses its
+per-position gate and the \emph{uncapped} warp --- the loser above --- wins outright
+(Table~\ref{tab:warpfolds}). Board depth was the obvious confound, since $k$ is a rank over
+the board and the 2025 boards are more than twice as deep; it was tested with
+\code{-depth 178} and it is not the explanation.
+\item \textbf{It was never causal.} The 2024 curve was built from two drafts that ran a
+year after that draft (\S\ref{sec:causal}). Holding each fold's future out leaves 2024
+without a curve, so the plateau, the per-position result and the upper end of the
+``never worse'' band all cease to exist in the regime the tool runs in. Only
+\code{calibrate -lookahead} reproduces them.
+\end{enumerate}
 
-The optimum is a plateau at $K = 4$--$5$ and the sign flip is well past it, which is what
-you want to see: a knife-edge optimum would suggest a fitted artifact, a plateau suggests
-a real effect with a real boundary.
+\subsubsection*{So what is $K = 5$ still doing there?}
 
-Per position at $K = 5$: five of six improve on both metrics outright; quarterbacks
-improve on both (Brier $0.0970 \to 0.0952$, log-loss $0.2966 \to 0.2921$), and receivers
-improve on Brier while their log-loss moves $+0.000032$, which prints as
-$0.2450 \to 0.2450$. That is a tie the reader can check in the output, not a win, and the
-tool's own gate scores it as a tie and says so on every run rather than leaving it to a
-comment.
+Standing on the \emph{mechanism} above and on one weak empirical fact, and nothing else.
+The mechanism is not in dispute: a national ranked list runs deeper than any finite draft,
+so past the room's appetite $\adp_{\text{room}}(P,k)$ prices players later than the market
+\emph{by construction}, and the mean shift measurably flips sign there. That argument does
+not depend on which fold is in front of you. The empirical fact is that $K = 5$ is never
+worse than not warping on either causal fold --- but so is every other $K$ the sweep tries,
+including no cap at all, so this rules nothing out.
 
-\subsubsection*{What would overturn it}
-
-\textbf{The evidence is one fold.} 2024 is the only season with era-correct ADP, so two
-drafts build the curve, one scores it, and the whole margin is $-0.0009$ Brier and
-$-0.0028$ log-loss. It ships because it is the best number available and because no
-position and no nearby cutoff points the other way --- not because a single fold can
-tell a real edge from a lucky one.
-
-A second scorable season in FFC's archive would settle it. As of this writing
-\code{year=2025} still answers ``No ADP data found''. Recheck once, cheaply, near draft
-day; re-gate then. If $K \le 5$ stops winning, \code{-room=false} is already the
-fallback and the default moves back.
+\textbf{Read the cutoff as unidentified and the cap as an argument.} Nothing was retuned:
+moving $K$ to whichever value wins the current tally would repeat the exact error that
+produced the retracted claim, and \code{-room=false} remains the fallback. What would settle
+it is a fold that is FFC-priced, is not 2024, and has a cached draft before it. FFC's
+archive still answers ``No ADP data found'' for \code{year=2025} (rechecked 2026-07-30), so
+recheck near draft day and re-gate then.
 
 %=======================================================================
 \section{Value over replacement, and pricing the unpriced}
@@ -2402,11 +2414,11 @@ $0.9$ under-predicting means every $(\bar p_b - \bar o_b)^2$ is large and all of
 same sign: a systematic bias, which is exactly the kind of error a single scalar can fix.
 That is the argument for the tilt, made visible.
 
-Computing \eqref{eq:murphy} on our two headline models (using the ten printed bins; the
-decomposition is exact only for constant-within-bin forecasts, so the reconstruction is
-approximate --- it recovers $0.0879$ against a true $0.0868$ for the base engine and
-$0.0668$ against $0.0660$ for the shipped model, the residual being within-bin forecast
-variance):
+Computing \eqref{eq:murphy} on our two headline models (using the ten printed bins of
+Table~\ref{tab:relcompare} and Table~\ref{tab:relship}; the decomposition is exact only for
+constant-within-bin forecasts, so the reconstruction is approximate --- it recovers
+$0.0879$ against a true $0.0868$ for the base engine and $0.0677$ against $0.0670$ for the
+shipped model, the residual being within-bin forecast variance):
 
 \begin{table}[htbp]
 \centering
@@ -2416,16 +2428,17 @@ variance):
 model & reliability $\downarrow$ & resolution $\uparrow$ & uncertainty & $\approx$ Brier \\
 \midrule
 engine (raw conditional logistic) & 0.0231 & 0.0374 & 0.1022 & 0.0879 \\
-shipped (top-5 warp + shrunk + tilt) & \textbf{0.0047} & 0.0401 & 0.1022 & 0.0668 \\
+shipped (shrunk + tilt) & \textbf{0.0051} & 0.0396 & 0.1022 & 0.0677 \\
 \bottomrule
 \end{tabular}
-\caption{Where the improvement came from. Reliability falls by a factor of five;
-resolution barely moves.}
+\caption{Where the improvement came from, on the 2024 fold. Reliability falls by a factor
+of four and a half; resolution barely moves. ``Shipped'' carries no room warp here because
+this fold has no causal curve (\S\ref{sec:causal}).}
 \label{tab:murphy}
 \end{table}
 
 This table is the most informative single result in the paper. The entire gain from the
-tilt, the shrink and the room warp is a \textbf{calibration} gain, not a
+tilt and the shrink is a \textbf{calibration} gain, not a
 \textbf{discrimination} gain. The model was always roughly as good at telling players
 apart as it is now; it was simply saying the wrong numbers. That is worth knowing for
 two reasons: it tells you the tilt is doing exactly what it was designed to do and
@@ -2437,24 +2450,95 @@ of milestone 6.
 \subsection{The backtest}
 \label{sec:backtest}
 
-\subsubsection*{Data}
+\subsubsection*{Data: three folds, one per draft}
 
-One completed draft: Sleeper draft \code{1133489617308684288}, this user's real 2024
-league draft. 12 teams, 15 rounds, 180 picks.
+\begin{definition}[Fold]
+A \emph{fold} is one completed draft together with the era-correct ADP board it is scored
+against. Folds are never pooled: different rooms, different round counts, different
+boards, and pooling would let one fold's tilt exponents be solved over another fold's
+prices.
+\end{definition}
 
-Era-correct prices: FFC's archive serves past years, and
-\code{/api/v1/adp/half-ppr?teams=12\&year=2024} returns the 2024 market --- $178$
-players over $906$ drafts, window 2024-08-31 to 2024-09-01. The rows carry the full
-current schema (\code{adp}, \code{stdev}, \code{times\_drafted}, \code{high},
-\code{low}), so per-player sigma, the shrink and the support floor are all directly
-backtestable rather than only $\sigma_{\text{def}}$.
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{llrrrl}
+\toprule
+fold & draft & teams & rounds & board & source \\
+\midrule
+2024   & \code{1133489617308684288} & 12 & 15 & 177 & FFC archive, half-PPR 2024 \\
+2025-a & \code{1261824503076360192} & 12 & 16 & 387 & FantasyPros 2025 export \\
+2025-b & \code{1253161474382102529} & 12 & 15 & 387 & FantasyPros 2025 export \\
+\bottomrule
+\end{tabular}
+\caption{The three folds. ``board'' is the number of source names that joined onto Sleeper
+ids. All three drafts are 12-team half-PPR snakes with \code{reversal\_round} $=0$.}
+\label{tab:folds}
+\end{table}
 
-The draft ran on 2024-08-31, \emph{inside} that window. The tool checks and reports this
-rather than assuming it.
+\paragraph{They are three leagues, not one league over three seasons.} This matters
+because the room curve of \S\ref{sec:room} is built from all three at once. Measured from
+the cached league user lists and reprinted by the tool on every run: 2025-a shares $9$ of
+$12$ managers with 2024 and is this user's own room; 2025-b shares $5$ and belongs to
+somebody else; 2025-a and 2025-b share $6$. All three carry \code{previous\_league\_id:
+null}, so nothing links them programmatically and the overlap is the only evidence there
+is. The three rooms' curves nonetheless agree closely --- QB1 went at pick $21 / 29 / 19$,
+TE1 at $24 / 21 / 25$ --- so the stranger league is not an outlier. But the supportable
+claim is \emph{``casual home leagues take quarterbacks and tight ends earlier than
+national ADP''}, not ``this room drafts weird''.
 
-The two 2025 drafts are \textbf{skipped, not scored}. FFC's archive has no
-\code{year=2025} --- it returns ``No ADP data found''. Falling back to another season's
-prices would silently invalidate every number, so the tool prints a note and drops them.
+\paragraph{The 2024 board: FFC's archive.}
+\code{/api/v1/adp/half-ppr?teams=12\&year=2024} returns the 2024 market --- $178$ players
+over $906$ drafts, window 2024-08-31 to 2024-09-01. The rows carry the full current schema
+(\code{adp}, \code{stdev}, \code{times\_drafted}, \code{high}, \code{low}), so per-player
+sigma, the shrink and the support floor are all directly backtestable rather than only
+$\sigma_{\text{def}}$. The draft ran on 2024-08-31, \emph{inside} that window; the tool
+checks and reports this rather than assuming it.
+
+\paragraph{The 2025 board: a hand-exported FantasyPros table, and what it costs.}
+FFC's archive has no \code{year=2025} --- all four formats answer ``No ADP data found'',
+rechecked 2026-07-30, while 2023 and 2024 both work. So the 2025 folds are priced against
+FantasyPros' overall ADP export: $389$ rows, columns \code{Rank}, \code{Player (Bye)},
+\code{POS}, \code{Yahoo}, \code{Sleeper}, \code{RTSports}, \code{AVG}. It is $0.5$~PPR,
+which is the leagues' own scoring, so there is no format mismatch. It lives in the cache
+directory and not in the repository --- it is FantasyPros' data and the repository is
+public --- and a missing file simply skips those folds.
+
+Three consequences follow, and the first is the important one.
+
+\begin{enumerate}
+\item \textbf{There is no \code{stdev}, no \code{times\_drafted}, no \code{high}/\code{low}.}
+Every player on a 2025 fold therefore runs on $\sigma_{\text{def}} = 6.0$. Those folds
+\textbf{cannot referee} $\sigma_{\min}$, $\sigma_{\max}$, the shrink of
+\S\ref{sec:shrink} or the support floor of \S\ref{sec:floorfail}: on them the per-player,
+shrunk, floored and flat rows of Table~\ref{tab:models} are literally one model printed
+five times. They \emph{can} referee the tilt, $\mathrm{EBest}$, the conditioning, the room
+warp and anything downstream of survival. The tool says which regime each fold is in,
+loudly, before printing a number, and refuses to run \code{-tune} on a flat fold.
+
+\item \textbf{Comparing folds requires forcing the ffc fold flat too.} A per-player-sigma
+Brier on 2024 against a flat-sigma Brier on 2025 is two models on two drafts, and the
+difference would be uninterpretable. So the cross-fold table of \S\ref{sec:crossfold}
+scores every fold with $\sigma \equiv 6.0$ and prints each fold's own best-available
+column beside it. Where the two are equal, the fold really was flat --- visible proof
+rather than a claim.
+
+\item \textbf{The board is more than twice as deep.} FFC publishes $178$ names;
+FantasyPros publishes $389$, for drafts of $180$ and $192$ picks. Hundreds of those
+players were never going to be taken by anybody, they survive trivially, and they lift the
+observed base rate from $0.8844$ to $0.9603$. \emph{Briers from different folds are
+therefore not comparable as numbers} --- only as distances from their own uncertainty
+floors, which is why the tool prints $\bar o(1-\bar o)$ per fold and a percentage against
+it. Depth also has a specific consequence for \S\ref{sec:roomfail}, because the warp is
+indexed by rank \emph{within a position}: the fifth receiver on a $178$-name board and the
+fifth on a $389$-name board are not the same player, and the warp's mean shift changes
+sign between the folds because of it.
+\end{enumerate}
+
+Both the \code{AVG} column (the three-platform consensus, populated on all $389$ rows) and
+the \code{Sleeper} column (the platform these drafts were actually run on, populated on
+$358$) are selectable, and where the chosen column is blank the consensus stands in and
+the substitution is counted. \code{AVG} is the default. \S\ref{sec:crossfold} scores both.
 
 \subsubsection*{Vantages}
 
@@ -2463,10 +2547,13 @@ A \emph{vantage} is a triple (draft, seat, round): standing at seat $s$'s pick i
 $r$, looking forward to seat $s$'s pick in round $r+1$.
 \end{definition}
 
-For every seat $s \in \{1,\dots,12\}$ and every round $r \in \{1,\dots,14\}$ we take
+For every seat $s \in \{1,\dots,T\}$ and every round $r \in \{1,\dots,R-1\}$ we take
 $\text{from} = \mathrm{myPick}(r)$ and $\text{to} = \mathrm{myPick}(r+1)$ using the
-engine's \emph{own} snake arithmetic with $\text{mySlot} = s$. That is $12 \times 14 =
-168$ vantages.
+engine's \emph{own} snake arithmetic with $\text{mySlot} = s$. Rounds come off each
+draft's own settings and never a constant: the 2024 draft is 15 rounds and 2025-a is 16,
+so the fold counts are $12 \times 14 = 168$, $12 \times 15 = 180$ and $12 \times 14 = 168$
+vantages respectively. Vantage ids are numbered within a fold, because the tilt is solved
+per vantage and two folds sharing an id would pool two different boards into one solve.
 
 \subsubsection*{The prediction set, the prediction, and the label}
 
@@ -2484,7 +2571,9 @@ it is not a re-implementation.
 was still sitting there.
 \end{itemize}
 
-That yields $\mathbf{15{,}923}$ labelled predictions.
+That yields $\mathbf{15{,}923}$ labelled predictions on the 2024 fold, $53{,}635$ on
+2025-a and $51{,}052$ on 2025-b. The 2025 counts are larger mostly because the board is
+larger, not because the evidence is: see point 3 above.
 
 \subsubsection*{The honest caveat: 12 seats multiply vantages, not evidence}
 
@@ -2518,18 +2607,70 @@ same direction every time: it inflates the observed survival rate and flatters e
 model that predicts high.
 
 So calibrate uses \code{Index.LookupExact} and prints anything it drops. On the 2024
-board: $177$ of $178$ matched, $1$ dropped.
+board: $177$ of $178$ matched, $1$ dropped. On the 2025 board: $\mathbf{387}$ of
+$\mathbf{389}$, $\mathbf{99.5\%}$, $2$ dropped --- ``Hollywood Brown'', who is Marquise
+Brown to Sleeper and is the same single name the 2024 join loses, and ``John Stephens
+Jr.'', deep and teamless. Neither is fuzzed.
 
-\subsubsection*{Leave-one-out for the room warp}
+That $99.5\%$ takes one specific trick, and without it the figure is $91.8\%$. The
+project's usual rule is \emph{join defenses on the team abbreviation, never the name} ---
+in the Sleeper dump all $32$ defenses have \code{full\_name: null}, so a name-based matcher
+misses every one. FantasyPros' export inverts the problem: it puts the \emph{team name}
+in the name field (``Denver Broncos'') and the literal string \code{DST} where a team code
+belongs. The abbreviation path therefore resolves to nothing at all and all $30$ defenses
+drop. The fix is to fall through to the normalized team \emph{name}, which Sleeper does
+carry, split across \code{first\_name} and \code{last\_name} (``Denver''\,/\,``Broncos'').
+The order matters as much as the fallback: a source that supplies a real code is still
+answered by the code, so nothing about the FFC join changes.
 
-The room curve is built from this league's drafts --- and one of them is the draft being
+\subsubsection*{Leave-one-out is not enough: the curve must also be in the past}
+\label{sec:causal}
+
+The room curve is built from this user's drafts --- and one of them is the draft being
 scored. A warp built from the draft it is graded on has memorised the answer and would
-report a skill it does not have.
+report a skill it does not have. So the scored draft is held out. That much was always
+true, and it is not sufficient.
 
-So the gate builds the curve from the \emph{other two} drafts only (both 2025), and
-scores it on 2024. That is leave-one-out cross-validation with $k = 1$ fold, which is
-the only fold this data can cut, and \S\ref{sec:roomfail} and \S\ref{sec:threats} both
-say so.
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{llll}
+\toprule
+fold & started & leave-one-out curve & prior drafts \\
+\midrule
+2024   & 2024-09-01 & 2025-a + 2025-b --- \emph{both a year later} & none \\
+2025-b & 2025-09-02 & 2024 + 2025-a --- \emph{2025-a is 2 days later} & 2024 \\
+2025-a & 2025-09-04 & 2024 + 2025-b --- both earlier & 2024, 2025-b \\
+\bottomrule
+\end{tabular}
+\caption{Start times read from each draft's own Sleeper metadata. Under leave-one-out
+alone, the 2024 fold's curve is $100\%$ posterior to the draft it prices and 2025-b's is
+half posterior.}
+\label{tab:causal}
+\end{table}
+
+Table~\ref{tab:causal} is the problem. At the clock, the live tool can only have drafts
+that have already happened. A fold priced off a curve built from its own future is
+therefore measuring a tool nobody can run --- and this is not symmetric noise that averages
+out, because \textbf{the 2024 fold is the only one that ever preferred a capped warp}
+(\S\ref{sec:crossfold}), so the entire upper bound of the interval that defends
+\code{RoomWarpTopK} came from a curve made of that draft's future.
+
+So each fold now builds its curve from the drafts that started \emph{before} it, and from
+nothing else. A draft with no start time is held out too: unknown order is not prior order.
+The consequence is severe and is the honest one --- \textbf{the 2024 fold has no room curve
+at all}, because no cached draft precedes 2024-09-01, and its room-warp verdict simply
+cannot be produced in the regime the tool runs in. It still grades everything else:
+conditioning, the tilt, per-player sigma, the shrink, the support floor.
+
+Both halves are \emph{asserted}, not commented: \code{checkCurve} refuses to continue if a
+fold's curve contains the fold itself, contains a draft that started after it, or carries a
+different number of drafts than the split allowed. The failure mode is invisible in the
+output --- a leaked or look-ahead curve simply makes the numbers better --- so it cannot be
+left to a comment. \code{calibrate -lookahead} reinstates the old pool, prints a banner
+saying so, and exists only to reproduce the retracted numbers. The same rule is applied by
+\code{live -replay}, through the same function, so the frame a human eyeballs and the
+numbers in this paper cannot come from different pools.
 
 One further subtlety the implementation gets right and which is easy to miss: the warp
 ranks players by ADP \emph{within a position}, so the rank input must cover \emph{every}
@@ -2578,8 +2719,17 @@ here'' (\S\ref{sec:conditioning}) is decoration.
 \label{sec:results}
 %=======================================================================
 
-All numbers below are the live output of \code{pick6 calibrate} on the 2024 draft:
-$15{,}923$ predictions, $168$ vantages, observed survival rate $0.8844$.
+Unless a subsection says otherwise, all numbers below are the live output of
+\code{pick6 calibrate} on the \textbf{2024 fold}: $15{,}923$ predictions, $168$ vantages,
+observed survival rate $0.8844$. That fold is reported alone because it is the only one
+with per-player spread, so it is the only one that can grade the whole model.
+\S\ref{sec:crossfold} brings the other two in, in the one regime all three share.
+
+One thing that fold can \emph{not} grade is the room warp, and the reason is
+\S\ref{sec:causal}: no cached draft precedes it, so under the time-order rule it has no
+curve. Every \code{3a} row below therefore ties its unwarped counterpart --- that is the
+result, printed rather than hidden, and \S\ref{sec:crossfold} is where the warp is actually
+decided.
 
 \subsection{The model table}
 
@@ -2599,19 +2749,23 @@ engine + exactly-$N$ tilt              & 0.0677 & 0.2288 & 0.8734 \\
 4b: support floor + tilt               & 0.0677 & 0.2288 & 0.8734 \\
 4b: shrunk + floor + tilt              & 0.0670 & 0.2250 & 0.8734 \\
 \midrule
-3a: room-warped ADP (full depth)       & 0.0823 & 0.2867 & 0.8356 \\
-3a: room warp + tilt                   & 0.0677 & 0.2364 & 0.8734 \\
-3a: room warp + shrunk + tilt          & 0.0671 & 0.2327 & 0.8734 \\
-\textbf{3a: top-5 warp + shrunk + tilt} & \textbf{0.0660} & \textbf{0.2222} & 0.8734 \\
+3a: room-warped ADP (full depth)       & 0.0868 & 0.3007 & 0.8231 \\
+3a: room warp + tilt                   & 0.0677 & 0.2288 & 0.8734 \\
+3a: room warp + shrunk + tilt          & 0.0670 & 0.2250 & 0.8734 \\
+\textbf{3a: top-5 warp + shrunk + tilt} & \textbf{0.0670} & \textbf{0.2250} & 0.8734 \\
+3a: top-5 warp + flat 6.0 + tilt       & 0.0671 & \emph{0.2233} & 0.8734 \\
 \midrule
 baseline: constant 0.884               & 0.1022 & 0.3580 & 0.8844 \\
 baseline: sigma 6.0 flat               & 0.0825 & 0.2675 & 0.8330 \\
-baseline: sigma 6.0 flat + tilt        & 0.0671 & 0.2233 & 0.8734 \\
+baseline: sigma 6.0 flat + tilt        & 0.0671 & \emph{0.2233} & 0.8734 \\
 baseline: unconditional                & 0.1111 & 0.5159 & 0.7934 \\
 \bottomrule
 \end{tabular}
 \caption{Every model scored on the same $15{,}923$ predictions. Observed survival
-$0.8844$. The bolded row is what the tool runs.}
+$0.8844$. The bolded row is what the tool runs. The four \code{3a} rows tie their unwarped
+counterparts because this fold has no causal room curve (\S\ref{sec:causal}); the warp's own
+evidence is Table~\ref{tab:cutoffsweep}. \emph{Italicised} log-losses beat what ships, and
+the tool prints that marker itself --- see point 3.}
 \label{tab:models}
 \end{table}
 
@@ -2636,8 +2790,17 @@ flat $\sigma = 6$ beats per-player sigma on \emph{both} metrics ($0.0825 / 0.267
 $0.0868 / 0.3007$). Tilted, flat still edges it ($0.0671 / 0.2233$ against
 $0.0677 / 0.2288$). Only once shrinkage is applied does per-player sigma draw level
 ($0.0670 / 0.2250$ --- better on Brier by $0.0001$, worse on log-loss by $0.0017$), and
-only with the room warp on top does the full stack beat flat+tilt on both
-($0.0660 / 0.2222$).
+\textbf{there it stays}.
+
+The room warp used to be the thing that broke the tie: with the top-5 warp on top, the full
+stack scored $0.0660 / 0.2222$ and beat flat+tilt on both. That number required a curve
+built from this fold's future (\S\ref{sec:causal}) and is gone. What the tool prints today
+is the like-for-like comparison it always should have: the shipped stack with every
+$\sigma$ forced flat is the \code{3a: top-5 warp + flat 6.0 + tilt} row, and on this fold it
+\textbf{beats what ships on log-loss}, $0.2233$ against $0.2250$. \code{calibrate} marks
+that row itself rather than leaving it to be noticed. So on the fold with the only
+per-player spread in the project, the per-player pipeline does not win on either metric that
+a reader can check.
 
 The honest reading: \emph{the per-player spread is real information, but the raw
 conversion \eqref{eq:sigmaclamp} over-trusts it badly enough to be a net loss, and most of
@@ -2654,8 +2817,13 @@ draft is not enough to settle it either way.
 and without, tilted and untilted. \S\ref{sec:negative} explains why, and it is
 structural.
 
-\item \textbf{The full-depth room warp loses; the top-5 warp wins.} $0.0671 / 0.2327$
-against $0.0660 / 0.2222$, with the shrunk+tilt base at $0.0670 / 0.2250$.
+\item \textbf{The room warp is absent from this fold entirely}, and it used to be the
+headline of it. Under leave-one-out alone the full-depth warp lost here ($0.0671 / 0.2327$)
+while the top-5 warp won ($0.0660 / 0.2222$) --- and both of those curves were built from
+drafts that ran a year after this draft. Under the time-order rule the fold has no curve, so
+all four \code{3a} rows tie their bases and the warp is decided in
+\S\ref{sec:crossfold} on the two folds that have one. \code{calibrate -lookahead} reprints
+the old numbers; nothing else does.
 \end{enumerate}
 
 \subsection{Calibration, before and after}
@@ -2667,21 +2835,22 @@ against $0.0660 / 0.2222$, with the shrunk+tilt base at $0.0670 / 0.2250$.
 \toprule
 bin & engine & +tilt & +shrunk & shipped & observed & $n$ \\
 \midrule
-0.0--0.1 & 0.0274 & 0.1535 & 0.1670 & 0.1715 & 0.3413 & 1383 \\
-0.1--0.2 & 0.1481 & 0.4130 & 0.4154 & 0.4183 & 0.6432 & 426 \\
-0.2--0.3 & 0.2495 & 0.5304 & 0.5269 & 0.5283 & 0.6520 & 319 \\
-0.3--0.4 & 0.3475 & 0.6163 & 0.6082 & 0.6075 & 0.7021 & 292 \\
-0.4--0.5 & 0.4491 & 0.7028 & 0.6934 & 0.6913 & 0.7190 & 306 \\
-0.5--0.6 & 0.5496 & 0.7667 & 0.7581 & 0.7555 & 0.7419 & 279 \\
-0.6--0.7 & 0.6504 & 0.8284 & 0.8211 & 0.8171 & 0.7710 & 310 \\
-0.7--0.8 & 0.7527 & 0.8855 & 0.8800 & 0.8769 & 0.7995 & 414 \\
-0.8--0.9 & 0.8544 & 0.9347 & 0.9309 & 0.9277 & 0.8678 & 643 \\
-0.9--1.0 & 0.9931 & 0.9970 & 0.9967 & 0.9965 & 0.9842 & 11551 \\
+0.0--0.1 & 0.0274 & 0.1535 & 0.1670 & 0.1670 & 0.3413 & 1383 \\
+0.1--0.2 & 0.1481 & 0.4130 & 0.4154 & 0.4154 & 0.6432 & 426 \\
+0.2--0.3 & 0.2495 & 0.5304 & 0.5269 & 0.5269 & 0.6520 & 319 \\
+0.3--0.4 & 0.3475 & 0.6163 & 0.6082 & 0.6082 & 0.7021 & 292 \\
+0.4--0.5 & 0.4491 & 0.7028 & 0.6934 & 0.6934 & 0.7190 & 306 \\
+0.5--0.6 & 0.5496 & 0.7667 & 0.7581 & 0.7581 & 0.7419 & 279 \\
+0.6--0.7 & 0.6504 & 0.8284 & 0.8211 & 0.8211 & 0.7710 & 310 \\
+0.7--0.8 & 0.7527 & 0.8855 & 0.8800 & 0.8800 & 0.7995 & 414 \\
+0.8--0.9 & 0.8544 & 0.9347 & 0.9309 & 0.9309 & 0.8678 & 643 \\
+0.9--1.0 & 0.9931 & 0.9970 & 0.9967 & 0.9967 & 0.9842 & 11551 \\
 \bottomrule
 \end{tabular}
 \caption{Bins are set by the \emph{engine's} prediction so all four models share the
 same rows and are directly comparable within a row. Compare each model's column against
-the observed column.}
+the observed column. The last two columns are identical because this fold has no causal
+room curve (\S\ref{sec:causal}), so ``shipped'' \emph{is} ``+shrunk'' here.}
 \label{tab:relcompare}
 \end{table}
 
@@ -2696,7 +2865,8 @@ engine said $0.753$ against $0.800$ observed (too low), the tilted model says $0
 (too high). The tilt is a global correction and it cannot fix the shape of the curve, only
 its level; pushing the badly-wrong low bins up necessarily pushes the nearly-right high
 bins past the mark. The trade is strongly worth it --- Table~\ref{tab:murphy}'s
-reliability term falls five-fold --- but it is a trade, and it is visible here.
+reliability term falls by a factor of four and a half --- but it is a trade, and it is
+visible here.
 
 Table~\ref{tab:relship} is the shipped model graded on \emph{its own} bins, which is the
 honest way to read one model's calibration rather than compare four.
@@ -2708,16 +2878,16 @@ honest way to read one model's calibration rather than compare four.
 \toprule
 bin & mean predicted & observed & $n$ \\
 \midrule
-0.0--0.1 & 0.0392 & 0.1361 & 485 \\
-0.1--0.2 & 0.1525 & 0.3575 & 372 \\
-0.2--0.3 & 0.2503 & 0.4636 & 343 \\
-0.3--0.4 & 0.3496 & 0.5937 & 315 \\
-0.4--0.5 & 0.4494 & 0.6172 & 337 \\
-0.5--0.6 & 0.5502 & 0.6619 & 349 \\
-0.6--0.7 & 0.6515 & 0.7179 & 390 \\
-0.7--0.8 & 0.7527 & 0.7225 & 454 \\
-0.8--0.9 & 0.8546 & 0.8064 & 661 \\
-0.9--1.0 & 0.9930 & 0.9788 & 12217 \\
+0.0--0.1 & 0.0376 & 0.1417 & 501 \\
+0.1--0.2 & 0.1513 & 0.3668 & 368 \\
+0.2--0.3 & 0.2497 & 0.4706 & 340 \\
+0.3--0.4 & 0.3497 & 0.5981 & 321 \\
+0.4--0.5 & 0.4512 & 0.6316 & 323 \\
+0.5--0.6 & 0.5502 & 0.6589 & 343 \\
+0.6--0.7 & 0.6517 & 0.7209 & 387 \\
+0.7--0.8 & 0.7525 & 0.7388 & 448 \\
+0.8--0.9 & 0.8554 & 0.7892 & 664 \\
+0.9--1.0 & 0.9931 & 0.9782 & 12228 \\
 \bottomrule
 \end{tabular}
 \caption{The shipped model, binned by its own prediction. Still under-confident below
@@ -2778,15 +2948,407 @@ rows. Judged against the global floor of $0.1022$ it looks like the model's weak
 is the opposite. This is the segment where a draft is won, and the model is extracting
 real signal from it.
 
-\item \textbf{Quarterbacks are the worst-calibrated position} (predicted $0.841$ vs
-observed $0.917$ under shrunk+tilt) and the top-5 warp improves them most
-($0.0970 \to 0.0952$ Brier). \S\ref{sec:roomfail} explains why: it is the rank-versus-
-player distinction.
+\item \textbf{Quarterbacks are the worst-calibrated position} (predicted $0.841$ against
+observed $0.917$ under shrunk+tilt), and the top-5 warp is aimed squarely at them. It is
+the one position it helps on both metrics on both causal folds --- Brier
+$0.0379 \to 0.0375$ and log-loss $0.1183 \to 0.1161$ on 2025-a, $0.0384 \to 0.0375$ and
+$0.1228 \to 0.1184$ on 2025-b. It cannot be graded here, because this fold has no causal
+curve. \S\ref{sec:roomfail} explains the mechanism: it is the rank-versus-player
+distinction.
 
 \item \textbf{Tight ends benefit most from shrinkage} (Brier $0.0884 \to 0.0849$,
 log-loss $0.3281 \to 0.3101$), which is what you would expect --- it is a shallow,
 thinly-sampled position where raw spreads are noisiest.
 \end{itemize}
+
+\subsection{The second and third folds}
+\label{sec:crossfold}
+
+Every result above rested on one draft night. Two more are now scorable, and this
+subsection is what they say. The headline: \textbf{the model's core --- conditioning and
+the tilt --- replicates; the room warp's cutoff does not.}
+
+\subsubsection*{The only honest comparison}
+
+Table~\ref{tab:crossfold} scores all three folds with $\sigma \equiv 6.0$, because a board
+with no \code{stdev} can run in no other regime. Each fold's own best-available column sits
+beside it; the two are equal exactly when the board carries no spread, which is why the
+equality is left visible instead of collapsed away.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{llrrrrrr}
+\toprule
+fold & board & depth & picks & $n$ & $\bar o$ & Brier flat $\to$ own & log-loss flat $\to$ own \\
+\midrule
+2024   & FFC             & 177 & 180 & 15{,}923 & 0.8844 & 0.0671 $\to$ 0.0670 & 0.2233 $\to$ 0.2250 \\
+2025-a & FantasyPros avg & 387 & 192 & 53{,}635 & 0.9603 & 0.0197 $\to$ 0.0197 & 0.0698 $\to$ 0.0698 \\
+2025-b & FantasyPros avg & 387 & 180 & 51{,}052 & 0.9607 & 0.0209 $\to$ 0.0209 & 0.0790 $\to$ 0.0790 \\
+\bottomrule
+\end{tabular}
+\caption{The shipped model across folds. ``flat'' forces every $\sigma_j$ to
+$\sigma_{\text{def}}$; ``own'' is that fold's best available. The 2025 rows are identical
+across the arrow because those boards have no spread to shrink.}
+\label{tab:crossfold}
+\end{table}
+
+\textbf{Do not read down the Brier column.} A $389$-name board against a $192$-pick draft
+is mostly players nobody was ever taking; they survive trivially, they lift $\bar o$ from
+$0.8844$ to $0.9603$, and they shrink every Brier on that row for free. The only
+cross-fold quantity this data supports is each fold's distance from its \emph{own}
+uncertainty floor $\bar o(1-\bar o)$:
+
+\begin{center}
+\small
+\begin{tabular}{lrrr}
+\toprule
+fold & floor $\bar o(1-\bar o)$ & flat model & \% of floor \\
+\midrule
+2024   & 0.1022 & 0.0671 & 66\% \\
+2025-a & 0.0381 & 0.0197 & 52\% \\
+2025-b & 0.0377 & 0.0209 & 55\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The model pays $52$--$66\%$ of a no-model baseline on all three. That is the replication
+result, and it is the one that mattered most: nothing about the survival machinery falls
+over on a second room, a second season and a different price source.
+
+\subsubsection*{What replicates, and what does not}
+
+\begin{itemize}
+\item \textbf{Conditioning replicates.} The unconditional baseline is worse than the
+engine on both metrics on every fold ($0.0237 / 0.0854$ against $0.0207 / 0.0732$ on
+2025-a; $0.0247 / 0.0989$ against $0.0216 / 0.0803$ on 2025-b). \S\ref{sec:conditioning}
+is load-bearing everywhere.
+
+\item \textbf{The tilt replicates, and shrinks.} It improves both metrics on all three
+folds --- Brier $0.0868 \to 0.0677$ and log-loss $0.3007 \to 0.2288$ on 2024, $0.0207 \to
+0.0197$ and $0.0732 \to 0.0717$ on 2025-a, $0.0216 \to 0.0210$ and $0.0803 \to 0.0798$ on
+2025-b --- so the sign replicates cleanly and the structural correction is confirmed. The
+magnitude collapses by a factor of roughly twenty, and the reason is visible in the tilt
+report rather than inferred. On 2024 the model expected $16.8$ removals against a
+$12$-pick window, so the median exponent solved to $0.44$; on 2025-a it expected $12.0$
+against $12$ and on 2025-b $11.8$ against $12$, with median exponents $1.08$ and $1.08$
+--- the correction had almost nothing to correct. That is the tilt behaving exactly as
+designed: it is a constraint, not a fitted parameter, and it does nothing when the
+constraint is already satisfied.
+
+There is a fragility underneath that, and the depth control found it. \textbf{On a board
+truncated to roughly the size of the draft, the tilt can make log-loss worse}, and it does
+so on both 2025 folds:
+
+\begin{center}
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+fold (board cut to 178) & untilted & tilted & expected & actual & clamped \\
+\midrule
+2025-a & 0.0563 / 0.1778 & 0.0561 / \emph{0.2118} & 11.4 & 10.7 & 5 of 180 \\
+2025-b & 0.0587 / 0.1914 & 0.0581 / \emph{0.1923} & 11.6 & 10.8 & \textbf{0 of 168} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Brier / log-loss; ``expected'' is the removals the untilted model predicted per vantage and
+``actual'' what the board really lost, both against a target of $N = 12$.
+
+Two mechanisms, and it matters that they are two, because only one of them has an obvious
+fix. \textbf{The first is the target itself.} $N$ counts every pick in the window, but the
+board only holds players some ADP source ranked and the rest of the picks go to names
+nobody priced. Truncation makes that leak much worse --- $12$ picks now remove only
+$\approx 10.7$ board players --- so the tilt aims at a budget the board cannot supply and
+over-corrects, pulling mean predicted survival \emph{below} the observed rate. Aiming at
+the observed count instead would be scoring the labels against themselves, so the tool
+prints the gap on every run and leaves it. \textbf{The second is the clamp}, which is that
+same mechanism at its extreme: on 2025-a five of $180$ vantages admit no $c$ at all, the
+solve pins at $\code{TiltCMax} = 64$, and every survival on that vantage is raised to the
+$64$th power, i.e.\ crushed toward zero. That is where the large $0.1778 \to 0.2118$ move
+comes from.
+
+The distinction is load-bearing, because the obvious fix addresses only the second. 2025-b
+regresses on log-loss with \textbf{zero} clamped vantages, so falling back to $c = 1$ on a
+clamped vantage --- which would still be more honest than falling back to $64$ --- would
+not have rescued it. This is a truncated diagnostic board and not a fold result, but the
+regime is exactly where the shipped board lives: FFC's 2026 half-PPR feed is $201$ names
+against a $192$-pick draft. See \S\ref{sec:threats}.
+
+\item \textbf{The room warp's cutoff does \emph{not} replicate, the direction reverses, and
+the fold that disagrees turns out to have been priced off its own future.} This is the
+significant negative and \S\ref{sec:roomfail} now carries it.
+\end{itemize}
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{llrrrl}
+\toprule
+fold & curve & full-depth warp & top-5 warp & mean shift & per-position verdict at $K=5$ \\
+\midrule
+2024   & \emph{none} & --- & --- & --- & cannot be scored \\
+\midrule
+2025-a & 2024 + 2025-b & 0.0197 $\to$ \textbf{0.0175} & 0.0197 $\to$ 0.0197 & $-3.64$ & RB, WR, DEF regress \\
+       &               & 0.0717 $\to$ \textbf{0.0616} & 0.0717 $\to$ 0.0698 &         & \\
+2025-b & 2024          & 0.0210 $\to$ \textbf{0.0200} & 0.0210 $\to$ 0.0209 & $-2.96$ & RB, WR, K, DEF regress \\
+       &               & 0.0798 $\to$ \textbf{0.0738} & 0.0798 $\to$ 0.0790 &         & \\
+\midrule
+\multicolumn{6}{l}{\emph{and the same table under \code{-lookahead}, i.e.\ the retracted regime:}} \\
+2024   & 2025-a + 2025-b & 0.0670 $\to$ 0.0671 & 0.0670 $\to$ \textbf{0.0660} & $+2.39$ & 5 of 6 better, WR tied \\
+       &                 & 0.2250 $\to$ 0.2327 & 0.2250 $\to$ \textbf{0.2222} &         & \\
+2025-b & 2024 + 2025-a   & 0.0210 $\to$ \textbf{0.0189} & 0.0210 $\to$ 0.0208 & $-2.96$ & RB, WR, K, DEF regress \\
+       &                 & 0.0798 $\to$ \textbf{0.0701} & 0.0798 $\to$ 0.0787 &         & \\
+\bottomrule
+\end{tabular}
+\caption{Brier above log-loss in each cell, against the pre-warp shrunk+tilt model. ``mean
+shift'' is the average price move in picks, positive meaning the warp prices players later.
+The top block is the shipped regime, in which every curve predates the draft it prices; the
+bottom block adds back the drafts that had not happened yet. \textbf{The only fold on which
+the top-5 warp ever beat the full-depth warp is in the bottom block.}}
+\label{tab:warpfolds}
+\end{table}
+
+The top block is two folds, not three, and that is the finding. 2024 has no row because
+nothing in the cache precedes it (\S\ref{sec:causal}); 2025-b's curve shrinks from two
+drafts to one, which is why its full-depth numbers move from $0.0189 / 0.0701$ to
+$0.0200 / 0.0738$ --- a smaller pool with a lighter blend weight, $w = 1/3$ rather than
+$1/2$. Both remaining folds prefer the uncapped warp, on both metrics, by margins ten times
+anything the cap moves.
+
+\subsubsection*{The confounds, named --- and one of them is fatal}
+
+The two 2025 folds agree with each other and disagreed with 2024, which rules out one
+unlucky night as the explanation. Two candidate confounds were on the table.
+
+\paragraph{Board depth: tested, and it is not the answer.} The suspicion was reasonable:
+\eqref{eq:warp} is indexed by rank \emph{within a position}, and the warp's mean shift
+flips sign exactly where the board depth changes ($+2.39$ picks on a $177$-name board,
+$-3.64$ and $-2.96$ on a $387$-name one). On the deeper board the $k$-th player at a
+position sits at a much later ADP, so the same $\adp_{\text{room}}(P,k)$ pulls him
+\emph{earlier} instead of later --- the exact mechanism of \S\ref{sec:roomfail}'s
+structural argument, running backwards.
+
+\textbf{So it was tested rather than believed.} \code{calibrate -depth 178} truncates
+every era board to its $178$ cheapest players before joining, which puts all three folds
+on boards of the same size and, as a by-product, on the same observed survival rate:
+$\bar o$ becomes $0.8844 / 0.8800 / 0.8852$ and the uncertainty floors $0.1022 / 0.1056 /
+0.1016$, so for once the Brier column \emph{can} be read downwards. The disagreement is
+unchanged:
+
+\begin{center}
+\small
+\begin{tabular}{lrrr}
+\toprule
+fold (board cut to 178) & unwarped & top-5 warp & full-depth warp \\
+\midrule
+2025-a & 0.0561 / 0.2118 & 0.0559 / 0.2103 & \textbf{0.0502 / 0.1929} \\
+2025-b & 0.0581 / 0.1923 & 0.0579 / 0.1913 & \textbf{0.0559 / 0.1815} \\
+\midrule
+2024 (\code{-lookahead}) & 0.0670 / 0.2250 & \textbf{0.0660 / 0.2222} & 0.0671 / 0.2327 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+At matched depth the full-depth warp still wins decisively on both 2025 folds and the
+top-5 restriction still fails its per-position gate on both, and 2024 --- when its
+look-ahead curve is put back so that it has one at all --- still points the other way.
+\textbf{Board depth does not explain the disagreement.} It remains a real effect on the
+mean shift, which is $-1.24$ and $-0.99$ picks on the truncated 2025 boards against
+$-3.64$ and $-2.96$ untruncated, so truncation moved it a long way toward 2024's $+2.39$
+without moving the verdict at all.
+
+\paragraph{Time order: not tested, because it is not a confound but a defect.} The other
+difference between 2024 and the 2025 folds was not a property of the data at all. Under
+leave-one-out alone, 2024's curve was built from two drafts that ran a year later
+(\S\ref{sec:causal}); the 2025 folds' curves were mostly or entirely built from drafts that
+preceded them. So the fold that disagreed was also the only fold priced off information no
+live board could have. Holding each fold's future out removes 2024's curve entirely, and
+with it the disagreement --- \textbf{not because the folds now agree, but because only the
+agreeing folds are left.} That is a smaller claim, and it is the true one.
+
+\paragraph{What remains unseparable.} \textbf{Season and vendor are perfectly collinear.}
+2024 is FFC, a distribution over $906$ observed drafts; 2025 is a FantasyPros
+three-platform ranking consensus. Every difference between the folds is simultaneously a
+difference of year, of room and of pricing methodology, and no truncation fixes that. Since
+the only FFC-priced fold is also the only acausal one, this confound and the last are now
+the same fold, which is as weak as an experimental design can be.
+
+\subsubsection*{The cutoff is not identified}
+
+The stronger statement, and the one that changes what this paper is allowed to claim:
+\code{calibrate} now sweeps $K$ on every fold that has a causal curve, rather than on the
+one it was chosen from.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{lrrrrrrrrrr}
+\toprule
+& $K{=}1$ & $2$ & $3$ & $4$ & $5$ & $6$ & $8$ & $12$ & $20$ & $\infty$ \\
+\midrule
+2025-a Brier & .0197 & .0197 & .0196 & .0196 & .0197 & .0194 & .0194 & .0191 & .0184 & \textbf{.0175} \\
+2025-b Brier & .0210 & .0210 & .0210 & .0209 & .0209 & .0208 & .0207 & .0207 & .0205 & \textbf{.0200} \\
+\midrule
+folds won      & 0/2 & 0/2 & 1/2 & 2/2 & 1/2 & 2/2 & 2/2 & 2/2 & 2/2 & \textbf{2/2} \\
+folds not worse& 2/2 & 2/2 & 2/2 & 2/2 & 2/2 & 2/2 & 2/2 & 2/2 & 2/2 & 2/2 \\
+folds clean    & 1/2 & 0/2 & 0/2 & 0/2 & 0/2 & 0/2 & 0/2 & 0/2 & 0/2 & 0/2 \\
+\midrule
+\multicolumn{11}{l}{\emph{the retracted regime, \code{-lookahead}, for comparison:}} \\
+2024 Brier   & .0665 & .0663 & .0662 & \textbf{.0660} & \textbf{.0660} & .0661 & .0661 & .0674 & .0672 & .0671 \\
+folds not worse& 3/3 & 3/3 & 3/3 & 3/3 & 3/3 & 3/3 & 3/3 & 2/3 & 2/3 & 2/3 \\
+\bottomrule
+\end{tabular}
+\caption{\code{RoomWarpTopK} swept against the unwarped model. ``won'' is better on both
+metrics; ``not worse'' allows a tie at the printed four decimals; ``clean'' additionally
+requires that no position regress --- the full ship gate. Both causal folds are monotone in
+$K$ and want no cap. The interior optimum at $K = 4$--$5$ exists only on 2024, and only when
+2024 is allowed a curve built from its own future.}
+\label{tab:cutoffsweep}
+\end{table}
+
+\textbf{No cutoff clears the full gate on any set of folds.} The per-position half of the
+gate --- the half that produced the sentence ``no position regresses'', which is what
+justified shipping the warp into survival --- is a 2024-only result at every $K$ that was
+tried, and 2024 has no causal curve. That claim is retracted twice over.
+
+The band is retracted too, and this is the part that is easy to miss. It used to read
+``every $K \in [1,8]$ is never worse on any fold, while $K \ge 12$ and uncapped are worse
+on 2024'' --- and that upper bound of $8$ was set \emph{exclusively} by 2024, i.e.\ by the
+look-ahead fold. On the two causal folds \textbf{every} $K$ the sweep tries is never worse,
+including no cap at all, so the band no longer excludes anything and cannot be read as an
+argument for capping.
+
+\textbf{Nothing was moved anyway,} and the reason is now explicitly not a measurement.
+\code{RoomWarpTopK} stays at $5$ and \code{-room} stays on because (i) $K = 5$ is never
+worse than not warping on either causal fold, and (ii) the structural argument of
+\S\ref{sec:roomfail} --- a ranked list runs deeper than any finite draft, so past the room's
+appetite rank-to-room-pick prices players later than the market \emph{by construction} ---
+is an argument about the mechanism that no amount of FantasyPros-priced 2025 data speaks to.
+Moving $K$ to whichever value wins the cross-fold tally would repeat the exact error that
+produced the retracted claim, with more data. The honest one-line summary: \textbf{the cap
+is an argument, the band is the measurement, and the band is now empty of content.}
+
+\subsubsection*{Does league purity matter? No; sample size does}
+
+Threat 5 of \S\ref{sec:threats} says \eqref{eq:warp} pools three different leagues. That is
+a testable design decision, so \code{calibrate} tests it: for each fold it rebuilds the
+curve from each \emph{single} draft available to it in turn and from all of them, and scores
+the same predictions with each. The two single-draft rows are the controlled comparison ---
+the blend weight is $w = n/(n+2)$, so they share $w = 1/3$ exactly and differ only in whose
+room supplied the curve. The pooled row moves purity and weight together and is not a third
+point on the same line.
+
+\textbf{This table is now one fold wide, and that is the cost of \S\ref{sec:causal}.} A
+fold can only be split over the drafts that preceded it: 2024 has none and 2025-b has one,
+so only 2025-a has a purity question at all. The three-fold version, which is what the
+conclusion below was originally drawn from, required every fold to be allowed its own
+future.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{llrrr}
+\toprule
+fold & curve built from & shared managers & top-5 warp & full-depth warp \\
+\midrule
+2025-a & no warp             & ---    & 0.0197 / 0.0717 & 0.0197 / 0.0717 \\
+       & 2024 only           & $9/12$ & 0.0197 / 0.0701 & 0.0185 / 0.0649 \\
+       & 2025-b only         & $6/12$ & 0.0197 / 0.0708 & 0.0181 / 0.0645 \\
+       & both                & mixed  & 0.0197 / 0.0698 & \textbf{0.0175 / 0.0616} \\
+\midrule
+\multicolumn{5}{l}{\emph{the retracted regime, \code{-lookahead}:}} \\
+2024   & no warp             & ---    & 0.0670 / 0.2250 & 0.0670 / 0.2250 \\
+       & 2025-a only         & $9/12$ & 0.0662 / 0.2218 & 0.0669 / 0.2281 \\
+       & 2025-b only         & $5/12$ & 0.0664 / 0.2241 & 0.0670 / 0.2293 \\
+       & both                & mixed  & \textbf{0.0660 / 0.2222} & 0.0671 / 0.2327 \\
+\midrule
+2025-b & no warp             & ---    & 0.0210 / 0.0798 & 0.0210 / 0.0798 \\
+       & 2024 only           & $5/12$ & 0.0209 / 0.0790 & 0.0200 / 0.0738 \\
+       & 2025-a only         & $6/12$ & 0.0208 / 0.0789 & 0.0193 / 0.0721 \\
+       & both                & mixed  & 0.0208 / 0.0787 & \textbf{0.0189 / 0.0701} \\
+\bottomrule
+\end{tabular}
+\caption{Brier / log-loss. ``Shared managers'' is the overlap between the league that
+supplied the curve and the league being scored. The scored draft is excluded from every
+curve on every row; in the top block, so is every draft that started after it. Only the top
+block is reproducible by a tool standing at the clock.}
+\label{tab:purity}
+\end{table}
+
+Two things fall out, and they point the same way --- but read the caveat that follows them,
+because most of the evidence for both lives in the bottom block.
+
+\textbf{Purity is at best a second-order effect.} Where the higher-overlap source wins it
+wins by very little (2024: $0.0662/0.2218$ from the $9/12$ room against $0.0664/0.2241$
+from the $5/12$ room; 2025-b: the $6/12$ source beats the $5/12$ source on both). Where it
+loses, it loses just as small (2025-a: the $6/12$ \emph{stranger} league beats the $9/12$
+own-room source under the full-depth warp, $0.0181/0.0645$ against $0.0185/0.0649$). Three
+comparisons, two for purity and one against, all of them smaller than the gap between the
+two warp variants on the same row.
+
+\textbf{Sample size is a first-order effect.} The pooled two-draft curve beats \emph{both}
+of its own single-draft components on $5$ of the $6$ fold-by-variant cells. The one
+exception is the full-depth warp on 2024, which is the variant that fails on that fold
+anyway.
+
+\textbf{The caveat.} Of those three purity comparisons and six pooling cells, exactly one
+comparison and two cells --- 2025-a's --- survive the time-order rule. The rest are rows in
+which a fold was priced off drafts that had not happened yet. Since the claim being made is
+about \emph{whose room supplies the curve} and not about \emph{when}, the bottom block is
+not worthless evidence for it: manager overlap is a fact about the leagues, not about the
+calendar. But it is evidence from a regime the tool cannot run in, and one surviving
+comparison is not a result. Treat ``sample size dominates purity'' as a plausible reading
+that the causal data neither confirms nor contradicts.
+
+The room curves themselves point the same way and do not depend on any of this: the three
+leagues take QB1 at picks $21$, $29$ and $19$ and TE1 at $24$, $21$ and $25$.
+\eqref{eq:warp} is a portrait of casual home leagues, not of one room.
+
+\subsubsection*{A side result: the platform's own ADP beats the consensus}
+
+The FantasyPros export prices every player twice, and both folds were run on Sleeper. Both
+columns go through the same warp, the same sigma and their own per-vantage tilt, so only
+the price differs.
+
+\begin{center}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+fold & Brier (AVG) & Brier (Sleeper) & log-loss (AVG) & log-loss (Sleeper) \\
+\midrule
+2025-a & 0.0197 & \textbf{0.0150} & 0.0698 & \textbf{0.0495} \\
+2025-b & 0.0209 & \textbf{0.0177} & 0.0790 & \textbf{0.0616} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Sleeper's own column wins on both metrics on both folds, and by margins an order of
+magnitude larger than anything the room warp moved. Quarterbacks carry most of it
+(2025-a Brier $0.0375 \to 0.0190$; 2025-b $0.0375 \to 0.0270$), receivers and tight ends
+the rest. The comparison is over the same prediction set by construction: every scored row
+carries both prices, and the only dilution is the $31$ export rows where the Sleeper
+column was blank and the consensus stood in --- on those the two models are literally the
+same number, which weakens the comparison rather than flattering it.
+
+The one place it wobbles is the depth control. Truncated to $178$ names, 2025-a still
+prefers Sleeper on both metrics ($0.0559 \to 0.0449$ Brier, $0.2103 \to 0.1779$ log-loss),
+but 2025-b splits: Brier $0.0579 \to 0.0522$ better, log-loss $0.1913 \to 0.2103$
+\emph{worse}. So the effect is strongest on the deep board, where the consensus is
+averaging three rankings of players none of the three platforms has much of an opinion
+about.
+
+The intuition that a three-platform average should be better calibrated than any single
+ranking is nonetheless wrong here, and the natural reading is not ``consensus ADP is
+bad''. It is that the drafts and the column come from the same platform, so the column
+knows the platform's users --- the same kind of local knowledge \eqref{eq:warp} is
+reaching for, from a far larger sample. This is the largest unexploited result in the
+paper: the tool's own board is priced off FFC and FantasyCalc, neither of which publishes
+a Sleeper-specific ADP, so there is nothing to switch on today. The scored default stays
+\code{AVG}, because a result this good on the platform's own drafts is also the one most
+likely to be measuring the room rather than the market, and because the 2024 board has no
+Sleeper column to check it against.
+
 %=======================================================================
 \section{Negative results}
 \label{sec:negative}
@@ -2812,18 +3374,52 @@ than any finite draft, so past the room's appetite the rank-to-room-pick map has
 --- and there are more players in that unreliable tail than at the reliable head. The
 warp's mean \emph{blended} shift on quarterbacks flipped sign: $-1.7$ to $-3.7$ picks on
 QB1 through QB5, but \textbf{$+11.0$ picks overall}, the opposite of the signal it was
-built to capture. \textbf{The score.} Brier $0.0670 \to 0.0671$, log-loss $0.2250 \to 0.2327$;
-both worse. Restricted to the top five at each position it wins instead
-($0.0660 / 0.2222$), and that is what ships.
+built to capture. \textbf{The score.} On the 2024 fold, Brier $0.0670 \to 0.0671$, log-loss
+$0.2250 \to 0.2327$; both worse. Restricted to the top five at each position it won there
+instead ($0.0660 / 0.2222$), and that is what ships.
 
 \textbf{Status.} \code{RoomCurve.EffectiveADP} is still exported, still tested, and still
 scored as a row in the model table on every run --- deliberately, so the next reader
-cannot assume the warp was never tried at depth. Its only caller is the backtest.
+cannot assume the warp was never tried at depth. Its only caller is the backtest, and
+keeping it there is what made everything below visible.
 
-\textbf{What would overturn it.} A second scorable season, so the gate is not one fold;
-or a curve built from enough drafts that the deep $k$ values have real support. This is a
-small-sample-at-depth failure, not a wrong-idea failure, and ten seasons of this league's
-drafts might well make the full-depth warp the better model.
+\textbf{What would overturn it: a second scorable season. That arrived, and it points the
+other way --- and then the first fold's evidence turned out not to be admissible at all.}
+This is the one entry in this section whose verdict has actually moved, so it is worth
+reading as written rather than as summarised.
+
+\textbf{One: it did not replicate.} On both 2025 folds (\S\ref{sec:crossfold},
+Table~\ref{tab:warpfolds}) the full-depth warp \emph{wins} on both metrics ---
+$0.0197 \to 0.0175$ and $0.0717 \to 0.0616$ on 2025-a, $0.0210 \to 0.0200$ and
+$0.0798 \to 0.0738$ on 2025-b --- while the top-5 restriction that ships fails the
+per-position half of its own gate on both.
+
+The obvious explanation was depth: the 2025 boards are $387$ names against 2024's $177$,
+so the $k$-th player at a position carries a much later ADP there, blending toward
+$\adp_{\text{room}}(P,k)$ moves him earlier rather than later, and the mean shift flips
+sign with it ($+2.39$ picks on 2024, $-3.64$ and $-2.96$ on 2025).
+\textbf{That explanation was tested and it is wrong.} Truncating every board to $178$
+names (\code{calibrate -depth 178}) leaves the verdict exactly where it was: the
+full-depth warp still wins on 2025-a ($0.0561 \to 0.0502$, $0.2118 \to 0.1929$) and 2025-b
+($0.0581 \to 0.0559$, $0.1923 \to 0.1815$), and still loses on 2024 when 2024 is given back
+the look-ahead curve it needs to have one at all. Depth moves the mean shift a long way
+toward 2024's --- to $-1.24$ and $-0.99$ picks --- and moves the result not at all.
+
+\textbf{Two: the 2024 verdict came from that draft's future.} Both drafts that built its
+curve ran a year later (\S\ref{sec:causal}). With each fold's future held out, 2024 has no
+curve, the ``$0.0670 \to 0.0671$'' above is reproducible only under
+\code{calibrate -lookahead}, and \textbf{no causal fold rejects the full-depth warp.} The
+mechanism argued above is untouched by this --- it is an argument about ranked lists and
+finite drafts, not a score --- but the measurement that agreed with it is gone.
+
+So the mechanism in \S\ref{sec:roomfail} is not depth-dependent in the way that would have
+saved the top-5 restriction, and \textbf{this negative result should now be read as
+unsupported rather than merely in doubt.} What is left to blame for the original
+disagreement is the one thing this data cannot pull apart, and it has collapsed onto a
+single fold: season, vendor and causality are all collinear, 2024 being a sample of $906$
+real drafts, priced a year before the drafts that warped it, while 2025 is a ranking
+consensus with curves that predate it. What is still needed is a fold that is FFC-priced,
+is not 2024, and has a cached draft before it.
 
 \subsection{The support floor}
 \label{sec:floorfail}
@@ -2954,8 +3550,8 @@ the table reads
 $\sigma_{\text{def}}$ & $\sigma_{\min}$ & $\sigma_{\max}$ & $n_0$ & untilted Brier & tilted Brier \\
 \midrule
 4.5 & 8.0 & 10.0 & 200 & 0.0750 & \textbf{0.0667} \\
-4.5 & 4.0 & 15.0 & 50  & 0.0833 & \textbf{0.0667} \\
 4.5 & 8.0 & 15.0 & 50  & 0.0749 & 0.0668 \\
+4.5 & 8.0 & 10.0 & 10  & 0.0749 & 0.0669 \\
 \midrule
 6.0 & 0.5 & 25.0 & 25  & 0.0856 & 0.0670 \quad (shipped) \\
 \bottomrule
@@ -2963,6 +3559,11 @@ $\sigma_{\text{def}}$ & $\sigma_{\min}$ & $\sigma_{\max}$ & $n_0$ & untilted Bri
 \end{center}
 
 \noindent
+Those are the rows the tool prints, and it prints one row per distinct \emph{printed}
+tilted Brier rather than one per grid point --- several combinations tie at $0.0667$ and
+differ only in the eighth decimal, so showing all of them would hide the shape of the
+curve behind four copies of the same number.
+
 So the overturn condition stated below \emph{is} partially met: with the tilt in place the
 grid finds $0.0667$ against the shipped $0.0670$. Three things about that margin, all
 checkable in the tool's own output.
@@ -2970,10 +3571,12 @@ checkable in the tool's own output.
 \begin{enumerate}
 \item \textbf{It is a flat-sigma model in disguise.} Blend at $n_0 = 200$ and the prior
 swamps every player's own measurement (median \code{times\_drafted} on the 2024 board is
-$54$); clamp the result to $[8, 10]$ and there is almost nothing left to vary. Measured:
-that row gives $\sigma$ running $8.00$ / $8.00$ / $8.99$ (min / median / max) with
-$154$ of $178$ players pinned exactly at the floor. The second row is milder and still
-pins $81$ of $178$. The grid is not discovering a better per-player scale --- it is
+$54$); clamp the result to $[8, 10]$ and there is almost nothing left to vary. Measured on
+the $177$ joined players: that row gives $\sigma$ running $8.00$ / $8.00$ / $8.99$ (min /
+median / max) with $152$ of them pinned exactly at the floor, and the second row is barely
+milder at $8.00$ / $8.00$ / $10.81$ and $151$ pinned. Even the gentlest combination that
+ties the winner --- $(4.5, 4.0, 15.0, 50)$, suppressed from the table above as a duplicate
+score --- still pins $81$. The grid is not discovering a better per-player scale, it is
 rediscovering flat sigma, which the results table already grades directly: ``baseline:
 sigma 6.0 flat + tilt'' scores $0.0671$. A $0.0667$ and a $0.0671$ that are the same
 model in different clothes are not evidence for moving four constants.
@@ -2984,9 +3587,11 @@ grid before believing it'' on every run. An optimum at the boundary is the searc
 out of road, not a minimum.
 
 \item \textbf{The margin is $0.0003$ on one fold.} \S\ref{sec:threats} says why that is
-not a number to move constants on. The room warp ships on $0.0009$, which is three times
-larger, and it additionally cleared a cutoff sweep showing a plateau and a per-position
-gate showing no regressions. This row has neither.
+not a number to move constants on. It used to be argued here that the room warp ships on
+$0.0009$, three times larger, plus a cutoff plateau and a clean per-position gate --- and
+all three of those have since been retracted (threat 1b), so the comparison is gone rather
+than reversed. What remains true is the arithmetic: $0.0003$ between two models that are
+the same model in different clothes is not evidence for moving four constants.
 \end{enumerate}
 
 \textbf{Outcome.} No constant was moved. $\sigma_{\min}$ is still $0.5$, and the shipped
@@ -3006,18 +3611,71 @@ than writing is the whole reason any of this was catchable.
 A number without its caveat is a lie. These are ordered roughly by how much they should
 worry you.
 
-\paragraph{1. One draft.}
-The entire backtest is a single completed draft. There is exactly one season for which
-this league's draft and the corresponding era ADP both exist. Every claim in
-\S\ref{sec:results} is therefore a claim about one night in August 2024. The room warp's
-margin in particular --- $-0.0009$ Brier, $-0.0028$ log-loss --- is small enough that a
-single unusual draft could produce it by chance, and we cannot rule that out with the
-data we have.
+\paragraph{1. Three drafts, and only one of them can grade the whole model.}
+The backtest is three completed drafts (\S\ref{sec:backtest}). That is better than the one
+it used to be, and the core \textbf{replicates}: the conditioning beats the unconditional
+curve on every fold, the tilt improves both metrics on every fold, and the model pays
+$52$--$65\%$ of a no-model baseline on all three. Those claims are upgraded from one fold
+to three and this threat no longer governs them.
+
+It still governs everything about $\sigma$, because the two 2025 folds are priced off a
+board with no per-player spread and cannot say anything at all about it (see 4 and 9).
+And it governs the room warp completely --- see threat 1b, which is the more serious half
+of this and is really a defect rather than a limitation.
+
+\paragraph{1b. The room warp has one fold of causal evidence, and the cutoff has none.}
+This is the most serious thing in the paper and it is a defect that was found, not a
+limitation that was accepted. Leave-one-out held out the draft being scored and nothing
+else --- so the 2024 fold, which ran on 2024-09-01, was priced off a curve built entirely
+from two drafts that ran a year later (\S\ref{sec:causal}, Table~\ref{tab:causal}). The
+tool now holds each fold's future out too, which leaves 2024 with no curve at all, since
+nothing in the cache precedes it.
+
+The consequences, in the order they hurt:
+
+\begin{enumerate}
+\item \textbf{The cutoff's entire case was that fold's.} $K = 5$ won on 2024 and only on
+2024, and the ``never worse for $K \in [1,8]$'' band had its upper bound of $8$ set
+exclusively by 2024 as well. Both are gone. On the two causal folds every $K$ the sweep
+tries is never worse, including no cap, so the band identifies nothing
+(Table~\ref{tab:cutoffsweep}).
+\item \textbf{Both causal folds prefer the warp this paper rejected}, by margins ten times
+anything the cap moves. \code{RoomWarpTopK} therefore stays at $5$ on a structural argument
+about ranked lists and finite drafts, plus never-worse --- not on a score. \S\ref{sec:roomfail}
+says so in its own words now.
+\item \textbf{The purity result thins to one fold} (Table~\ref{tab:purity}), because a fold
+can only be split over drafts that preceded it.
+\item \textbf{The remaining causal evidence is entirely FantasyPros-priced 2025 data},
+which is the same data threat 4 says cannot referee $\sigma$. So the one fold that can grade
+the whole model and the folds that can grade the warp are now disjoint sets.
+\end{enumerate}
+
+\code{calibrate -lookahead} reprints the old regime under a banner, and it is the only way
+to obtain any of the retracted numbers. What would fix this properly is a draft older than
+2024-09-01 in the cache, or an FFC-priced fold that is not 2024.
 
 \paragraph{2. Twelve seats are correlated.}
-$15{,}923$ predictions sounds like a lot. It is $168$ vantages over $180$ real picks, and
-all twelve seats are scoring the same picks. The effective sample is far smaller than the
-count suggests. Do not compute a standard error from $n = 15{,}923$.
+$15{,}923$ predictions on the 2024 fold sounds like a lot. It is $168$ vantages over $180$
+real picks, and all twelve seats are scoring the same picks. The effective sample is far
+smaller than the count suggests. Do not compute a standard error from $n = 15{,}923$ ---
+or from the $53{,}635$ of 2025-a, where the count is inflated a second time by a board more
+than twice as deep as the draft.
+
+\paragraph{2b. Two folds are compared across different board depths.}
+FFC publishes $178$ names, FantasyPros $389$. A deeper board grades hundreds of players
+nobody was ever taking; they survive trivially and drag $\bar o$ from $0.8844$ to
+$0.9603$, which shrinks every Brier on that row for reasons that have nothing to do with
+the model. Table~\ref{tab:crossfold} therefore reports each fold's distance from its own
+uncertainty floor and nothing else, and \S\ref{sec:crossfold} says plainly that the Brier
+column must not be read downwards.
+
+This one is now \emph{controllable}: \code{calibrate -depth N} truncates every board to
+its $N$ cheapest players, and at $N = 178$ the three folds land within $0.005$ of each
+other on $\bar o$ ($0.8844 / 0.8800 / 0.8852$) and their Briers become directly
+comparable. It was run, and it did not rescue \eqref{eq:warp}. Note what the control does
+\emph{not} fix: truncation makes the boards the same size, not the same kind of thing.
+2024 is still a distribution over observed drafts and 2025 still a ranking consensus, and
+season and vendor remain perfectly collinear across the folds.
 
 \paragraph{3. The ADP snapshot postdates the draft --- and this is the optimistic case.}
 FFC serves the trailing snapshot of a season's draft week. This draft ran on 2024-08-31,
@@ -3029,19 +3687,40 @@ not a typical case. On draft day the tool runs on a snapshot that is at most a d
 which is close but not identical; the tool prints its own staleness in the footer for
 exactly this reason.
 
-\paragraph{4. 2025 is missing from the archive.}
-Two of this user's three completed drafts contribute nothing to survival scoring, because
-FFC's archive has no \code{year=2025}. They do contribute to the room curve, which reads
-only pick order and is therefore era-immune. Recheck the archive near draft day --- it is
-one request --- and if 2025 has landed, re-gate \S\ref{sec:roomfail} immediately. That is
-the single highest-value follow-up in the project.
+\paragraph{4. The 2025 board is not a sample of drafts, and carries no date.}
+FFC's archive still has no \code{year=2025}, so the 2025 folds are priced off a
+hand-exported FantasyPros consensus. That is an average of three platforms' rankings, not
+a distribution over observed drafts: there is no \code{stdev} (so no per-player $\sigma$,
+no shrink, no support floor), no \code{times\_drafted} (so no sample weight), and no
+snapshot window (so the era check can match by season and nothing finer --- unlike 2024,
+where the draft is verifiably inside the price window). It is also a file a human
+downloaded, which means it is frozen at whatever preseason moment they downloaded it and
+refetching is a chore rather than a request. Recheck FFC's archive near draft day; if 2025
+lands there, re-run and re-gate \S\ref{sec:roomfail} against a board that can answer all
+of the above. That is still the single highest-value follow-up in the project.
 
-\paragraph{5. The room curve is three drafts.}
-$552$ picks across three nights of one league, two of them from 2025 and one from 2024.
-The pseudo-count of \eqref{eq:warp} is an explicit acknowledgement of this ($w = 0.6$ at
-$n = 3$), and the top-5 restriction is a second one. Neither makes three drafts into a
-sample. And the room's membership changes between seasons, which nothing here models at
-all.
+\paragraph{5. The room curve is three drafts \emph{of three different leagues}.}
+$552$ picks across three nights. The docs used to imply one league across three seasons and
+that is wrong: measured manager overlap is $9/12$ between 2024 and 2025-a, $5/12$ between
+2024 and 2025-b, $6/12$ between the two 2025 leagues, and all three carry
+\code{previous\_league\_id: null}. So \eqref{eq:warp} is not a portrait of ``this room'' at
+all --- it is a portrait of casual home leagues in general, which is a weaker and broader
+claim than the one \S\ref{sec:room} is named for. The pseudo-count is an explicit
+acknowledgement of the sample size ($w = 0.6$ at $n = 3$) and the top-5 restriction is a
+second one; neither makes three nights into a sample.
+
+The membership question itself has been measured (Table~\ref{tab:purity}) and the answer
+is reassuring for the pooling and deflating for the naming: at a fixed blend weight, a
+curve from a $5$--$6/12$-overlap stranger league scores about as well as one from the
+$9/12$-overlap own room, and the pooled two-draft curve beats both of its components on $5$
+of $6$ cells. \textbf{But five of those six cells come from folds that were allowed to
+build curves out of their own future} (threat 1b); only 2025-a's row survives the
+time-order rule, and one comparison is not a result. Read ``sample size dominates purity''
+as plausible and unconfirmed rather than measured. Pooling different leagues is therefore
+still the default --- the room curves themselves agree closely, which is independent of any
+of this --- but it is tolerated rather than demonstrated, and only because these leagues
+appear interchangeable. A serious drafter's room would be a different curve and none of
+this evidence would transfer to it.
 
 \paragraph{6. Values are imported; the project makes no projections.}
 Every $v_j$ comes from FantasyCalc, every $a_j$ and $\varsigma_j$ from FFC, every tier
@@ -3061,6 +3740,35 @@ that properly is exactly what the Monte Carlo opponent model of milestone 6 is f
 until it lands the engine's tier-hold probabilities in particular should be read as
 somewhat too confident in both directions.
 
+\paragraph{7b. On a board no deeper than the draft, the tilt aims at a budget the board
+cannot supply --- and the clamp is only the extreme case of that.} \S\ref{sec:tilt} bounds
+$c$ to $[1/64, 64]$ and argues both clamps are real board states rather than defensive
+padding. They are. But the clamp is not the whole phenomenon, and believing it is would
+send the next reader after the wrong fix.
+
+\code{calibrate -depth 178} shrinks the 2025 boards to roughly the size of the draft, and
+\textbf{log-loss then regresses under the tilt on both of them}: $0.1778 \to 0.2118$ on
+2025-a and $0.1914 \to 0.1923$ on 2025-b. On 2025-a, five of $180$ vantages hit
+$c = \code{TiltCMax}$ --- no $c$ exists, the solve pins at $64$, and every survival on that
+vantage is raised to the $64$th power, i.e.\ crushed toward zero --- and that is where most
+of the large move comes from. \textbf{On 2025-b, zero of $168$ vantages clamp}, and log-loss
+regresses anyway.
+
+The shared mechanism is the target. $N$ counts every pick in the window, but the board only
+holds players some ADP source ranked; truncation raises the share of picks spent on names
+nobody priced, so $12$ picks remove only $\approx 10.7$ board players and the tilt
+over-corrects on \emph{every} vantage, not just the clamped ones. Mean predicted survival
+is pulled below the observed rate as a result. The clamp is that same error at the point
+where it becomes unbounded.
+
+Two consequences. First, falling back to $c = 1$ on a clamped vantage --- which is still
+more honest than falling back to $64$, and which nothing does today --- would fix 2025-a's
+large move and would not touch 2025-b's at all. Second, the regime matters: on the folds'
+own untruncated boards no vantage clamps in $516$ ($168 + 180 + 168$), but the shipped 2026
+board is $201$ FFC names against a $192$-pick draft, and the live pool is thinner still in
+effective mass because registered-but-unranked players sit in it at $p = 1$ contributing
+nothing to the sum. Nothing in the code warns about either.
+
 \paragraph{8. Need weights are unmeasured.}
 $1.0 / 0.6 / 0.25$ and the endgame slack of $0.5$ are judgement, not measurement. Nothing
 in the backtest touches them, because the backtest grades survival and need does not enter
@@ -3069,8 +3777,16 @@ survival. They could be materially wrong without any of the numbers in this pape
 \paragraph{9. Per-player sigma is carried on principle, not on evidence.}
 See point 3 of \S\ref{sec:results}: on this backtest a flat $\sigma = 6.0$ with the tilt
 scores $0.0671 / 0.2233$ against the shrunk per-player stack's $0.0670 / 0.2250$ --- a
-tie at best, and untilted the flat model wins outright. The shipped model beats it only
-once the room warp is added, and that rests on the same single fold. \S\ref{sec:tuningartifact}
+tie at best, and untilted the flat model wins outright. It got no better with the second
+and third folds, which by construction cannot help: they have no per-player spread at all.
+Worse, the shipped stack with every $\sigma$ forced flat beats the shipped stack itself on
+2024 log-loss ($0.2233$ against $0.2250$, Table~\ref{tab:models} and
+Table~\ref{tab:crossfold}), and the room warp --- which used to be the thing that broke the
+tie in per-player sigma's favour --- can no longer be scored on that fold at all (threat
+1b). So the one metric on which the full stack used to clear flat+tilt no longer separates
+them either. This is not buried: \code{calibrate} appends ``beats what ships on log-loss''
+to that row itself, so the table cannot be read without meeting the comparison.
+\S\ref{sec:tuningartifact}
 points the same way from a second direction: the tilted tuning grid's optimum is a
 configuration that pins $154$ of $178$ players to one $\sigma$. If a second scorable
 season arrives and per-player sigma still fails to beat a constant, the honest response is
@@ -3167,7 +3883,7 @@ precomputes sigma and tiers without importing the engine.
 \multicolumn{3}{@{}l}{\emph{Fetch-time --- \code{internal/adp}}}\\[0.2em]
 \code{ShrinkPseudoDrafts} & 25.0 & $n_0$ in \eqref{eq:shrinkvar}. The 2024 pool's median player was taken in $54$ drafts and the thinnest in $11$ (2026: $49$ and $5$); at $n_0 = 25$ the median player's own number outvotes the prior 2:1 and a thin player lands most of the way onto it. \\
 \code{RoomWarpPseudo} & 2.0 & $w = n/(n+2)$, so three drafts buy $60\%$ of the warp and a depth nobody reached buys none. Deliberately timid. \\
-\code{RoomWarpTopK} & 5 & \textbf{Measured}, and the one constant in this table chosen by the backtest. Cutoff sweep: $K=1$ $0.0665$, $K=3$ $0.0662$, $K=5$ $0.0660$, $K=8$ $0.0661$, $K=12$ $0.0674$, uncapped $0.0671$. A plateau at 4--5. \S\ref{sec:roomfail}. \\
+\code{RoomWarpTopK} & 5 & \textbf{Unidentified.} It was chosen off a cutoff sweep on the 2024 fold ($K=5$ Brier $0.0660$, a plateau at 4--5); that sweep did not replicate on either 2025 fold, and 2024's curve came from drafts a year after it, so it no longer has a causal curve at all. On the two folds that do, every $K$ --- including no cap --- is never worse than not warping, so the sweep excludes nothing. Held at 5 on the structural argument of \S\ref{sec:roomfail} plus never-worse. Threat 1b. \\
 \code{SigmaDefault}, \code{SigmaFromStdev}, \code{SigmaMin}, \code{SigmaMax}, \code{TierDropPct}, \code{TierFloorPct}, \code{TierMaxSize}, \code{TierMinSize} & --- & Deliberate duplicates of the engine values, so \code{fetch} can precompute sigma and tiers without importing the engine. Keep them in sync by hand; there are tests. \\
 \bottomrule
 \end{longtable}

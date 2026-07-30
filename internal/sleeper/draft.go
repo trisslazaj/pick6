@@ -43,6 +43,15 @@ type Draft struct {
 		SlotsDEF       int `json:"slots_def"`
 		SlotsBench     int `json:"slots_bn"`
 	} `json:"settings"`
+	// Metadata carries the league's display name and its scoring type, which
+	// live here rather than in settings. The backtester prints both: three
+	// cached drafts turn out to be three different leagues, so "2025" is not a
+	// name for a fold, and a draft whose scoring_type is not half_ppr would be
+	// scored against the wrong adp format entirely.
+	Metadata struct {
+		Name        string `json:"name"`
+		ScoringType string `json:"scoring_type"`
+	} `json:"metadata"`
 	// DraftOrder maps user_id -> draft slot (1-indexed). Null before a draft
 	// is seeded, so callers must cope with it being empty.
 	DraftOrder map[string]int `json:"draft_order"`
