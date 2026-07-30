@@ -191,8 +191,11 @@ func runFetch(args []string) error {
 		return err
 	}
 	printPreview(players)
+	printKDefValues(players)
+	printReplacement(players)
 	printInjuryFlags(players, flagged)
 	printTierDisagreements(players)
+	printRoomCurve(players)
 	return nil
 }
 
@@ -410,6 +413,114 @@ func printTierDisagreements(players map[string]*adp.Player) {
 	}
 	fmt.Println("  negative delta = your tiers rank him ahead of the market; positive = the market does.")
 	fmt.Println("  rows marked derived have no hand-typed tier to check — that gap is value vs adp.")
+}
+
+// roomCurveKs are the ranks the room table prints: the top of a position, where
+// the fight actually is, plus one deep enough to show the curve flattening.
+var roomCurveKs = []int{1, 2, 4, 8}
+
+// printRoomCurve shows where this league takes the k-th player at a position
+// against where the national market prices him, and caches the drafts it read.
+//
+// This is the deliverable of the room warp, and deliberately the ONLY place it
+// ships by default. The signal is real and measured — over the first five at each
+// position this room takes quarterbacks 17.4 picks and tight ends 13.4 picks
+// earlier than the market prices them, and defenses 30.0 picks LATER, while backs
+// and receivers track it to within a pick — but wiring it into survival was
+// cross-validated on the 2024 backtest and lost (see `pick6 calibrate`, the 3a
+// gate section). So it prints as a read for the human and stays behind `-room`
+// for the model.
+//
+// A read like this is worth more than it looks: knowing the room takes tight ends
+// early is a reason to move one up your own board, and that is a judgement the
+// tool should hand over rather than make.
+func printRoomCurve(players map[string]*adp.Player) {
+	drafts, sources := adp.LoadRoomDrafts(leagueDrafts)
+	var seasons []string
+	picks := 0
+	for _, s := range sources {
+		if s.Err != nil {
+			note("room", "skipped", fmt.Sprintf("%s · %s", s.ID, strings.ToLower(s.Err.Error())))
+			continue
+		}
+		seasons = append(seasons, s.Season)
+		picks += s.Picks
+	}
+
+	fmt.Printf("\nroom curve — where the k-th player at a position really goes in your league:\n")
+	curve := adp.RoomCurveOf(drafts)
+	if curve.Empty() {
+		fmt.Println("  no cached drafts loaded. the ids live in cmd/pick6/calibrate.go.")
+		return
+	}
+	note("drafts", "cached", fmt.Sprintf("%d drafts, %d picks · seasons %s",
+		curve.Drafts, picks, strings.Join(seasons, ", ")))
+
+	// The market side of every comparison: the adp of the k-th best player at the
+	// position on the board fetch just built. Same rank, both sides — adp_room(WR, 5)
+	// is where the fifth receiver went, so it can only be compared against the
+	// fifth receiver's price.
+	market := map[string][]float64{}
+	for _, p := range players {
+		if p.ADP > 0 && p.Pos != "" {
+			market[p.Pos] = append(market[p.Pos], p.ADP)
+		}
+	}
+	for _, list := range market {
+		sort.Float64s(list)
+	}
+
+	fmt.Printf("  %-5s %5s %6s", "pos", "depth", fmt.Sprintf("gap%d", adp.RoomWarpTopK))
+	for _, k := range roomCurveKs {
+		fmt.Printf(" %-14s", fmt.Sprintf("k%d", k))
+	}
+	fmt.Println()
+	for _, pos := range []string{"QB", "RB", "WR", "TE", "K", "DEF"} {
+		depth := curve.Depth(pos)
+		if depth == 0 {
+			continue
+		}
+		// The gap is the mean of (room - market) over the TOP of the position only,
+		// and the cutoff is load-bearing rather than tidy. Averaged over every k the
+		// number inverts: national adp ranks more players at a position than a
+		// 15-round draft ever takes, so past the room's appetite the curve is later
+		// than the market by construction and the tail swamps the head. Over all k
+		// quarterback reads +9.8 here; over the top five it reads -17.4, and the
+		// second number is the one that matches what the room actually does — it is
+		// the figure room.go's header quotes, and not to be confused with the 3a
+		// gate's qb price SHIFT of +11.5, which is a different quantity with the
+		// opposite sign. adp.RoomWarpTopK carries the measurement behind the cutoff.
+		var gap float64
+		var n int
+		for k := 1; k <= depth && k <= len(market[pos]) && k <= adp.RoomWarpTopK; k++ {
+			if room, _, ok := curve.At(pos, k); ok {
+				gap += room - market[pos][k-1]
+				n++
+			}
+		}
+		if n > 0 {
+			gap /= float64(n)
+		}
+		fmt.Printf("  %-5s %5d %+6.1f", strings.ToLower(pos), depth, gap)
+		for _, k := range roomCurveKs {
+			room, _, ok := curve.At(pos, k)
+			if !ok || k > len(market[pos]) {
+				fmt.Printf(" %-14s", "-")
+				continue
+			}
+			fmt.Printf(" %-14s", fmt.Sprintf("%.1f / %.1f", room, market[pos][k-1]))
+		}
+		fmt.Println()
+	}
+	fmt.Println("  cells are room pick / market adp for the k-th player at the position.")
+	fmt.Printf("  gap%d is the mean of (room - market) over the first %d: negative means this room\n",
+		adp.RoomWarpTopK, adp.RoomWarpTopK)
+	fmt.Println("  takes the position earlier than the national market prices it. deeper k are")
+	fmt.Println("  shown but not averaged — a ranked list runs deeper than any finite draft, so")
+	fmt.Println("  down there the room is later than adp about everyone and the mean flips sign.")
+	fmt.Println("  depth is the deepest k the room ever reached; past it the curve says nothing.")
+	fmt.Println("  reading only. survival prices raw adp unless you pass -room, which the 2024")
+	fmt.Println("  backtest scored worse — `pick6 calibrate` prints that table.")
 }
 
 func dash(n int) string {

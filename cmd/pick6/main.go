@@ -14,6 +14,7 @@ usage:
   pick6 mock        replay a scripted draft against the real ui
   pick6 live        poll a sleeper draft and render the board
   pick6 calibrate   score the survival model against drafts that already happened
+  pick6 scout       profile your leaguemates from every draft they've played
   pick6 board       static best-available board, manual mark-taken (not built yet)
 `
 
@@ -47,6 +48,11 @@ func main() {
 	case "calibrate":
 		if err := runCalibrate(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "calibrate failed: %v\n", err)
+			os.Exit(1)
+		}
+	case "scout":
+		if err := runScout(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "scout failed: %v\n", err)
 			os.Exit(1)
 		}
 	case "board":

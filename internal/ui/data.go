@@ -348,7 +348,14 @@ func (b Board) urgencyStrip(w int) string {
 	if len(entries) == 0 {
 		note := Dim.Render("—")
 		if !s.Done() && s.PicksUntilMine() == 0 {
-			note = Dim.Render("your pick — urgency resets, take best value")
+			// It said "take best value" until the board's zero-urgency tie-break
+			// became need-weighted VOR, at which point the two tabs were
+			// describing different rules on the one frame where the rule decides
+			// everything. The wording is this terse for a width reason and not a
+			// stylistic one: the plan rides on the end of this row, and the budget
+			// leaves 49 cells for the note — "take best value over replacement"
+			// fits the row and pushes the plan off it.
+			note = Dim.Render("your pick — urgency resets, best over replacement")
 		}
 		// The plan still rides along here, and this is the frame it is most worth
 		// reading on: standing at my own pick, every urgency is exactly zero and

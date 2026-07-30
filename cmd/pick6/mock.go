@@ -3,10 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,6 +28,7 @@ func runMock(args []string) error {
 	auto := fs.Bool("auto", true, "auto-advance picks")
 	snapshot := fs.Int("snapshot", -1, "advance N picks, print one frame, exit (no tui)")
 	data := fs.Bool("data", false, "render the data tab instead of the board in snapshot mode")
+	room := fs.Bool("room", false, "price survival against this league's own draft history (opt-in; measured worse than raw adp)")
 	width := fs.Int("width", 100, "terminal width for snapshot mode")
 	height := fs.Int("height", 40, "terminal height for snapshot mode")
 	if err := fs.Parse(args); err != nil {
@@ -35,11 +38,12 @@ func runMock(args []string) error {
 		return fmt.Errorf("slot %d is outside a %d-team league", *slot, *teams)
 	}
 
-	players, err := loadBoard()
+	players, err := loadBoard(*room, "")
 	if err != nil {
 		return err
 	}
 	s := engine.New(players, *teams, *rounds, *slot)
+	s.Demand = leagueDemand() // replacement level, from this room's own drafts
 	pick := scriptedPicker(*seed)
 
 	// Snapshot mode renders a single frame to stdout. Useful for eyeballing the
@@ -70,8 +74,22 @@ func runMock(args []string) error {
 	return err
 }
 
+// leagueDrafts is calibrateDrafts under the name the room warp cares about. Same
+// three completed drafts, two different questions: the backtest scores them
+// against era adp, the warp reads nothing but their pick order. One list on
+// purpose — a second copy would drift the day a fourth draft happens.
+var leagueDrafts = calibrateDrafts
+
 // loadBoard reads the cached board written by `pick6 fetch`.
-func loadBoard() (map[string]engine.Player, error) {
+//
+// room turns on the room-warped effective adp: the survival model prices players
+// against a blend of national adp and where this league's own drafts actually
+// took the k-th player at the position. It is opt-in because the 2024 backtest
+// says it is worse — see roomWarp for the numbers.
+//
+// replaying is the draft id being replayed, or "" live and in the mock. It is
+// held out of the curve; see roomWarp.
+func loadBoard(room bool, replaying string) (map[string]engine.Player, error) {
 	dir, err := cache.Dir()
 	if err != nil {
 		return nil, err
@@ -116,7 +134,78 @@ func loadBoard() (map[string]engine.Player, error) {
 	if len(out) == 0 {
 		return nil, fmt.Errorf("board is empty — run `pick6 fetch` first")
 	}
+	if room {
+		roomWarp(out, list, replaying)
+	}
 	return out, nil
+}
+
+// roomWarp fills in engine.Player.ADPEff from this league's own draft history and
+// says out loud what it did. Nothing else in the pipeline changes: ADPEff is a
+// second field precisely so the display columns, Available's adp tie-break and
+// the mock's picker keep reading the raw market price.
+//
+// MEASURED WORSE, WHICH IS WHY IT IS A FLAG. Cross-validated on the 2024 draft
+// with the curve built from the two 2025 drafts only, it moves brier 0.0670 ->
+// 0.0671 (+0.0001) and log-loss 0.2250 -> 0.2326 against the shipped model. The
+// damage is not where it was expected: the loss is spread across rb, wr and def,
+// while qb brier actually improves and qb log-loss gets worse. `pick6 calibrate`
+// prints the whole table and the reason — the warp is right at the top of a
+// position and structurally wrong past it, which adp.RoomWarpTopK measures.
+//
+// The signal itself is real and worth reading; it is the PRICING that fails.
+// `pick6 fetch` prints the curve for the human, which is where it earns its keep.
+//
+// A failure to load is a note, not an error: a board on raw adp is the default
+// board, so there is nothing to abort. The read is disk-only for the same
+// reason — see adp.CachedRoomDrafts.
+//
+// replaying is held out of the curve. `live <id> -replay -room` over one of the
+// three league drafts would otherwise price that draft's own survival numbers
+// off a curve built partly from it, which is memorization wearing a backtest's
+// clothes; `pick6 calibrate` excludes the scored draft for exactly this reason
+// and the frame you eyeball afterwards has to agree with it. "" outside replay,
+// where nothing to hold out is the normal case.
+func roomWarp(out map[string]engine.Player, list []*adp.Player, replaying string) {
+	drafts, sources := adp.CachedRoomDrafts(leagueDrafts)
+	for _, s := range sources {
+		if s.Err != nil {
+			note("room", "skipped", fmt.Sprintf("%s · %s", s.ID, strings.ToLower(s.Err.Error())))
+		}
+	}
+	var except []string
+	if _, ours := drafts[replaying]; ours {
+		except = append(except, replaying)
+		note("room", "held out", replaying+" · replaying it, so it cannot price itself")
+	}
+	curve := adp.RoomCurveOf(drafts, except...)
+	if curve.Empty() {
+		note("room", "off", "no cached drafts loaded — board stays on raw adp")
+		return
+	}
+
+	rows := make([]adp.RoomRow, 0, len(list))
+	for _, p := range list {
+		rows = append(rows, adp.RoomRow{ID: p.SleeperID, Pos: p.Pos, ADP: p.ADP})
+	}
+	eff := curve.EffectiveADP(rows)
+	if len(eff) == 0 {
+		note("room", "off", "the curve reaches nobody on this board")
+		return
+	}
+	var moved float64
+	for id, v := range eff {
+		p, ok := out[id]
+		if !ok {
+			continue
+		}
+		moved += math.Abs(v - p.ADP)
+		p.ADPEff = v
+		out[id] = p
+	}
+	note("room", "warped", fmt.Sprintf(
+		"%d of %d rows repriced from %d drafts · moved %.1f picks each on average · opt-in, measured worse",
+		len(eff), len(list), curve.Drafts, moved/float64(len(eff))))
 }
 
 // loadFreshness reads meta.json for the footer's age clause and the live
@@ -150,6 +239,12 @@ func loadFreshness() ui.Freshness {
 // the pick *sequence* is synthetic. Seeded, so a given seed always replays the
 // same draft, which is what makes it useful for demos and for milestone 4's
 // "scripted RB run flips the banner" test.
+//
+// It drafts off RAW adp, never the room-warped ADPEff, even under -room. The warp
+// is a claim about how a real room deviates from national adp; feeding it to the
+// fake room would make the fake room deviate that way BY CONSTRUCTION, and every
+// frame would then confirm the warp perfectly. A self-fulfilling prophecy is
+// exactly the failure mode a mock is supposed to be immune to.
 func scriptedPicker(seed int64) ui.Autopicker {
 	rng := rand.New(rand.NewSource(seed))
 

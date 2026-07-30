@@ -23,8 +23,11 @@ import "math"
 // UndraftedADP: he always survives. Missing sigma falls back to SigmaDefault;
 // per-player sigma is converted from observed stdev and clamped at fetch time,
 // not here.
+//
+// The price it curves around is p.price(), so a room-warped board shifts the
+// whole survival model with one field and nothing else in the engine changes.
 func (s *State) PSurviveAt(p Player, at int) float64 {
-	adp := p.ADP
+	adp := p.price()
 	if adp <= 0 {
 		adp = UndraftedADP
 	}
@@ -109,20 +112,41 @@ func softplus(x float64) float64 {
 	return math.Log1p(math.Exp(x))
 }
 
+// price is the adp the survival model curves around: the room-warped effective
+// adp when a room curve was loaded, the raw market number otherwise.
+//
+// The two readers are PSurviveAt and Falling, and they are the two that are
+// asking the same question — "when does this player come off the board" — which
+// is exactly the question a room disagrees with the market about. Everything
+// else that touches ADP is reporting the market's price or ordering by it, and
+// must keep reading p.ADP directly.
+func (p Player) price() float64 {
+	if p.ADPEff > 0 {
+		return p.ADPEff
+	}
+	return p.ADP
+}
+
 // Falling reports a player the market has passed: still available a full
 // FallerSigmas past his ADP, measured in his own sigma so a volatile flier
 // isn't "falling" at a gap that would be seismic for a locked-in first
 // rounder. Falling players are discounts — the board marks them rather than
 // letting them blend into the list.
+//
+// It reads the warped price too, and must: on a room-warped board "the market
+// has passed him" means the price the survival model is using has been passed.
+// Reading raw adp here while PSurviveAt read the warped one would put an amber
+// discount flag on players the model still thinks are fairly priced.
 func (s *State) Falling(p Player) bool {
-	if p.ADP <= 0 {
+	adp := p.price()
+	if adp <= 0 {
 		return false // never off the radar, never falling
 	}
 	sigma := p.Sigma
 	if sigma <= 0 {
 		sigma = SigmaDefault
 	}
-	return (float64(s.PickNo)-p.ADP)/sigma >= FallerSigmas
+	return (float64(s.PickNo)-adp)/sigma >= FallerSigmas
 }
 
 // BestLater names the player most likely to be the best one left at my next

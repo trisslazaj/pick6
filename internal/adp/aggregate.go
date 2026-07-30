@@ -317,9 +317,88 @@ func Merge(ix *rankings.Index, primary FFCResult, crosschecks []FFCResult, cw *C
 			p.Value = cw.Value[id]
 		}
 	}
+	AnchorKDefValues(out)
 	AssignTiers(out)
 	return out, unmatched
 }
+
+// AnchorKDefValues gives kickers and defenses a value on the same curve as
+// everybody else, so the endgame machinery has something to compare them with.
+// FantasyCalc rates QB/RB/WR/TE only, and a position stuck at value 0 can never
+// produce urgency however badly you need a kicker in round 15.
+//
+// THE RULE IS BY RANK, NOT BY NEIGHBOURING ADP. The spec said "the value of the
+// skill player with the nearest overall adp, interpolating between neighbours",
+// and implemented literally that produces nonsense, measured on the real board:
+// value is not monotone in adp (Tyler Allgeier adp 173.4 carries 538 while
+// Keaton Mitchell at adp 172.9 carries 194), so interpolating between whoever
+// happens to sit either side gave Denver DEF at adp 103.3 a value of 1698.6,
+// Houston DEF at 106.4 a value of 989.9 and the LA Rams at 108.3 a value of
+// 251.1 — three defenses ordered nonsensically against their own prices, which
+// then corrupts Available(), since that sorts by value.
+//
+// Instead: let k be the number of valued skill players priced ahead of him and
+// take the k-th largest skill value. Monotone by construction (k only grows with
+// adp, the value list only shrinks), it lands exactly ON the imported curve
+// rather than between two points of it, and it needs no interpolation at all.
+// Measured across all 34 k/def on the shipped board: zero monotonicity
+// violations, seattle DEF at adp 94.8 -> 1027, philadelphia DEF 132.9 -> 394,
+// pittsburgh DEF 148.9 -> 171, evan mcpherson 158.2 -> 112, chris boswell
+// 171.5 -> 32.
+//
+// The rejected alternative is worse than it sounds: ValueBase*exp(-rank/decay)
+// gives about 6 at rank 150, on a board where the rank-150 skill player carries
+// ~190. That 30x mismatch is what CLAUDE.md's "never mix modes in one draft"
+// rule exists to prevent, and it would make kicker urgency invisible forever.
+//
+// Idempotent, and called again after a rankings file has moved skill values, so
+// the anchor always references the curve the board is actually using.
+func AnchorKDefValues(players map[string]*Player) {
+	// One population, two sorted views of it: a skill player counts toward the
+	// rank only if he has both a price and a value, or k would be counted over a
+	// different set than it indexes into and the k-th largest value would belong
+	// to nobody in particular.
+	var values []int     // descending
+	var prices []float64 // ascending
+	for _, p := range players {
+		if isKDef(p.Pos) || p.Value <= 0 || p.ADP <= 0 {
+			continue
+		}
+		values = append(values, p.Value)
+		prices = append(prices, p.ADP)
+	}
+	if len(values) == 0 {
+		return // no curve to anchor to; k/def stay at 0 as they were before
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(values)))
+	sort.Float64s(prices)
+
+	for _, p := range players {
+		if !isKDef(p.Pos) {
+			continue
+		}
+		if p.ADP <= 0 {
+			// No price, no anchor. A kicker a live feed registered off-board has
+			// nothing to be ranked against, and inventing a value for him would be
+			// inventing data.
+			p.Value = 0
+			continue
+		}
+		k := sort.SearchFloat64s(prices, p.ADP) // skill players strictly ahead of him
+		if k < 1 {
+			k = 1 // priced ahead of the whole board: the top of the curve
+		}
+		if k > len(values) {
+			k = len(values) // past the end: the floor, not a negative or a wrap
+		}
+		p.Value = values[k-1]
+	}
+}
+
+// isKDef is the one place the two positions no source prices are named, since
+// three separate rules key off them: an anchored value, no tiers ever, and
+// suppression until the last rounds.
+func isKDef(pos string) bool { return pos == "K" || pos == "DEF" }
 
 // AssignTiers groups players into value tiers within each position.
 //
@@ -327,9 +406,22 @@ func Merge(ix *rankings.Index, primary FFCResult, crosschecks []FFCResult, cw *C
 // is dense (players go every pick or two) and late ADP is sparse, so any single
 // threshold either merges the whole first round or shatters the last one.
 // Players without a value get tier 0 and are excluded from cliff logic.
+//
+// K and DEF are excluded EXPLICITLY, and the exclusion is now load-bearing:
+// AnchorKDefValues gives them a value, and the old rule ("anyone with a value
+// gets a tier") would have started tiering them the moment it landed. They stay
+// at tier 0 on purpose. Their value is borrowed from the skill player at the
+// same price, so a "gap" between two kickers is a gap between two receivers
+// somewhere else on the board — it cannot draw a real tier boundary. Tier 0 is
+// also what keeps cliff logic skipping them, and a red "last one in tier 3"
+// about kickers is exactly the kind of alarm this tool must never raise.
 func AssignTiers(players map[string]*Player) {
 	byPos := map[string][]*Player{}
 	for _, p := range players {
+		if isKDef(p.Pos) {
+			p.Tier, p.TierSrc = 0, TierNone
+			continue
+		}
 		if p.Value > 0 || p.TierSrc == TierFromRankings {
 			byPos[p.Pos] = append(byPos[p.Pos], p)
 		}
@@ -510,6 +602,11 @@ func ApplyRankings(players map[string]*Player, ix *rankings.Index, f *rankings.F
 			p.TierSrc = TierFromRankings
 		}
 	}
+
+	// A points column rewrites skill values, and k/def values are read off that
+	// curve, so re-anchor before re-tiering or the kickers stay pinned to the
+	// values of a board that no longer exists.
+	AnchorKDefValues(players)
 
 	// Re-derive for anyone the file didn't cover, and for everyone if its tiers
 	// were unusable. Players the file did set are skipped inside AssignTiers.

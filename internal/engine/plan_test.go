@@ -243,8 +243,11 @@ func TestBestPlanBreaksExactTiesByPositionOrder(t *testing.T) {
 // every one of my rb slots is already full, so pure score wants to spend both
 // picks on the bench.
 //
-// The kicker and the defenses carry Value 0, which is not a fixture convenience:
-// no source we import prices K or DEF, so that is what the real board holds.
+// The kicker and the defenses carry Value 0. That used to be what the real board
+// held; `fetch` now anchors k/def onto the skill curve, so this is the residual
+// case rather than the common one — a defense a live feed registered off-board,
+// with no adp to anchor to and therefore no value. It is still the harder test:
+// a starting slot that must be filled by somebody the score cannot see.
 func endgameBoard(rostered []string) *State {
 	s := newTestState(12, 15, 3)
 	s.PickNo = 166 // round 14; my picks are 166 and 171, and nothing after
@@ -277,6 +280,18 @@ func endgameBoard(rostered []string) *State {
 // Feasibility ranks first and score still decides the order of the two legs,
 // which is what makes the second row right as well as legal: take the contested
 // tight end at 14.10 and the fungible kicker at 15.03, not the reverse.
+//
+// TWO MECHANISMS ENFORCE IT NOW, and the split is worth knowing. mustFill in
+// BestPlan is one; the endgame feasibility guard in needFrom is the other, and
+// at R == U it gets there first — a bench position's need is zero, so the greedy
+// pair is not merely outranked, it never becomes a candidate. At R == U+1 the
+// guard only halves the bench weight, so mustFill is still what does the work.
+//
+// The invariant is therefore checked against the ROSTER rather than against the
+// scores: whatever pair wins, the two legs together have to close every starting
+// slot two picks can still close. That is the actual bug ("no defense at all"),
+// and unlike a score comparison it cannot be satisfied by the arithmetic that
+// produced the plan.
 func TestBestPlanFillsStartersWhenThePicksRunOut(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -284,29 +299,33 @@ func TestBestPlanFillsStartersWhenThePicksRunOut(t *testing.T) {
 		first, secnd string
 		score        float64
 	}{
-		// One spare pick: the bench back is legal at 14.10 as long as the defense
-		// still gets 15.03. score(rb, def) = 800(0.25) + 0.
+		// One spare pick, R == U+1: the bench back is legal at 14.10 as long as
+		// the defense still gets 15.03, and taking the man you can SEE with the
+		// spare pick beats taking an expectation of him one pick later.
+		// score(rb, def) = 800(0.25) + EBest(def at 15.03)(1.0) = 200, since the
+		// defenses on this board carry no value at all. The reverse pair is
+		// 0(1.0) + EBest(rb at 15.03)(0.25) = 575(0.25) = 143.75, and loses.
+		//
+		// Both orderings end at the same roster, so their scores may differ only
+		// by what the board can still offer at each pick. They did not while the
+		// endgame slack was charged to leg one and not to leg two: it halved the
+		// back at 14.10 and not at 15.03, def -> rb won on 143.75 against 100, and
+		// the plan gave up a back worth 800 to take a defense that was equally
+		// available at either pick.
 		{"one slot open", []string{"QB", "RB", "RB", "WR", "WR", "TE", "RB", "K"},
 			"RB", "DEF", 200},
-		// No spare pick: both legs must start. score(te, k) = 100(1.0) + 0, and
-		// the reverse pair is worth EBest(te) = 50 instead of te1's own 100.
+		// No spare pick, R == U: both legs must start, and needFrom has already
+		// zeroed every position that cannot. score(te, k) = 100(1.0) + 0, and the
+		// reverse pair is worth EBest(te) = 50 instead of te1's own 100.
 		{"every pick must start", []string{"QB", "RB", "RB", "WR", "WR", "RB", "DEF"},
 			"TE", "K", 100},
 	}
 	for _, c := range cases {
 		s := endgameBoard(c.roster)
-		q2 := s.FollowingPick()
-
-		// The fixture only proves something if score alone would answer differently.
-		greedy := float64(s.Players["rb1"].Value)*s.Need("RB") +
-			s.ebest("RB", q2, "rb1")*s.NeedAfter("RB", "rb1")
+		open := len(s.UnfilledStarters(s.MySlot))
 		plan, ok := s.BestPlan()
 		if !ok {
 			t.Fatalf("%s: no plan with two picks to come", c.name)
-		}
-		if greedy <= plan.Score {
-			t.Fatalf("%s: fixture proves nothing — rb then rb scores %v against the plan's %v, so feasibility never had to break the tie",
-				c.name, greedy, plan.Score)
 		}
 		if plan.First != c.first || plan.Second != c.secnd {
 			t.Errorf("%s: plan = %s then %s, want %s then %s",
@@ -314,6 +333,69 @@ func TestBestPlanFillsStartersWhenThePicksRunOut(t *testing.T) {
 		}
 		if math.Abs(plan.Score-c.score) > 1e-3 {
 			t.Errorf("%s: plan score = %v, want %v", c.name, plan.Score, c.score)
+		}
+
+		// Play the plan out on a copy of my roster and count the slots it closed.
+		// Two picks cannot close more slots than are open, hence the min.
+		for i, pos := range []string{plan.First, plan.Second} {
+			id := "planned" + string(rune('a'+i))
+			s.Players[id] = Player{ID: id, Name: id, Pos: pos}
+			s.Rosters[s.MySlot] = append(s.Rosters[s.MySlot], id)
+		}
+		want := open
+		if want > 2 {
+			want = 2
+		}
+		if closed := open - len(s.UnfilledStarters(s.MySlot)); closed != want {
+			t.Errorf("%s: plan %s then %s closes %d of %d open starting slots, want %d",
+				c.name, plan.First, plan.Second, closed, open, want)
+		}
+	}
+}
+
+// A pair's two legs end at the same roster, so a position has to be worth the
+// same in either of them. The endgame slack broke that: it multiplied the bench
+// weight inside the shared need rule, leg one saw an open starting slot and leg
+// two saw the lineup that leg one had just completed, and the same back was
+// worth 0.125 first and 0.25 second. mustFill already forces the starter to be
+// filled in BOTH orderings, so the discount was a second, order-sensitive charge
+// for a constraint that was already met — and the plan line contradicted the
+// group order on the board directly under it.
+//
+// The board keeps the discount, and must: a single greedy pick has no mustFill
+// to lean on, so there the multiplier is the only thing saying a flier costs the
+// last spare pick.
+//
+// R == U+1 at pick 166 with only the defense slot open, which is the regime the
+// slack applies to; anything else would pass with the bug still in.
+func TestPlanLegsPriceAPositionTheSameInEitherOrder(t *testing.T) {
+	s := endgameBoard([]string{"QB", "RB", "RB", "WR", "WR", "TE", "RB", "K"})
+	filled, _ := s.FilledSlots(s.MySlot)
+	if r, u := s.MyPicksLeft(), len(s.UnfilledStarters(s.MySlot)); r != u+1 {
+		t.Fatalf("fixture is not the one-spare-pick regime: %d picks, %d unfilled", r, u)
+	}
+
+	cases := []struct {
+		pos       string
+		after     string  // the id the first leg would have taken
+		want      float64 // what both legs must pay
+		wantBoard float64 // ...and what the board's single-pick need still is
+	}{
+		{"RB", "def1", NeedBench, NeedBench * EndgameSlack}, // bench either way
+		{"DEF", "rb1", NeedStarter, NeedStarter},            // the open slot, never discounted
+	}
+	for _, c := range cases {
+		leg1 := s.needFrom(c.pos, filled)
+		leg2 := s.NeedAfter(c.pos, c.after)
+		if leg1 != leg2 {
+			t.Errorf("%s: leg one pays %v, leg two pays %v — same roster, same weight",
+				c.pos, leg1, leg2)
+		}
+		if leg1 != c.want {
+			t.Errorf("%s: plan legs pay %v, want %v", c.pos, leg1, c.want)
+		}
+		if got := s.Need(c.pos); got != c.wantBoard {
+			t.Errorf("%s: board need = %v, want %v", c.pos, got, c.wantBoard)
 		}
 	}
 }

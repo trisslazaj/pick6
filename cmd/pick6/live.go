@@ -18,6 +18,7 @@ func runLive(args []string) error {
 	slot := fs.Int("slot", 0, "your draft slot, if you'd rather say it directly")
 	poll := fs.Int("poll", 3, "seconds between polls (sleeper asks for 2-3+)")
 	replay := fs.Bool("replay", false, "load a finished draft once and print one frame (no tui)")
+	room := fs.Bool("room", false, "price survival against this league's own draft history (opt-in; measured worse than raw adp)")
 	width := fs.Int("width", 92, "board width for replay mode")
 	height := fs.Int("height", 40, "board height for replay mode")
 	// Go's flag package stops parsing at the first positional argument, so
@@ -50,12 +51,15 @@ func runLive(args []string) error {
 		return err
 	}
 
-	players, err := loadBoard()
+	// The draft id doubles as the room curve's hold-out: -replay over one of this
+	// league's own completed drafts must not price it off itself.
+	players, err := loadBoard(*room, draftID)
 	if err != nil {
 		return err
 	}
 
 	s := engine.New(players, draft.Settings.Teams, draft.Settings.Rounds, mySlot)
+	s.Demand = leagueDemand() // replacement level, from this room's own drafts
 	// Prefer the league's real lineup over our assumed one — this league runs two
 	// flex slots, which the default shape does not.
 	if slots := draft.RosterSlots(); len(slots) > 0 {

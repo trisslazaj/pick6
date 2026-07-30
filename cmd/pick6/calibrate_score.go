@@ -31,6 +31,15 @@ type pred struct {
 	high        int
 	drafts      int
 
+	// 3a's inputs. adpRoom is the room-warped effective adp for this player, built
+	// from the OTHER drafts only; qRoom is the engine's survival off it, recorded
+	// during the walk through engine.Player.ADPEff so the graded number comes out
+	// of the shipped reader. adpRoomTop is the same warp applied only to the top
+	// adp.RoomWarpTopK players at each position — the variant that passes the gate.
+	adpRoom    float64
+	adpRoomTop float64
+	qRoom      float64
+
 	// The tilt is not a per-player transform — it is one exponent solved over a
 	// whole vantage's board at once — so a flat list of predictions is not enough
 	// to compute it. vantage says which (draft, seat, round) this row came from;
@@ -336,6 +345,9 @@ func report(preds []pred, drafts, vantages int) {
 	shrunkTiltFn, _ := tilted(preds, modelShrunkSigma)
 	floorTiltFn, _ := tilted(preds, modelSupportFloor)
 	bothTiltFn, _ := tilted(preds, modelShrunkFloor)
+	roomTiltFn, _ := tilted(preds, modelRoom)
+	roomShrunkTiltFn, _ := tilted(preds, modelRoomShrunk)
+	roomTopTiltFn, _ := tilted(preds, modelRoomTopShrunk)
 	shipped := namedModel{"engine", modelEngine}
 	tilt := namedModel{"tilted", tiltFn}
 	// What actually ships after 4b: the shrunk sigma under the tilt. It is a
@@ -365,6 +377,13 @@ func report(preds []pred, drafts, vantages int) {
 	row("4b: support floor", scoreOf(preds, modelSupportFloor))
 	row("4b: support floor + tilt", scoreOf(preds, floorTiltFn))
 	row("4b: shrunk + floor + tilt", scoreOf(preds, bothTiltFn))
+	row("3a: room-warped adp", scoreOf(preds, modelRoom))
+	row("3a: room warp + tilt", scoreOf(preds, roomTiltFn))
+	row("3a: room warp + shrunk + tilt", scoreOf(preds, roomShrunkTiltFn))
+	// Deliberately labeled as a variant, not as a candidate: it wins and it still
+	// isn't the shipped row. adp.RoomWarpTopK holds the reason.
+	row(fmt.Sprintf("3a: top-%d warp + shrunk + tilt", adp.RoomWarpTopK),
+		scoreOf(preds, roomTopTiltFn))
 	row(fmt.Sprintf("baseline: constant %.3f", base.obs), scoreOf(preds, modelConstant(base.obs)))
 	row(fmt.Sprintf("baseline: sigma %.1f flat", engine.SigmaDefault), scoreOf(preds, modelFlatSigma))
 	row(fmt.Sprintf("baseline: sigma %.1f flat + tilt", engine.SigmaDefault), scoreOf(preds, flatTiltFn))
@@ -388,6 +407,11 @@ func report(preds []pred, drafts, vantages int) {
 	// horizon is where waiting actually costs you, and the deep board is where
 	// per-player sigma, and therefore the shrink, is doing all of its work.
 	segments(preds, tilt, current)
+	// 3a gets its own section because it is a gate, not a column: the question is
+	// whether the shipped model should adopt the room's prices at all.
+	roomGate(preds, current,
+		namedModel{"room warp", roomShrunkTiltFn},
+		namedModel{fmt.Sprintf("top-%d warp", adp.RoomWarpTopK), roomTopTiltFn})
 }
 
 // supportReport says what 4b's two corrections were allowed to touch, counted
@@ -560,24 +584,25 @@ func segments(preds []pred, a, b namedModel) {
 		{"13+ picks", func(p pred) bool { return p.horizon() >= 13 }},
 	}, a, b)
 
-	var byPos []seg
-	for _, pos := range []string{"QB", "RB", "WR", "TE", "K", "DEF"} {
-		want := pos
-		byPos = append(byPos, seg{strings.ToLower(pos), func(p pred) bool { return p.pos == want }})
-	}
-	segmentTable("by position", preds, byPos, a, b)
+	segmentTable("by position", preds, positionSegs(), a, b)
 
-	// Where a round ends is each draft's own answer: pick 30 in a 10-team league,
-	// 36 in a 12-team one. Reading the cut off preds[0] and applying it to
-	// everyone would file a second league's adp-31 players under "rounds 1-3"
-	// when they are round-4 picks there — the wrong board, silently.
+	segmentTable("by adp depth", preds, depthSegs(preds), a, b)
+}
+
+// depthSegs splits by where on the board a player is priced.
+//
+// Where a round ends is each draft's own answer: pick 30 in a 10-team league, 36
+// in a 12-team one. Reading the cut off preds[0] and applying it to everyone would
+// file a second league's adp-31 players under "rounds 1-3" when they are round-4
+// picks there — the wrong board, silently.
+func depthSegs(preds []pred) []seg {
 	early := func(p pred) float64 { return float64(3 * p.teams) }
 	mid := func(p pred) float64 { return float64(8 * p.teams) }
-	segmentTable("by adp depth", preds, []seg{
+	return []seg{
 		{"rounds 1-3" + depthCut(preds, 3), func(p pred) bool { return p.adp <= early(p) }},
 		{"rounds 4-8" + depthCut(preds, 8), func(p pred) bool { return p.adp > early(p) && p.adp <= mid(p) }},
 		{"rounds 9+", func(p pred) bool { return p.adp > mid(p) }},
-	}, a, b)
+	}
 }
 
 // depthCut names the adp boundary in the label, but only while every prediction
@@ -599,6 +624,18 @@ func depthCut(preds []pred, rounds int) string {
 type seg struct {
 	label string
 	keep  func(pred) bool
+}
+
+// positionSegs is the by-position split, shared by the standard segment tables
+// and 3a's gate — the room warp is a per-position claim, so it is graded on the
+// same rows and in the same order the rest of the report uses.
+func positionSegs() []seg {
+	var out []seg
+	for _, pos := range []string{"QB", "RB", "WR", "TE", "K", "DEF"} {
+		want := pos
+		out = append(out, seg{strings.ToLower(pos), func(p pred) bool { return p.pos == want }})
+	}
+	return out
 }
 
 func segmentTable(title string, preds []pred, segs []seg, a, b namedModel) {

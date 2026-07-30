@@ -51,6 +51,14 @@ const (
 	NeedFlex    = 0.6  // dedicated slots filled, FLEX open, pos is flex-eligible
 	NeedBench   = 0.25 // otherwise
 
+	// EndgameSlack is what a bench pick is worth when I have exactly one spare
+	// pick left over my unfilled starting slots. Half, because the situation is
+	// genuinely half a problem: the flier is still affordable, and it spends the
+	// only pick standing between me and a lineup with a hole in it. At R == U the
+	// multiplier is 0 rather than this, which is not a tuneable — it is the
+	// arithmetic of having no spare picks at all.
+	EndgameSlack = 0.5
+
 	// Tiers. Mirrored in internal/adp, which precomputes them at fetch time.
 	TierDropPct  = 0.10
 	TierFloorPct = 0.015

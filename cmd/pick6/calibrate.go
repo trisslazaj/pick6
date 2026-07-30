@@ -54,6 +54,12 @@ func runCalibrate(args []string) error {
 	var eraPool []engine.Player // every era board that loaded, for -tune's coverage line
 	drafts, skipped, noEra, vantages := 0, 0, 0, 0
 
+	// 3a's inputs, read once. Every draft is loaded — including the ones with no
+	// era adp to score against, which are useless to the survival backtest and
+	// perfectly good here, since the room curve reads pick order only.
+	roomDrafts, roomSources := adp.LoadRoomDrafts(calibrateDrafts)
+	noteRoomSources(roomSources)
+
 	for _, id := range calibrateDrafts {
 		d, err := sleeper.CachedDraft(id)
 		if err != nil {
@@ -106,7 +112,15 @@ func runCalibrate(args []string) error {
 			continue
 		}
 
-		p, v := walk(d, picks, b, vantages)
+		// Leave-one-out, and it is the whole gate: a warp built from the draft it
+		// is scored on has memorized the answer. Here that resolves to "the two
+		// 2025 drafts", because 2024 is the only season with era adp — but the rule
+		// is written as exclusion rather than as a hardcoded pair, so it stays
+		// correct the day ffc's archive grows a 2025 board.
+		curve := adp.RoomCurveOf(roomDrafts, id)
+		note("room warp", roomWarpTag(curve), roomWarpDetail(curve, id))
+
+		p, v := walk(d, picks, b, curve, vantages)
 		preds = append(preds, p...)
 		vantages += v
 		drafts++
@@ -150,7 +164,17 @@ func runCalibrate(args []string) error {
 type eraBoard struct {
 	players []engine.Player
 	dropped []string
-	res     adp.FFCResult
+	// rows is the room warp's ranking input, and it covers EVERY entry on the era
+	// board — including the ones the exact-only join dropped. Rank is by adp
+	// within a position, so a missing name shifts every deeper player at that
+	// position up by one and warps him with adp_room(P, k) when he is the k+1-th.
+	// One name went missing on the 2024 board (hollywood brown, wr37), which
+	// mispriced the 28 receivers behind him by 1.6 picks on average against a mean
+	// warp of 4.4 — an uncontrolled error in the measurement the whole phase rests
+	// on, and one the shipped roomWarp does not have, since it ranks over the
+	// complete players.json.
+	rows []adp.RoomRow
+	res  adp.FFCResult
 	// prior is that season's own stdev-against-adp line, fitted over the era
 	// pool. Fitting it on the 2026 pool and scoring 2024 with it would grade the
 	// shrink against a market it never saw — the same era mismatch the skipped
@@ -181,6 +205,7 @@ func loadEraBoard(ix *rankings.Index, format string, year int) *eraBoard {
 	b.prior = adp.FitStdevPrior(adps, stdevs)
 
 	for _, e := range res.Entries {
+		pos := rankings.NormalizePos(e.Pos)
 		id, ok := ix.LookupExact(e.Name, e.Pos, e.Team)
 		if !ok {
 			// Lowercased here, not at print time: the team code is the one thing
@@ -188,12 +213,17 @@ func loadEraBoard(ix *rankings.Index, format string, year int) *eraBoard {
 			// eat it along with the name.
 			b.dropped = append(b.dropped, fmt.Sprintf("%s (%s/%s)",
 				strings.ToLower(e.Name), strings.ToLower(e.Pos), e.Team))
+			// He still occupied a rank on the board the room drafted from, so he
+			// keeps one here. The id is deliberately not a sleeper id: nothing can
+			// look him up, he only holds his place in the queue.
+			b.rows = append(b.rows, adp.RoomRow{ID: "unmatched:" + e.Name, Pos: pos, ADP: e.ADP})
 			continue
 		}
+		b.rows = append(b.rows, adp.RoomRow{ID: id, Pos: pos, ADP: e.ADP})
 		b.players = append(b.players, engine.Player{
 			ID:   id,
 			Name: e.Name,
-			Pos:  rankings.NormalizePos(e.Pos),
+			Pos:  pos,
 			Team: e.Team,
 			ADP:  e.ADP,
 			// The UNSHRUNK conversion, deliberately: this feeds the base row.
@@ -223,13 +253,31 @@ func loadEraBoard(ix *rankings.Index, format string, year int) *eraBoard {
 // vbase is where this draft's vantage numbering starts, so ids stay unique once
 // a second draft has era adp to score against. The tilt is solved per vantage
 // and two drafts sharing an id would pool two different boards into one solve.
-func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, vbase int) (out []pred, vantages int) {
+//
+// curve is 3a's room warp, already built without this draft in it. It produces a
+// second survival per row rather than replacing the first: the gate is a
+// comparison, so both prices have to be on every prediction.
+func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, curve adp.RoomCurve, vbase int) (out []pred, vantages int) {
 	board := b.players
 	drafted := make(map[string]int, len(picks))
 	for _, p := range picks {
 		drafted[p.PlayerID] = p.PickNo
 	}
 	teams, rounds := d.Settings.Teams, d.Settings.Rounds
+
+	// The warped price per player, over the era board's own position-adp ranks —
+	// the 2024 board's fifth receiver, not 2026's. Uncovered players keep raw adp,
+	// which is the same fallback engine.Player.price() applies.
+	//
+	// b.rows, not the joined players: the rank is a position on the board the room
+	// drafted from, so a name the join dropped still has to occupy his. See
+	// eraBoard.rows.
+	rows := b.rows
+	eff := curve.EffectiveADP(rows)
+	// The same warp restricted to the top of each position — the variant that
+	// passes the gate the full one fails. Graded, never priced; adp.RoomWarpTopK
+	// carries the measurement and the reason it stays unshipped.
+	effTop := curve.EffectiveADPTopK(rows, adp.RoomWarpTopK)
 
 	for seat := 1; seat <= teams; seat++ {
 		// The state is here for its snake math and its PickNo; PSurviveAt reads
@@ -250,6 +298,21 @@ func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, vbase int) (
 				if at == 0 || at >= to {
 					y = 1 // he really was still sitting there
 				}
+				// The warped row goes through the engine's own ADPEff reader rather
+				// than through a local formula, so this grades the field that ships
+				// and not a second implementation of it. adpRoom repeats price()'s
+				// fallback for the shrunk-sigma variant, which needs the number
+				// itself rather than a player carrying it.
+				warped := pl
+				warped.ADPEff = eff[pl.ID]
+				adpRoom := pl.ADP
+				if v, ok := eff[pl.ID]; ok {
+					adpRoom = v
+				}
+				adpRoomTop := pl.ADP
+				if v, ok := effTop[pl.ID]; ok {
+					adpRoomTop = v
+				}
 				out = append(out, pred{
 					pos: pl.Pos, adp: pl.ADP, stdev: pl.Stdev,
 					from: from, to: to, teams: teams,
@@ -265,6 +328,11 @@ func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, vbase int) (
 					prior:       b.prior.At(pl.ADP),
 					high:        pl.High,
 					drafts:      pl.TimesDrafted,
+
+					// 3a: the room-warped price and the survival it produces.
+					adpRoom:    adpRoom,
+					adpRoomTop: adpRoomTop,
+					qRoom:      s.PSurviveAt(warped, to),
 				})
 			}
 		}

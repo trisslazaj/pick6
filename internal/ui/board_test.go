@@ -634,3 +634,195 @@ func TestSurvivalColumnsShowTheTiltedNumber(t *testing.T) {
 		}
 	}
 }
+
+// The zero-urgency tie-break is need-weighted VOR, and the frame it decides is
+// the one where I am on the clock: urgency is continuous since phase 1, so an
+// exact tie is essentially unreachable anywhere else, and on my own pick EVERY
+// urgency is exactly zero by construction. The tie-break is therefore not a
+// footnote — on that frame it is the entire ordering.
+//
+// The fixture makes the two rules disagree outright. The tight end is the better
+// player (100 against 95) but he is one of a pair, so the man behind him is worth
+// 90 and taking him buys 10. The backs run deep, so the third-best is worth 20
+// and taking the best buys 75. Raw value says te; vor says rb, and rb is right —
+// the te you would settle for is nearly as good as the one you would spend the
+// pick on.
+//
+// Demand is set explicitly because the engine's fallback derives it from the
+// league's lineup shape, and a fixture this small never reaches those depths:
+// every replacement level would be zero and vor would be plain value again.
+func TestGroupOrderOnMyPickUsesVOR(t *testing.T) {
+	players, add := newBoard()
+	add("te1", "TE", 100, 40, 8, 1)
+	add("te2", "TE", 90, 44, 8, 1)
+	add("rb1", "RB", 95, 41, 8, 1)
+	add("rb2", "RB", 60, 45, 8, 1)
+	add("rb3", "RB", 20, 50, 8, 2)
+	s := engine.New(players, 12, 15, 3)
+	s.PickNo = 3 // my own pick: every urgency is exactly 0
+	s.Demand = map[string]int{"TE": 2, "RB": 3}
+
+	if u := s.Urgency("RB"); u != 0 {
+		t.Fatalf("fixture proves nothing: urgency is %v, not the exact 0 the tie-break needs", u)
+	}
+	if s.VOR(s.Players["rb1"]) <= s.VOR(s.Players["te1"]) {
+		t.Fatal("fixture proves nothing: vor does not disagree with value here")
+	}
+	if s.Players["rb1"].Value >= s.Players["te1"].Value {
+		t.Fatal("fixture proves nothing: raw value would already order rb first")
+	}
+
+	view := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
+	if got := groupOrder(view); len(got) < 2 || got[0] != "rb" || got[1] != "te" {
+		t.Errorf("group order = %v, want rb before te — the tie-break is vor, not value\n%s",
+			got, view)
+	}
+	if got := topGroup(view); got != "rb" {
+		t.Errorf("accent border on %q, want rb", got)
+	}
+}
+
+// endgameBoard is the last rounds from slot 3 of a 12-team draft: standing at
+// pick 147, my remaining picks are 147, 166 and 171, so R is 3 and the roster
+// decides U. The players are deep and cheap because none of this is about who is
+// available — it is about how many slots are still open.
+func endgameBoard(pickNo int, mine []string) *engine.State {
+	players, add := newBoard()
+	add("rb1", "RB", 60, 150, 8, 3)
+	add("wr1", "WR", 55, 152, 8, 3)
+	add("te1", "TE", 50, 155, 8, 3)
+	add("qb1", "QB", 45, 158, 8, 3)
+	add("k1", "K", 40, 160, 8, 0)
+	add("d1", "DEF", 35, 162, 8, 0)
+	for i, pos := range mine {
+		id := fmt.Sprintf("mine%d", i)
+		add(id, pos, 500, 1, 8, 1)
+	}
+	s := engine.New(players, 12, 15, 3)
+	s.PickNo = pickNo
+	for i := range mine {
+		id := fmt.Sprintf("mine%d", i)
+		s.Taken[id] = true
+		s.Rosters[3] = append(s.Rosters[3], id)
+	}
+	return s
+}
+
+// The endgame line and the suppression it explains are one feature: needFrom
+// zeroes every position that cannot fill a starting slot, so whole groups vanish
+// from the pane, and without the line that disappearance looks like a bug.
+//
+// It fires at R == U and nowhere else. At R == U+1 there is a spare pick and the
+// bench is merely discounted, so the board still shows everything; at R < U the
+// lineup can no longer be completed, and demanding that every pick fill a starter
+// would be both false and useless.
+func TestEndgameLineFiresOnlyWhenEveryPickIsSpokenFor(t *testing.T) {
+	const line = "every remaining pick must fill a starter"
+	// R = 3 at pick 147. Six rostered leaves FLEX, K and DEF open (U = 3);
+	// seven fills the flex slot (U = 2); five leaves TE open too (U = 4).
+	cases := []struct {
+		name string
+		mine []string
+		want bool
+	}{
+		{"three picks, three holes", []string{"QB", "RB", "RB", "WR", "WR", "TE"}, true},
+		{"three picks, two holes", []string{"QB", "RB", "RB", "WR", "WR", "TE", "RB"}, false},
+		{"three picks, four holes", []string{"QB", "RB", "RB", "WR", "WR"}, false},
+	}
+	for _, c := range cases {
+		s := endgameBoard(147, c.mine)
+		view := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
+		if got := strings.Contains(view, line); got != c.want {
+			t.Errorf("%s: endgame line shown = %v, want %v\n%s", c.name, got, c.want, view)
+		}
+	}
+
+	// What the line is there to explain, on the locked board: the positions that
+	// can still fill a slot are the only ones left, and a quarterback — whose slot
+	// is filled and who cannot take the flex — is gone from the pane entirely.
+	locked := ansi.ReplaceAllString(
+		Board{State: endgameBoard(147, []string{"QB", "RB", "RB", "WR", "WR", "TE"}),
+			Width: 92, Height: 40}.View(), "")
+	order := groupOrder(locked)
+	for _, pos := range order {
+		if pos == "qb" {
+			t.Errorf("qb still on the board with every pick spoken for: %v\n%s", order, locked)
+		}
+	}
+	for _, want := range []string{"rb", "k", "def"} {
+		found := false
+		for _, pos := range order {
+			if pos == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s fills an open slot but is missing from %v\n%s", want, order, locked)
+		}
+	}
+}
+
+// The endgame arithmetic and the k/def suppression are unrelated rules that can
+// both be true at once, and when they are, the line was asserting a constraint
+// over positions the pane had already dropped.
+//
+// Pick 124 is round 11 from slot 3: four picks left (142, 147, 166, 171) against
+// four open slots (te, flex, k, def), so MustFillStarters fires — while
+// RoundsRemaining is 5, so needFrom still zeroes k and def and bestAvailable
+// drops both groups. Two of the four positions the line names are off screen,
+// which is why it names them.
+//
+// The 147 control matters as much as the 124 case: by round 13 the suppression
+// has lifted, every open slot has a group, and the clause must NOT appear or it
+// would be pointing at positions that are right there.
+func TestEndgameLineNamesTheStartersSuppressionIsHiding(t *testing.T) {
+	cases := []struct {
+		name     string
+		pickNo   int
+		mine     []string
+		wantLine string
+		hidden   []string // groups the line names and the pane does not draw
+	}{
+		{"round 11, k and def still suppressed", 124,
+			[]string{"QB", "RB", "RB", "WR", "WR"},
+			"every remaining pick must fill a starter · k, def included",
+			[]string{"k", "def"}},
+		{"round 13, suppression lifted", 147,
+			[]string{"QB", "RB", "RB", "WR", "WR", "TE"},
+			"every remaining pick must fill a starter",
+			nil},
+	}
+	for _, c := range cases {
+		s := endgameBoard(c.pickNo, c.mine)
+		if !s.MustFillStarters() {
+			t.Fatalf("%s: fixture is not the endgame — %d picks, %d unfilled",
+				c.name, s.MyPicksLeft(), len(s.UnfilledStarters(3)))
+		}
+		view := ansi.ReplaceAllString(Board{State: s, Width: 100, Height: 40}.View(), "")
+		if !strings.Contains(view, c.wantLine) {
+			t.Errorf("%s: endgame line is not %q\n%s", c.name, c.wantLine, view)
+		}
+		order := groupOrder(view)
+		for _, pos := range c.hidden {
+			for _, got := range order {
+				if got == pos {
+					t.Errorf("%s: %s is on screen after all, so the line should not name it: %v",
+						c.name, pos, order)
+				}
+			}
+		}
+		if len(c.hidden) == 0 && strings.Contains(view, "included") {
+			t.Errorf("%s: line names hidden starters when every group is drawn: %v\n%s",
+				c.name, order, view)
+		}
+	}
+
+	// The short form has to fit the 43 cells the left pane is guaranteed at 80
+	// columns, or the line wraps and reads as a rendering fault.
+	narrow := ansi.ReplaceAllString(
+		Board{State: endgameBoard(124, []string{"QB", "RB", "RB", "WR", "WR"}),
+			Width: 80, Height: 40}.View(), "")
+	if !strings.Contains(narrow, "every pick must fill a starter · k, def") {
+		t.Errorf("no short endgame line at 80 columns\n%s", narrow)
+	}
+}

@@ -408,12 +408,23 @@ func (b Board) bestAvailable(w int) string {
 			continue
 		}
 		// Groups sort by urgency: the need-weighted value lost by waiting until
-		// my next pick. Near my own pick urgencies collapse to zero — nobody can
-		// be taken in zero picks — so ties fall to need-weighted best value,
-		// which keeps the board pointing at the pick instead of going limp
-		// exactly when I'm on the clock.
+		// my next pick. On my own pick every urgency is exactly zero — nobody can
+		// be taken in zero picks — so the tie-break is what keeps the board
+		// pointing at the pick instead of going limp exactly when I'm choosing.
+		//
+		// It is need-weighted VOR, not need-weighted value. Raw value ranks a
+		// position by its best man; vor ranks it by what that man buys over the
+		// one this room would have ended up with anyway (engine/vor.go). On
+		// today's board that is a 314-point discount on quarterbacks and 182 on
+		// tight ends against none at all on running backs, which is the depth of
+		// those positions expressed as a number.
+		//
+		// Since phase 1 made urgency continuous, exact ties are essentially
+		// unreachable ANYWHERE ELSE — which makes this tie-break more important
+		// than it sounds, not less: it now fires almost exclusively on the frame
+		// where I am on the clock and about to act on it.
 		groups = append(groups, group{pos, avail, s.Urgency(pos),
-			float64(avail[0].Value) * s.Need(pos)})
+			s.VOR(avail[0]) * s.Need(pos)})
 	}
 	sort.SliceStable(groups, func(i, j int) bool {
 		if groups[i].score != groups[j].score {
@@ -426,6 +437,7 @@ func (b Board) bestAvailable(w int) string {
 	var sb strings.Builder
 	sb.WriteString(sectionHead("best available", w-2) + "\n")
 	sb.WriteString(b.planLine(w))
+	sb.WriteString(b.endgameLine(w))
 	for gi, g := range groups {
 		sb.WriteString(b.groupBlock(g.pos, g.players, gi == 0, w, depth))
 	}
@@ -476,6 +488,66 @@ func (b Board) planLine(w int) string {
 		return ""
 	}
 	return "  " + Dim.Render(line) + "\n"
+}
+
+// endgameLine says out loud what the engine has already done to the board: at
+// the point where my remaining picks exactly equal my open starting slots, every
+// pick left is spoken for, and needFrom has zeroed the need on everything that
+// cannot fill one — so whole position groups vanish from the pane above.
+//
+// Without the line that disappearance looks like a bug. With it, it reads as the
+// tool doing arithmetic the drafter has stopped doing at round 13.
+//
+// Dim and one row, like the plan line, and it costs the layout nothing it can't
+// afford: it can only appear once the suppression has already removed groups, so
+// the pane it adds a row to is the shortest it ever gets. "" the rest of the
+// time — no reserved empty row, the rule the banner and the plan both follow.
+//
+// The line has to name any open slot the pane is NOT showing, or it asserts a
+// constraint over positions that are not on screen. K and DEF are hidden by the
+// unrelated KDefLastRounds suppression, which outlives the endgame arithmetic by
+// several rounds: at pick 11.04 of the scripted mock (seed 1) the roster needs
+// rb, te, k and def with exactly four picks left, so the line fires — and the
+// pane shows two of the four positions it is talking about. Naming them is the
+// smaller fix; un-suppressing them would tell somebody to draft a kicker in
+// round 11, which is the one thing the suppression exists to prevent.
+//
+// Long and short forms for the same reason the tier header has them: at 80
+// columns the left pane is 43 cells and the long form does not fit.
+func (b Board) endgameLine(w int) string {
+	if !b.State.MustFillStarters() {
+		return ""
+	}
+	line := "every remaining pick must fill a starter"
+	if hidden := b.hiddenStarters(); len(hidden) > 0 {
+		names := strings.Join(hidden, ", ")
+		line = line + " · " + names + " included"
+		if 2+lipgloss.Width(line) > w {
+			line = "every pick must fill a starter · " + names
+		}
+	}
+	return "  " + Dim.Render(line) + "\n"
+}
+
+// hiddenStarters lists the open starting slots whose group the pane above is not
+// drawing, lowercase and in lineup order.
+//
+// Only a suppressed position can land here: needFrom returns NeedStarter for
+// every open dedicated slot, so the only way an unfilled starter reads zero need
+// is the k/def suppression. FLEX is skipped because it is a slot name and not a
+// position — bestAvailable never draws a group called "flex", so it cannot be
+// missing from one.
+func (b Board) hiddenStarters() []string {
+	s := b.State
+	var out []string
+	for _, slot := range s.UnfilledStarters(s.MySlot) {
+		for _, pos := range positions {
+			if slot == pos && s.Need(pos) == 0 {
+				out = append(out, strings.ToLower(pos))
+			}
+		}
+	}
+	return out
 }
 
 // tierLabel is the group header's tier clause, in a long form and a short one.

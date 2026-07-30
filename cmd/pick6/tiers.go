@@ -103,7 +103,18 @@ func printPosition(pos string, group []*adp.Player) {
 // red at one.
 func tierHeader(p *adp.Player, n int, style lipgloss.Style) string {
 	if p.Tier == 0 {
-		return ui.Dim.Render(fmt.Sprintf("no tier — %d players (no value from any source)", n))
+		// Two different groups land on tier 0 and the header has to tell them
+		// apart. K and def are untiered by DECISION — they carry a value anchored
+		// to the skill curve, and a borrowed value cannot draw a real tier
+		// boundary, so tier 0 is what keeps cliff logic off them. The untiered
+		// skill players are untiered by ABSENCE: nothing prices them at all. One
+		// sentence for both was wrong about six receivers, who are anchored to
+		// nothing.
+		why := "no value from any source"
+		if p.Value > 0 {
+			why = "never tiered; value is anchored to adp"
+		}
+		return ui.Dim.Render(fmt.Sprintf("no tier — %d players (%s)", n, why))
 	}
 	label := style.Render(fmt.Sprintf("tier %d", p.Tier))
 	count := fmt.Sprintf("%d left", n)

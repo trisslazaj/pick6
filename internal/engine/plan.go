@@ -67,22 +67,29 @@ func (s *State) BestPlan() (Plan, bool) {
 	// second condition isn't decoration: EBest on an empty position is 0, so
 	// without it a board with one live position still names a dead one as the
 	// second leg whenever every pair ties.
+	//
+	// Membership is decided by Need — the same number that decides whether the
+	// pane below the plan line shows the position at all, so the plan can never
+	// name a group the reader cannot see. The WEIGHT is the slack-free need,
+	// because the pair's second leg is priced by NeedAfter, which has no slack
+	// either; mixing the two made the score depend on the order of two legs that
+	// end at the same roster (NeedAfter carries the measurement).
 	type candidate struct {
 		pos  string
 		best Player
 		need float64
 	}
+	filled, _ := s.FilledSlots(s.MySlot)
 	var cands []candidate
 	for _, pos := range planPositions {
-		need := s.Need(pos)
-		if need == 0 {
+		if s.Need(pos) == 0 {
 			continue
 		}
 		best, ok := s.BestNow(pos)
 		if !ok {
 			continue
 		}
-		cands = append(cands, candidate{pos: pos, best: best, need: need})
+		cands = append(cands, candidate{pos: pos, best: best, need: s.needFrom(pos, filled)})
 	}
 	if len(cands) == 0 {
 		return Plan{}, false
