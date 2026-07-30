@@ -190,9 +190,10 @@ func CachedPicksAge(id string, maxAge time.Duration) ([]DraftPick, error) {
 // ERRORS — so against a host that blackholes packets rather than refusing them,
 // six month-old draft files are twelve minutes of blank screen before `pick6
 // mock` renders anything. A draft party's wifi is exactly that kind of bad, and
-// the room curve is a nicety: a missing file means the board falls back to the
-// lineup shape and raw adp, which is the default board anyway. `pick6 fetch` is
-// where these files get pulled.
+// the room curve is a nicety even though it is now on by default: a missing file
+// costs the board a lineup-shape replacement level and the room's prices, and
+// what is left is a board on raw national adp — degraded, still correct, still
+// instant. `pick6 fetch` is where these files get pulled.
 func DiskDraft(id string) (*Draft, error) {
 	var d Draft
 	if err := diskJSON("draft_"+id+".json", &d); err != nil {

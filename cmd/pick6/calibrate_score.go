@@ -31,11 +31,12 @@ type pred struct {
 	high        int
 	drafts      int
 
-	// 3a's inputs. adpRoom is the room-warped effective adp for this player, built
-	// from the OTHER drafts only; qRoom is the engine's survival off it, recorded
-	// during the walk through engine.Player.ADPEff so the graded number comes out
-	// of the shipped reader. adpRoomTop is the same warp applied only to the top
-	// adp.RoomWarpTopK players at each position — the variant that passes the gate.
+	// 3a's inputs. adpRoom is the full-depth room-warped effective adp for this
+	// player, built from the OTHER drafts only; qRoom is the engine's survival off
+	// it, recorded during the walk through engine.Player.ADPEff so the graded
+	// number comes out of the shipped reader. adpRoomTop is the same warp applied
+	// only to the top adp.RoomWarpTopK players at each position — the variant the
+	// board actually prices, and the one the shipped row is scored on.
 	adpRoom    float64
 	adpRoomTop float64
 	qRoom      float64
@@ -87,6 +88,19 @@ func scoreOf(preds []pred, q func(pred) float64) score {
 // would otherwise be the entire score.
 func clampP(v float64) float64 { return math.Max(1e-6, math.Min(1-1e-6, v)) }
 
+// betterPrinted compares two scores at the four decimals every table in this
+// command prints. A win too small to show up there is a win nobody can check,
+// and "beats what ships" next to two columns of identical digits reads as a bug
+// in the table — which is exactly what the support-floor row would do, since the
+// floor bites on no predictions at all against the shrunk curve.
+//
+// The gate reads it in the other direction too, and that is the load-bearing
+// use: 3a's per-position check calls a position "worse" only when the table the
+// reader is looking at can show it. wr's log-loss under the shipped warp moves
+// +0.000032, which prints as 0.2450 -> 0.2450 — a claim of regression nobody
+// could verify from the output, so it is scored as a tie and printed as one.
+func betterPrinted(a, b float64) bool { return math.Round(a*1e4) < math.Round(b*1e4) }
+
 // ---- the models being compared ----
 
 // modelEngine is the plain conditional logistic over the source's raw stdev,
@@ -94,9 +108,10 @@ func clampP(v float64) float64 { return math.Max(1e-6, math.Min(1-1e-6, v)) }
 // not a reimplementation of it.
 //
 // It is the BASE every other row is measured against, not what ships: fetch
-// shrinks sigma now and the tilt corrects the whole vantage, so the shipped
-// model is the "shrunk sigma + tilt" row. Keeping the base uncorrected is the
-// point — a baseline that quietly adopts each improvement can never show one.
+// shrinks sigma, the tilt corrects the whole vantage, and 3a warps the top of
+// each position's price, so the shipped model is the "top-5 warp + shrunk +
+// tilt" row. Keeping the base uncorrected is the point — a baseline that quietly
+// adopts each improvement can never show one.
 func modelEngine(p pred) float64 { return p.q }
 
 // modelFlatSigma throws away the per-player stdev. If this ties the engine, the
@@ -348,28 +363,30 @@ func report(preds []pred, drafts, vantages int) {
 	roomTiltFn, _ := tilted(preds, modelRoom)
 	roomShrunkTiltFn, _ := tilted(preds, modelRoomShrunk)
 	roomTopTiltFn, _ := tilted(preds, modelRoomTopShrunk)
-	shipped := namedModel{"engine", modelEngine}
+	plain := namedModel{"engine", modelEngine}
 	tilt := namedModel{"tilted", tiltFn}
-	// What actually ships after 4b: the shrunk sigma under the tilt. It is a
-	// third column rather than a replacement because the question the tables
-	// answer is what each correction did, and dropping the middle model would
-	// leave the shrink's contribution indistinguishable from the tilt's.
+	// The previous default, kept as a column rather than dropped: 3a's warp is a
+	// price change laid on top of it, so it is the thing the warp has to beat, and
+	// dropping the middle model would leave the shrink's contribution
+	// indistinguishable from the tilt's.
 	current := namedModel{"shrunk+tilt", shrunkTiltFn}
+	// What ships: that model with the top-of-position room warp on its price. The
+	// label carries a plus because the reliability columns read as a progression —
+	// each one is the column before it plus one correction — and a bare "room
+	// warp" would collide with the model table's untilted 3a row.
+	shipped := namedModel{"+room warp", roomTopTiltFn}
 
 	// What the marker is measured against. It used to be the first row — the
 	// pre-4x engine — which after this milestone is not what ships: eleven of
 	// fifteen rows beat it, the marker stopped separating anything, and the one
-	// baseline that actually beats the SHIPPED model on log-loss (flat sigma 6.0
-	// under the tilt, 0.2233 against 0.2250) read like all the others. The whole
-	// point of running this is that the fancy math doesn't get to grade itself,
-	// so it is graded against the fancy math that ships.
-	ship := scoreOf(preds, shrunkTiltFn)
-	// Compared at the precision the row prints. A win too small to show up in
-	// four decimals is a win nobody can check, and "beats what ships" next to two
-	// columns of identical digits reads as a bug in the table — which is exactly
-	// what the support-floor row does, since the floor bites on no predictions at
-	// all against the shrunk curve.
-	better := func(a, b float64) bool { return math.Round(a*1e4) < math.Round(b*1e4) }
+	// baseline that beat the then-shipped model on log-loss (flat sigma 6.0 under
+	// the tilt, 0.2233 against 0.2250) read like all the others. The whole point
+	// of running this is that the fancy math doesn't get to grade itself, so it is
+	// graded against the fancy math that ships — which since 3a shipped is the
+	// top-5 warp row, and that same flat baseline no longer clears it (0.2233
+	// against 0.2222).
+	ship := scoreOf(preds, roomTopTiltFn)
+	better := betterPrinted
 	fmt.Printf("\n%-34s %8s %9s %10s %10s\n", "model", "brier", "log-loss", "predicted", "d brier")
 	line := func(label string, s score, tag string) {
 		delta := "-"
@@ -392,17 +409,17 @@ func report(preds []pred, drafts, vantages int) {
 	row("engine (per-player sigma)", base)
 	row("engine + exactly-n tilt", scoreOf(preds, tiltFn))
 	row("4b: shrunk sigma", scoreOf(preds, modelShrunkSigma))
-	line("4b: shrunk sigma + tilt", ship, "   <- ships")
+	line("4b: shrunk sigma + tilt", scoreOf(preds, shrunkTiltFn), "   <- the default before 3a")
 	row("4b: support floor", scoreOf(preds, modelSupportFloor))
 	row("4b: support floor + tilt", scoreOf(preds, floorTiltFn))
 	row("4b: shrunk + floor + tilt", scoreOf(preds, bothTiltFn))
 	row("3a: room-warped adp", scoreOf(preds, modelRoom))
 	row("3a: room warp + tilt", scoreOf(preds, roomTiltFn))
+	// The full-depth warp, scored and not shipped — it loses to the row above it
+	// and to the row below. It stays on the table because "the warp is wrong" and
+	// "the warp is wrong past the fifth man at a position" are different findings.
 	row("3a: room warp + shrunk + tilt", scoreOf(preds, roomShrunkTiltFn))
-	// Deliberately labeled as a variant, not as a candidate: it wins and it still
-	// isn't the shipped row. adp.RoomWarpTopK holds the reason.
-	row(fmt.Sprintf("3a: top-%d warp + shrunk + tilt", adp.RoomWarpTopK),
-		scoreOf(preds, roomTopTiltFn))
+	line(fmt.Sprintf("3a: top-%d warp + shrunk + tilt", adp.RoomWarpTopK), ship, "   <- ships")
 	row(fmt.Sprintf("baseline: constant %.3f", base.obs), scoreOf(preds, modelConstant(base.obs)))
 	row(fmt.Sprintf("baseline: sigma %.1f flat", engine.SigmaDefault), scoreOf(preds, modelFlatSigma))
 	row(fmt.Sprintf("baseline: sigma %.1f flat + tilt", engine.SigmaDefault), scoreOf(preds, flatTiltFn))
@@ -411,23 +428,25 @@ func report(preds []pred, drafts, vantages int) {
 
 	supportReport(preds)
 	tiltReport(vts)
-	// Both models share one set of bins — the engine's — so the tails line up
-	// row for row and the question "did the tilt move the bad bins toward the
-	// observed rate" is answered by reading across, not by matching two tables
+	// Every model shares one set of bins — the engine's — so the tails line up
+	// row for row and the question "did each correction move the bad bins toward
+	// the observed rate" is answered by reading across, not by matching tables
 	// whose rows hold different players.
-	reliability("bins by the engine's prediction, so all three models share the rows",
-		preds, modelEngine, []namedModel{shipped, tilt, current})
+	reliability("bins by the engine's prediction, so all four models share the rows",
+		preds, modelEngine, []namedModel{plain, tilt, current, shipped})
 	// And then the shipped model graded on its own bins, because the table above
 	// cannot see whether it invented a new region of overconfidence.
 	reliability("bins by the shipped model's own prediction — its calibration, not a comparison",
-		preds, shrunkTiltFn, []namedModel{current})
-	// The segments grade the decision on the table: tilt alone against tilt plus
-	// the shrink. The tails are where a change earns or loses its place — a long
-	// horizon is where waiting actually costs you, and the deep board is where
-	// per-player sigma, and therefore the shrink, is doing all of its work.
+		preds, roomTopTiltFn, []namedModel{shipped})
+	// The segments grade the shrink: tilt alone against tilt plus the shrink. The
+	// tails are where a change earns or loses its place — a long horizon is where
+	// waiting actually costs you, and the deep board is where per-player sigma,
+	// and therefore the shrink, is doing all of its work. The warp's own segments
+	// are in the gate section below, against the same tables.
 	segments(preds, tilt, current)
-	// 3a gets its own section because it is a gate, not a column: the question is
-	// whether the shipped model should adopt the room's prices at all.
+	// 3a gets its own section because it is a gate, not a column: it is the
+	// evidence the shipped model prices the room's numbers at the top of a
+	// position and the market's everywhere else.
 	roomGate(preds, current,
 		namedModel{"room warp", roomShrunkTiltFn},
 		namedModel{fmt.Sprintf("top-%d warp", adp.RoomWarpTopK), roomTopTiltFn})

@@ -824,11 +824,14 @@ func scoutPrintShare(base scoutBaseline) {
 	fmt.Println("  rows are every manager's picks in that round, across every scored draft.")
 }
 
-// scoutPrintRoom is phase 3a's read, in the place the spec put it when the warp
-// failed its gate — which it did (brier 0.0670 -> 0.0670, log-loss 0.2250 ->
-// 0.2313 cross-validated on the 2024 draft). So the curve is printed for the
-// human and priced by nobody: `pick6 mock -room` is opt-in and documented as
-// measured worse.
+// scoutPrintRoom is phase 3a's read, in the place the spec put it for the case
+// where the warp failed its gate — which at full depth it did (brier 0.0670 ->
+// 0.0671, log-loss 0.2250 -> 0.2327 cross-validated on the 2024 draft; those are
+// the numbers `pick6 calibrate` prints today, and every other citation in the
+// tree quotes the same pair). The board prices only the top adp.RoomWarpTopK at
+// each position, so most of what this table shows is still a read for the human
+// and nothing else. It prints every depth on purpose: knowing where the room's
+// opinion runs out is the same information as knowing where it is worth pricing.
 //
 // Built from the drafts this walk actually scored rather than from a hardcoded
 // list, so a dynasty draft that got skipped above cannot sneak into the curve.
@@ -867,8 +870,10 @@ func scoutPrintRoom(drafts map[string]adp.RoomDraft, teamsOf map[string]int, tea
 		}
 	}
 	fmt.Printf("  mean over %d drafts of where the k-th player at the position went, monotonized.\n", curve.Drafts)
-	fmt.Println("  a read, not a price: survival still runs on national adp. `pick6 fetch` prints the")
-	fmt.Println("  same curve against market adp, and `pick6 calibrate` prints why it stays a read.")
+	fmt.Printf("  survival blends the first %d of each position toward these numbers; deeper k are a\n",
+		adp.RoomWarpTopK)
+	fmt.Println("  read only. `pick6 fetch` prints the same curve against market adp, and")
+	fmt.Println("  `pick6 calibrate` prints the gate that drew the line where it is.")
 }
 
 // scoutPrintAuto reports the autodraft floor, including — especially — when it

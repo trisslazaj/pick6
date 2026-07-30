@@ -273,10 +273,14 @@ func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, curve adp.Ro
 	// drafted from, so a name the join dropped still has to occupy his. See
 	// eraBoard.rows.
 	rows := b.rows
+	// The full-depth warp, graded and priced nowhere: it lost this gate, and the
+	// only reason it is still computed is that the loser has to stay on the table
+	// next to the winner. adp.EffectiveADP's doc names this as its one caller.
 	eff := curve.EffectiveADP(rows)
-	// The same warp restricted to the top of each position — the variant that
-	// passes the gate the full one fails. Graded, never priced; adp.RoomWarpTopK
-	// carries the measurement and the reason it stays unshipped.
+	// The same warp restricted to the top of each position — the variant the board
+	// ships, through the same adp.EffectiveADPTopK call `loadBoard` makes, so the
+	// graded model and the priced one cannot drift apart. adp.RoomWarpTopK carries
+	// the cutoff sweep and how thin one fold of evidence is.
 	effTop := curve.EffectiveADPTopK(rows, adp.RoomWarpTopK)
 
 	for seat := 1; seat <= teams; seat++ {

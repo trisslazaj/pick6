@@ -435,14 +435,15 @@ var roomCurveKs = []int{1, 2, 4, 8}
 // printRoomCurve shows where this league takes the k-th player at a position
 // against where the national market prices him, and caches the drafts it read.
 //
-// This is the deliverable of the room warp, and deliberately the ONLY place it
-// ships by default. The signal is real and measured — over the first five at each
-// position this room takes quarterbacks 17.4 picks and tight ends 13.4 picks
-// earlier than the market prices them, and defenses 30.0 picks LATER, while backs
-// and receivers track it to within a pick — but wiring it into survival was
-// cross-validated on the 2024 backtest and lost (see `pick6 calibrate`, the 3a
-// gate section). So it prints as a read for the human and stays behind `-room`
-// for the model.
+// This is the human-readable face of the warp the board now prices. The signal
+// is real and measured — over the first five at each position this room takes
+// quarterbacks 17.4 picks and tight ends 13.4 picks earlier than the market
+// prices them, and defenses 30.0 picks LATER, while backs and receivers track it
+// to within a pick — and restricted to that same top-of-position range it wins
+// the 2024 backtest's cross-validated gate, so mock and live blend it into
+// survival unless you pass `-room=false` (see `pick6 calibrate`, the 3a gate).
+// Deeper k are printed here and priced nowhere: past the room's appetite the
+// curve measured worse than the market.
 //
 // A read like this is worth more than it looks: knowing the room takes tight ends
 // early is a reason to move one up your own board, and that is a judgement the
@@ -532,8 +533,11 @@ func printRoomCurve(players map[string]*adp.Player) {
 	fmt.Println("  shown but not averaged — a ranked list runs deeper than any finite draft, so")
 	fmt.Println("  down there the room is later than adp about everyone and the mean flips sign.")
 	fmt.Println("  depth is the deepest k the room ever reached; past it the curve says nothing.")
-	fmt.Println("  reading only. survival prices raw adp unless you pass -room, which the 2024")
-	fmt.Println("  backtest scored worse — `pick6 calibrate` prints that table.")
+	fmt.Printf("  survival on mock and live blends the first %d of each position toward these\n",
+		adp.RoomWarpTopK)
+	fmt.Println("  numbers by default; everyone deeper keeps raw national adp, and -room=false")
+	fmt.Println("  puts the whole board back on it. `pick6 calibrate` prints the gate that decided")
+	fmt.Println("  that — two drafts building the curve and one scoring it, so read it as thin.")
 }
 
 func dash(n int) string {

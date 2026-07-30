@@ -2,8 +2,10 @@ package adp
 
 import (
 	"math"
+	"path/filepath"
 	"testing"
 
+	"github.com/trisslazaj/pick6/internal/cache"
 	"github.com/trisslazaj/pick6/internal/sleeper"
 )
 
@@ -123,7 +125,9 @@ func TestEffectiveADP(t *testing.T) {
 		}
 	}
 
-	// The graded-only variant: same warp, first k players at a position only.
+	// The shipped variant: same warp, first k players at a position only. At
+	// maxK = RoomWarpTopK this is what the board prices; the cutoff itself is
+	// exercised at the real constant by cmd/pick6's loadBoard test.
 	top := c.EffectiveADPTopK(rows, 1)
 	if len(top) != 1 || math.Abs(top["first"]-15.25) > 1e-9 {
 		t.Errorf("top-1 warp = %v, want only first at 15.25", top)
@@ -174,6 +178,48 @@ func TestEffectiveADPStaysMonotone(t *testing.T) {
 	}
 }
 
+// The top-k cutoff splits a position into a warped head and a raw tail, and the
+// two halves have to join up. The running max above cannot see across the cut —
+// it only spans the warped rows — so a head priced later than the market prices
+// the first man in the tail reinverts the curve one step further along, which is
+// the same failure the running max exists to prevent.
+//
+// It was live on the real 2026 board at RoomWarpTopK = 5: this room drafts
+// defenses LATER than the market at the top, so def5 priced 144.16 against a
+// def6 sitting on raw adp 129.90 — 14.3 picks earlier than the man in front of
+// him, and earlier than the next three as well. On the board that showed as new
+// england at 56% survival against a detroit ranked eight picks behind him at 52%.
+//
+// The fixture is that shape with fake numbers: the room takes rb1 at 10 and rb2
+// at 20 over two drafts (w = 0.5), against adps of 6, 8 and 12 with the cutoff
+// at two. Unclamped the blend prices rb2 at 14, past the untouched rb3's 12.
+func TestEffectiveADPTopKJoinsTheRawTail(t *testing.T) {
+	d := make(RoomDraft, 20)
+	d[9], d[19] = "RB", "RB"
+	c := BuildRoomCurve([]RoomDraft{d, d}) // rb1 10 (n2), rb2 20 (n2)
+
+	rows := []RoomRow{
+		{ID: "first", Pos: "RB", ADP: 6},
+		{ID: "second", Pos: "RB", ADP: 8},
+		{ID: "third", Pos: "RB", ADP: 12}, // past the cutoff: keeps raw adp
+	}
+	raw, _ := c.Warp("RB", 2, 8) // what the blend alone would have said
+	if raw <= 12 {
+		t.Fatalf("fixture is not an inversion: the raw blend prices rb2 at %.4f, inside rb3's 12", raw)
+	}
+	got := c.EffectiveADPTopK(rows, 2)
+	if len(got) != 2 {
+		t.Fatalf("warped %d rows (%v), want 2 — the cutoff must not reach rb3", len(got), got)
+	}
+	if math.Abs(got["first"]-8) > 1e-9 {
+		t.Errorf("rb1 warped to %.4f, want 8 (0.5*10 + 0.5*6, under the ceiling)", got["first"])
+	}
+	if math.Abs(got["second"]-12) > 1e-9 {
+		t.Errorf("rb2 warped to %.4f, want 12 — capped at the raw adp of the first unwarped back",
+			got["second"])
+	}
+}
+
 // TestRoomDraftOf pins the indexing. The curve is made of pick NUMBERS, so a
 // missing pick has to leave a hole: packing the slice instead would shift every
 // later pick one earlier and move the whole room's price by a pick per gap, with
@@ -197,6 +243,46 @@ func TestRoomDraftOf(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("pick %d = %q, want %q", i+1, got[i], want[i])
 		}
+	}
+}
+
+// The regression this pins was live: CachedRoomDrafts read
+// sleeper.CachedDraft — the network-capable one — and only then let the disk
+// read overwrite the result, so "offline" fetched every draft anyway. `pick6
+// mock` against an empty HOME left six freshly downloaded draft files behind,
+// which is how it surfaced.
+//
+// It matters because mock and live both call this before their first frame, and
+// since the room warp became the default they call it for survival prices as
+// well as for replacement level. cache.Get gives a missing file a 120s timeout
+// and only falls back to stale bytes when the request ERRORS, so bad draft-party
+// wifi is minutes of blank screen instead of a board on raw adp.
+//
+// An empty HOME is the whole apparatus: no file can be read, so anything that
+// appears in the cache dir afterwards can only have come over the wire.
+func TestCachedRoomDraftsNeverFetches(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", "") // linux reads this first; darwin reads HOME
+
+	drafts, sources := CachedRoomDrafts([]string{"1133489617308684288"})
+	if len(drafts) != 0 {
+		t.Errorf("loaded %d drafts from an empty cache", len(drafts))
+	}
+	// Reported, not swallowed: the board prints these as skipped lines.
+	if len(sources) != 1 || sources[0].Err == nil {
+		t.Errorf("sources = %+v, want one entry carrying an error", sources)
+	}
+
+	dir, err := cache.Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := filepath.Glob(filepath.Join(dir, "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) > 0 {
+		t.Errorf("the offline read left %v in a fresh cache dir — it went to the network", names)
 	}
 }
 

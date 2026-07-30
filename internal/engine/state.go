@@ -23,9 +23,15 @@ type Player struct {
 
 	// ADPEff is ADP as THIS room prices it: the national number blended with
 	// where the k-th player at his position actually goes in this league's own
-	// completed drafts (adp.RoomCurve). 0 means no warp, which is the default —
-	// it is populated only when `-room` is passed, and only for players the
-	// room's curve reaches.
+	// completed drafts (adp.RoomCurve). It is populated by default on mock and
+	// live, but only for the top adp.RoomWarpTopK players at each position —
+	// past there the room's curve measured worse than the market, so everyone
+	// deeper keeps a zero here on purpose.
+	//
+	// 0 therefore means "no warp for this man": he is outside the top of his
+	// position, the curve never reached his rank, no draft is cached, or
+	// `-room=false`. Every one of those is the same instruction — price him off
+	// raw ADP — which is what price() does.
 	//
 	// Exactly two things read it, PSurviveAt and Falling, and that is the whole
 	// design. Every other reader of ADP — the display columns, Available's sort

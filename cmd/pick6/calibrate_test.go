@@ -180,3 +180,65 @@ func TestTiltTargetsEveryPickInTheWindow(t *testing.T) {
 		t.Errorf("board really lost %.4f, want 0.0", vts[0].actual)
 	}
 }
+
+// 3a's per-position gate was a sentence in a Printf — "better on both metrics and
+// on every position" — emitted from a condition that only read the two OVERALL
+// numbers. So the single failure the gate exists to catch, a warp that wins on
+// average while wrecking one position, could not have changed a character of the
+// output, and on the real backtest the sentence was already false: wr's log-loss
+// moves the wrong way by +0.000032. These cases pin the three answers the check
+// now computes for itself.
+//
+// y = 1 on every row, so a higher prediction is a better one on both metrics at
+// once and each fixture's intent stays readable. q is the pre-warp model,
+// qRoom the warped one, which is what modelEngine and modelRoom read.
+func TestRoomPosGateComputesItsClaim(t *testing.T) {
+	row := func(pos string, base, top float64) pred {
+		return pred{pos: pos, y: 1, q: base, qRoom: top}
+	}
+	every := func(base, top float64) []pred {
+		var out []pred
+		for _, pos := range []string{"QB", "RB", "WR", "TE", "K", "DEF"} {
+			out = append(out, row(pos, base, top))
+		}
+		return out
+	}
+	wrecked := every(0.90, 0.95)
+	wrecked[2] = row("WR", 0.95, 0.90) // the warp made receivers visibly worse
+
+	cases := []struct {
+		name              string
+		rows              []pred
+		passes            bool
+		both, flat, worse int
+	}{
+		// The clean win the ship was briefed on, which is what five of the six
+		// real positions do.
+		{"every position better on both", every(0.90, 0.95), true, 6, 0, 0},
+		// The tripwire. Two entries because both metrics regress on that one
+		// position, and one entry is enough to drop the ship verdict.
+		{"one position wrecked", wrecked, false, 5, 0, 2},
+		// A move smaller than the four decimals every table here prints is not a
+		// win and not a loss — it is a tie, reported as one. This is the bucket
+		// wr's real log-loss lands in, from the other side.
+		{"moves too small to print", every(0.90, 0.900001), true, 0, 12, 0},
+		// A position nobody had an adp for is absent, never a silent pass: the
+		// summary must not credit the warp with four positions it never scored.
+		{"positions with no rows are not scored",
+			[]pred{row("QB", 0.90, 0.95), row("RB", 0.90, 0.95)}, true, 2, 0, 0},
+	}
+
+	base := namedModel{"base", modelEngine}
+	top := namedModel{"top", modelRoom}
+	for _, c := range cases {
+		g := roomPosGate(c.rows, base, top)
+		if g.passes() != c.passes {
+			t.Errorf("%s: passes = %v, want %v (%s)", c.name, g.passes(), c.passes, g.line())
+		}
+		if len(g.both) != c.both || len(g.flat) != c.flat || len(g.worse) != c.worse {
+			t.Errorf("%s: both/flat/worse = %d/%d/%d, want %d/%d/%d (%s)",
+				c.name, len(g.both), len(g.flat), len(g.worse),
+				c.both, c.flat, c.worse, g.line())
+		}
+	}
+}

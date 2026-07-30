@@ -8,32 +8,32 @@ import (
 	"github.com/trisslazaj/pick6/internal/adp"
 )
 
-// Phase 3a's gate. The room warp shifts every player's price toward where this
-// league's own drafts took the k-th man at his position; this is the part that
-// decides whether the survival model gets to believe it.
+// Phase 3a's gate, and the evidence behind a default. The room warp shifts a
+// player's price toward where this league's own drafts took the k-th man at his
+// position; this section is what decided that the survival model believes it for
+// the top adp.RoomWarpTopK at each position and nowhere deeper.
 //
 // The cross-validation is not optional. A warp built from the 2024 draft and then
 // scored on the 2024 draft would report a skill it does not have, so the curve
 // each vantage sees is built from the OTHER drafts only (adp.RoomCurveOf with the
 // scored id excluded). With one scorable season that resolves to the two 2025
-// drafts, exactly as the spec asks.
+// drafts, exactly as the spec asks — and one fold is also the whole caveat.
 
-// modelRoom is the plain conditional logistic priced against the room-warped adp,
-// recorded during the walk through engine.Player.ADPEff — so this grades the
-// shipped reader rather than a second copy of the blend.
+// modelRoom is the plain conditional logistic priced against the full-depth
+// room-warped adp, recorded during the walk through engine.Player.ADPEff — so
+// this grades the field the board reads rather than a second copy of the blend.
 func modelRoom(p pred) float64 { return p.qRoom }
 
-// modelRoomShrunk is the warp on top of what actually ships: the shrunk sigma.
-// This is the only fair comparison for the gate — swapping the price AND the
-// sigma at once would leave two changes tangled in one brier delta.
+// modelRoomShrunk is the full-depth warp on top of the shrunk sigma. It is the
+// fair comparison for the gate — swapping the price AND the sigma at once would
+// leave two changes tangled in one brier delta — and it is the row that loses.
 func modelRoomShrunk(p pred) float64 {
 	return psurvive(p.from, p.to, p.adpRoom, p.sigmaShrunk)
 }
 
-// modelRoomTopShrunk is the warp restricted to the top adp.RoomWarpTopK players at
-// each position. It is here because it wins and is still not shipped: see
-// adp.RoomWarpTopK for the sweep, the structural reason the tail is wrong, and why
-// a -0.0009 brier win on a single fold does not move the default.
+// modelRoomTopShrunk is the warp restricted to the top adp.RoomWarpTopK players
+// at each position: what the board ships. See adp.RoomWarpTopK for the cutoff
+// sweep, the structural reason the tail is wrong, and how thin one fold is.
 func modelRoomTopShrunk(p pred) float64 {
 	return psurvive(p.from, p.to, p.adpRoomTop, p.sigmaShrunk)
 }
@@ -94,9 +94,11 @@ func roomWarpDetail(c adp.RoomCurve, scored string) string {
 
 // roomGate is 3a's verdict, printed with the evidence that produced it.
 //
-// The comparison is the shipped model against the shipped model with the room's
-// prices, overall and per position — per position because the warp's whole claim
-// is positional.
+// The comparison is the pre-warp model — shrunk sigma under the tilt, what the
+// board priced before 3a — against that same model with the room's prices, at
+// full depth and restricted to the top of each position, overall and per
+// position. Per position because the warp's whole claim is positional; both
+// depths because only one of them survives.
 //
 // THE QUARTERBACK CONFLICT, RESOLVED BY MEASUREMENT. Going in there were two true
 // and apparently opposed facts: this league takes quarterback SLOTS early (first
@@ -109,24 +111,34 @@ func roomWarpDetail(c adp.RoomCurve, scored string) string {
 // qb worse.
 //
 // It does not, and neither does the opposite. Measured, the warp moves qb LATER
-// on average — +11.6 picks — even though it moves qb1 through qb5 earlier by 1.7
+// on average — +11.0 picks — even though it moves qb1 through qb5 earlier by 1.7
 // to 3.7. The mean is dominated by deep quarterbacks, where mapping rank to room
 // pick is structurally wrong (see adp.RoomWarpTopK), and there are far more of
 // them on the board than there are early ones. Pushing them later happens to
 // point the same way as the measured error, so qb BRIER improves (0.0970 ->
-// 0.0917) while qb log-loss gets worse (0.2966 -> 0.3184): the tail is being
+// 0.0923) while qb log-loss gets worse (0.2966 -> 0.3200): the tail is being
 // helped for the wrong reason and the top is being hurt for the right one. That
 // is not a signal, it is two errors partially cancelling, and it is exactly why
 // the gate reads both metrics and every position instead of one average.
 //
-// The top-of-position variant settles it. Warping only the first five at each
-// position — where the room's early-qb behaviour actually lives — improves qb on
-// BOTH metrics (brier 0.0970 -> 0.0952, log-loss 0.2966 -> 0.2921) and improves
-// every other position too. So the two facts were never in conflict: this room
-// takes the first few quarterbacks early, AND the twenty-third quarterback on a
-// national board is not somebody this room has an opinion about at all.
-func roomGate(preds []pred, shipped, warped, top namedModel) {
-	base, room, tk := scoreOf(preds, shipped.f), scoreOf(preds, warped.f), scoreOf(preds, top.f)
+// The top-of-position variant settles it, and is what the board now prices.
+// Warping only the first five at each position — where the room's early-qb
+// behaviour actually lives — improves qb on BOTH metrics (brier 0.0970 ->
+// 0.0952, log-loss 0.2966 -> 0.2921), and no position regresses at the precision
+// these tables print. Five of six improve on both; wr improves on brier and its
+// log-loss moves +0.000032, which prints as 0.2450 -> 0.2450. So the two facts
+// were never in conflict: this room takes the first few quarterbacks early, AND
+// the twenty-third quarterback on a national board is not somebody this room has
+// an opinion about at all.
+//
+// Those per-position words are not typed here and trusted — roomPosGate computes
+// them on every run, and the verdict below branches on what it found. It used to
+// be an assertion printed from a condition that only read the two overall
+// numbers, which meant the one failure the gate exists to catch, a warp that wins
+// on average while wrecking a position, could not have changed a character of the
+// output.
+func roomGate(preds []pred, prior, full, top namedModel) {
+	base, room, tk := scoreOf(preds, prior.f), scoreOf(preds, full.f), scoreOf(preds, top.f)
 
 	var covered, n int
 	var shift, absShift float64
@@ -161,42 +173,61 @@ func roomGate(preds []pred, shipped, warped, top namedModel) {
 	// The variant that survives the gate, scored right next to the one that
 	// doesn't, because "the warp is wrong" and "the warp is wrong past the fifth
 	// player at a position" are different findings and only the second is true.
-	note(fmt.Sprintf("top %d only", adp.RoomWarpTopK), verdict(base.brier, tk.brier), fmt.Sprintf(
-		"brier %.4f -> %.4f (%+.4f) · log-loss %.4f -> %.4f (%+.4f) · graded, not shipped",
-		base.brier, tk.brier, tk.brier-base.brier,
-		base.logLoss, tk.logLoss, tk.logLoss-base.logLoss))
+	//
+	// The tag reads BOTH metrics. Taken off brier alone it printed "better" on a
+	// row whose log-loss column, three characters further along the same line, had
+	// got worse — which is the exact reading error this whole section exists to
+	// prevent.
+	note(fmt.Sprintf("top %d only", adp.RoomWarpTopK),
+		verdictBoth(base.brier, tk.brier, base.logLoss, tk.logLoss), fmt.Sprintf(
+			// "the one the board prices" rather than "this one ships": it is true
+			// at whatever adp.RoomWarpTopK is set to, including a value that loses
+			// this gate, and the verdict below is the thing entitled to say ships.
+			"brier %.4f -> %.4f (%+.4f) · log-loss %.4f -> %.4f (%+.4f) · the one the board prices",
+			base.brier, tk.brier, tk.brier-base.brier,
+			base.logLoss, tk.logLoss, tk.logLoss-base.logLoss))
+	pg := roomPosGate(preds, prior, top)
+	note("", "by pos", pg.line())
 
-	segmentTable("3a by position", preds, positionSegs(), shipped, warped)
+	segmentTable("3a by position", preds, positionSegs(), prior, full)
 	// And by depth, because the warp's error turns out to BE a depth story: the
 	// room's curve only reaches as deep into a position as a finite draft goes, so
 	// past that point mapping rank to room pick prices players later than the
 	// market does. Splitting by depth is what separates "the room-is-qb-early
 	// signal is wrong" from "the signal is fine and the tail is dragging it down".
-	segmentTable("3a by adp depth", preds, depthSegs(preds), shipped, warped)
-	// The same positional split for the variant that passes, so the claim "the
-	// top of the position is the good part" is a table rather than an assertion.
-	segmentTable("3a by position, top-of-position warp only", preds, positionSegs(), shipped, top)
+	segmentTable("3a by adp depth", preds, depthSegs(preds), prior, full)
+	// The same positional split for the variant that ships, so the claim "the top
+	// of the position is the good part" is a table rather than an assertion.
+	segmentTable("3a by position, top-of-position warp only", preds, positionSegs(), prior, top)
 	fmt.Println("  the gate is brier and log-loss, both directions, on every segment. a warp")
 	fmt.Println("  that helps overall while wrecking one position has still moved the number")
 	fmt.Println("  the board sorts by, so it does not ship into survival on an average.")
 	if room.brier > base.brier {
-		fmt.Println("  verdict: worse. the warp is not wired into survival — the default board")
-		fmt.Println("  prices raw adp. `pick6 fetch` prints the room curve as a read for the")
-		fmt.Println("  human, and `-room` on mock/live turns the pricing on for anyone who")
-		fmt.Println("  wants to argue with this table.")
-		fmt.Printf("  the top-%d row above is the interesting part: the same warp restricted to\n",
-			adp.RoomWarpTopK)
-		fmt.Println("  the top of each position passes on both metrics. the room's curve is right")
-		fmt.Println("  where the room's appetite is, and structurally later than adp past it — a")
-		fmt.Println("  ranked list is longer than any finite draft. still not shipped on one fold.")
+		fmt.Println("  verdict, full depth: worse, and it prices nothing. a ranked list runs deeper")
+		fmt.Println("  than any finite draft, so past the room's appetite rank->room-pick puts")
+		fmt.Println("  players later than the market by construction and the tail swamps the head.")
 	} else {
-		fmt.Println("  verdict: not worse. the warp is still opt-in behind -room: three drafts of")
-		fmt.Println("  one room against one scorable season is a small sample winning by a hair,")
-		fmt.Println("  and wiring it in by default needs more seasons than ffc's archive has.")
+		fmt.Println("  verdict, full depth: not worse on this fold — but it lost the last time and")
+		fmt.Println("  the top-of-position cutoff still beats it, so the deep warp stays unpriced.")
 	}
-	fmt.Println("  caveat: two drafts build the curve and one scores it, so this is a single")
-	fmt.Println("  fold. it is the only fold this data can cut — 2024 is the only season with")
-	fmt.Println("  era adp — and a single fold cannot tell a bad idea from an unlucky one.")
+	if betterPrinted(tk.brier, base.brier) && betterPrinted(tk.logLoss, base.logLoss) && pg.passes() {
+		fmt.Printf("  verdict, top %d: better on both metrics overall, and no position regresses at\n",
+			adp.RoomWarpTopK)
+		fmt.Println("  the precision these tables print, so it ships — mock and live blend the")
+		fmt.Println("  room's price into survival for the top of each position by default, and")
+		fmt.Println("  everyone deeper keeps raw national adp. `-room=false` puts the whole board")
+		fmt.Println("  back on the market's numbers.")
+	} else {
+		fmt.Printf("  verdict, top %d: it no longer clears the pre-warp model on this fold. that is\n",
+			adp.RoomWarpTopK)
+		fmt.Println("  the result the default was gated on — check adp.RoomWarpTopK against these")
+		fmt.Println("  numbers and consider moving the -room default back to off.")
+	}
+	fmt.Println("  caveat, and it is the whole caveat: two drafts build the curve and one scores")
+	fmt.Println("  it, so this is a single fold. it is the only fold this data can cut — 2024 is")
+	fmt.Println("  the only season with era adp — and a single fold cannot tell a bad idea from")
+	fmt.Println("  an unlucky one. a shipped default resting on it is worth re-gating the day")
+	fmt.Println("  ffc's archive grows a second scorable season.")
 }
 
 // shiftByPos is the mean (room - market) price move per position, in picks, over
@@ -216,6 +247,99 @@ func shiftByPos(preds []pred) []string {
 		out = append(out, fmt.Sprintf("%s %+.1f", strings.ToLower(pos), sum[pos]/float64(n[pos])))
 	}
 	return out
+}
+
+// posGate is the per-position half of 3a's gate, evaluated rather than claimed.
+//
+// The overall numbers cannot answer the question the section above asks. A warp
+// that helps on average while wrecking one position has still moved the number
+// the board sorts by for every player at that position, so the ship condition is
+// the conjunction: better overall on both metrics AND no position regressing.
+// Only the first half used to be computed.
+//
+// The verdict prints in three buckets because the honest answer has three, and
+// collapsing them was the original error. `both` is the clean win. `flat` is a
+// metric that moved the wrong way by less than the tables can show — reported
+// with its true delta so the reader can see how small "flat" is rather than take
+// the word for it. `worse` is the tripwire; one entry drops the ship verdict.
+type posGate struct {
+	both  []string // better on brier and log-loss, at the printed precision
+	flat  []string // better on one, tied on the other, with the real delta named
+	worse []string // regressed on a metric the reader can see — blocks the ship
+}
+
+func (g posGate) passes() bool { return len(g.worse) == 0 }
+
+// line is the one-line summary that sits under the overall numbers.
+func (g posGate) line() string {
+	var parts []string
+	if len(g.both) > 0 {
+		parts = append(parts, strings.Join(g.both, "/")+" better on both")
+	}
+	parts = append(parts, g.flat...)
+	parts = append(parts, g.worse...)
+	if len(parts) == 0 {
+		return "no position had enough rows to score"
+	}
+	return strings.Join(parts, " · ")
+}
+
+// roomPosGate scores the shipped warp against the pre-warp model one position at
+// a time, over the same segments and in the same order the tables above print,
+// so the summary and the table can never tell different stories.
+func roomPosGate(preds []pred, base, top namedModel) posGate {
+	var g posGate
+	for _, sg := range positionSegs() {
+		var sub []pred
+		for _, p := range preds {
+			if sg.keep(p) {
+				sub = append(sub, p)
+			}
+		}
+		if len(sub) == 0 {
+			continue // a position nobody had an adp for isn't a pass, it's absent
+		}
+		sa, sb := scoreOf(sub, base.f), scoreOf(sub, top.f)
+		clean := true
+		for _, m := range []struct {
+			name     string
+			from, to float64
+		}{
+			{"brier", sa.brier, sb.brier},
+			{"log-loss", sa.logLoss, sb.logLoss},
+		} {
+			switch {
+			case betterPrinted(m.to, m.from):
+				// An improvement the reader can see in the table above.
+			case betterPrinted(m.from, m.to):
+				clean = false
+				g.worse = append(g.worse,
+					fmt.Sprintf("%s %s worse %+.4f", sg.label, m.name, m.to-m.from))
+			default:
+				// Tied to four decimals. The real delta is named anyway, because
+				// "flat" quietly hiding a large move would be the same asserted
+				// claim in a smaller font.
+				clean = false
+				g.flat = append(g.flat,
+					fmt.Sprintf("%s %s flat %+f", sg.label, m.name, m.to-m.from))
+			}
+		}
+		if clean {
+			g.both = append(g.both, sg.label)
+		}
+	}
+	return g
+}
+
+// verdictBoth labels a change that moves two metrics at once. Read off one of
+// them it printed "better" next to a row whose other column, a few characters
+// along the same line, had got worse.
+func verdictBoth(baseA, otherA, baseB, otherB float64) string {
+	a, b := verdict(baseA, otherA), verdict(baseB, otherB)
+	if a == b {
+		return a
+	}
+	return "mixed"
 }
 
 // verdict labels a metric where lower is better, for the aligned tag column.

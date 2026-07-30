@@ -1,6 +1,7 @@
 package adp
 
 import (
+	"math"
 	"sort"
 
 	"github.com/trisslazaj/pick6/internal/rankings"
@@ -46,37 +47,46 @@ import (
 // the finished number off Player.ADPEff.
 const RoomWarpPseudo = 2.0
 
-// RoomWarpTopK is where the warp stops being right, MEASURED, and it is not
-// shipped — `pick6 calibrate` grades it as an extra row and nothing prices it.
+// RoomWarpTopK is where the warp stops being right, MEASURED, and it is the warp
+// the board prices by default: `loadBoard` reprices the first five players at
+// each position and leaves everyone deeper on the raw national number.
 //
 // The full-depth warp fails its gate (brier 0.0670 -> 0.0671, log-loss 0.2250 ->
-// 0.2326 on the cross-validated 2024 backtest). Restricted to the first five
-// players at each position it PASSES, and comfortably: brier 0.0660, log-loss
-// 0.2222. Sweeping the cutoff on the same backtest, the flip is sharp and in one
-// place — k<=3 brier 0.0662, k<=5 0.0660, k<=8 0.0662, k<=12 0.0670 (worse),
-// uncapped 0.0671 (worse). The cutoff rows are the same to four decimals whether
-// or not the deep-k corrections below are in, which is the point: every one of
-// them lands past k=5.
+// 0.2327 on the cross-validated 2024 backtest) and prices nothing. Restricted to
+// the first five players at each position it PASSES, and comfortably: brier
+// 0.0660, log-loss 0.2222. Sweeping the cutoff on the same backtest, the optimum
+// is a plateau at 4-5 and the flip is well past it — k<=1 0.0665/0.2237, k<=3
+// 0.0662/0.2227, k<=5 0.0660/0.2222, k<=8 0.0661/0.2229, k<=12 0.0674/0.2283
+// (worse), uncapped 0.0671/0.2327 (worse).
 //
-// Restricted that way it improves every position on both metrics, quarterbacks
-// included (brier 0.0970 -> 0.0952, log-loss 0.2966 -> 0.2921) — which is the
-// answer to the apparent contradiction in CLAUDE.md, where the room takes qb
-// slots early while named quarterbacks survive longer than adp implies. Both are
-// true at different depths of the position.
+// Restricted that way no position regresses at the four decimals `pick6
+// calibrate` prints, and quarterbacks improve on both (brier 0.0970 -> 0.0952,
+// log-loss 0.2966 -> 0.2921) — which is the answer to the apparent contradiction
+// in CLAUDE.md, where the room takes qb slots early while named quarterbacks
+// survive longer than adp implies. Both are true at different depths of the
+// position. Five of the six positions improve on both metrics outright; wr
+// improves on brier and its log-loss moves +0.000032, which prints as 0.2450 ->
+// 0.2450. That is a tie the reader can check, not a win, and roomPosGate says so
+// on every run rather than leaving it to this comment.
 //
 // The reason is structural, not a tuning accident. National adp ranks far more
 // players at a position than any finite draft takes: the 2024 board priced its
 // 12th quarterback at adp 89.6, while this room's 12th quarterback went at pick
 // 126.5, because 12 teams over 15 rounds only ever take ~19 of them. So past the
 // top of a position, rank->room-pick prices players LATER than the market and the
-// warp's mean shift flips sign — qb +11.5 picks overall against -1.7 to -3.7 for
+// warp's mean shift flips sign — qb +11.0 picks overall against -1.7 to -3.7 for
 // qb1 through qb5. The room-is-qb-early signal is real and lives entirely at the
 // top; the tail is an artifact of comparing a ranked list to a finite draft.
 //
-// Left unshipped on purpose: one fold (2024 is the only season with era adp),
-// two drafts building the curve, and a -0.0009 brier win is not a mandate. This
-// is the note that stops the next person re-deriving it — and if a second
-// scorable season ever lands in ffc's archive, this is the variant to gate again.
+// THE EVIDENCE BEHIND THE DEFAULT IS ONE FOLD. 2024 is the only season with era
+// adp, so two drafts build the curve, one scores it, and the whole margin is
+// -0.0009 brier and -0.0028 log-loss. It ships because it is the best number
+// available and no position or nearby cutoff points the other way — not because
+// a single fold can tell a real edge from a lucky one. What
+// would overturn it: a second scorable season in ffc's archive (year=2025 still
+// answers "no adp data found"; recheck once near draft day). Re-gate then. If
+// k<=5 stops winning, `-room=false` is already the fallback and the default
+// moves back.
 const RoomWarpTopK = 5
 
 // RoomDraft is one completed draft reduced to what the curve reads: the position
@@ -185,21 +195,32 @@ type RoomRow struct {
 // rows the curve actually covers — a caller can then leave everyone else on raw
 // adp without deciding what "uncovered" means.
 //
+// `pick6 calibrate` is its only caller and the only one it should ever have: at
+// full depth this is the variant that FAILED the gate (brier 0.0670 -> 0.0671,
+// log-loss 0.2250 -> 0.2327), so it survives as a comparison row in the model
+// table and nothing else. The board prices EffectiveADPTopK. Keeping the loser
+// scored next to the winner is what stops the next reader assuming the warp was
+// never tried at depth — see RoomWarpTopK for why the tail is wrong.
+//
 // Rank is by adp WITHIN the position, over the board rows handed in, which is the
 // only rank that lines up with adp_room's own definition: adp_room(WR, 5) is where
 // the fifth receiver went, so it must be compared against the fifth receiver on
 // the board. Rows with no adp are skipped rather than ranked last — an unranked
 // player has no market price, and giving him one would be inventing data.
 //
-// The warped prices come out non-decreasing in k, which the blend does not give
-// for free — see the running max below.
+// The priced sequence comes out non-decreasing in k across the WHOLE position,
+// warped rows and the raw ones behind them together, which the blend does not
+// give for free — see the running max and the ceiling below.
 func (c RoomCurve) EffectiveADP(rows []RoomRow) map[string]float64 {
 	return c.effectiveADP(rows, 0)
 }
 
 // EffectiveADPTopK is that warp restricted to the first maxK players at each
-// position (0 means no limit). Only `pick6 calibrate` calls it, to grade the
-// variant RoomWarpTopK documents; nothing on the board prices it.
+// position (0 means no limit). At maxK = RoomWarpTopK this is the warp the board
+// ships with: `loadBoard` calls it on every mock and live startup unless
+// `-room=false`, and `pick6 calibrate` grades the same call as the row that wins
+// the 3a gate. One function, so the graded variant and the priced one cannot
+// drift apart.
 func (c RoomCurve) EffectiveADPTopK(rows []RoomRow, maxK int) map[string]float64 {
 	return c.effectiveADP(rows, maxK)
 }
@@ -220,6 +241,34 @@ func (c RoomCurve) effectiveADP(rows []RoomRow, maxK int) map[string]float64 {
 			}
 			return group[i].ID < group[j].ID // map order is not an order
 		})
+		// Where the warp stops at this position: the caller's cutoff, or the depth
+		// the room's curve reaches, whichever comes first. Everyone past it keeps
+		// the raw market price, so this index is also the boundary the ceiling
+		// below has to hold across.
+		limit := len(group)
+		if maxK > 0 && maxK < limit {
+			limit = maxK
+		}
+		if d := c.Depth(pos); d < limit {
+			limit = d
+		}
+		// The ceiling: a warped player may not be priced later than the market
+		// prices the next man at his position, because that man is NOT warped and
+		// the two halves of the sequence have to join up.
+		//
+		// Without it the top-k cutoff reintroduces the inversion the running maxes
+		// exist to prevent, one step further down the pipeline. Measured on the
+		// shipped 2026 board at RoomWarpTopK = 5: the warp priced the 5th defense
+		// at 144.16, while the 6th kept his raw adp of 129.90 — so the board read
+		// the 6th defense as coming off 14.3 picks BEFORE the 5th, and before the
+		// 7th, 8th and 9th too. Only def does it today, because def is the one
+		// position this room drafts later than the market at the top (fetch's
+		// room-curve table prints gap5 +30.0 for it), but any future curve that
+		// prices some other position late gets the same discontinuity for free.
+		ceiling := math.Inf(1)
+		if limit < len(group) {
+			ceiling = group[limit].ADP
+		}
 		// A second running max, over the BLEND this time, and it is not redundant
 		// with the one BuildRoomCurve carries. Both inputs are non-decreasing in k
 		// — adp_room by that first running max, adp by the sort above — but the
@@ -232,10 +281,8 @@ func (c RoomCurve) effectiveADP(rows []RoomRow, maxK int) map[string]float64 {
 		// quarterback goes sooner than the 19th" the curve's own running max
 		// exists to prevent, arriving one step later in the pipeline.
 		run := 0.0
-		for i, r := range group {
-			if maxK > 0 && i+1 > maxK {
-				break // the group is adp-sorted, so everyone after him is deeper too
-			}
+		for i := 0; i < limit; i++ {
+			r := group[i]
 			eff, ok := c.Warp(pos, i+1, r.ADP)
 			if !ok {
 				continue
@@ -243,6 +290,12 @@ func (c RoomCurve) effectiveADP(rows []RoomRow, maxK int) map[string]float64 {
 			if eff < run {
 				eff = run
 			}
+			if eff > ceiling {
+				eff = ceiling
+			}
+			// Capped after the running max, never before: min(runningMax, ceiling)
+			// is still non-decreasing, so clamping one row cannot let the next one
+			// duck back under it.
 			run = eff
 			out[r.ID] = eff
 		}
@@ -272,35 +325,46 @@ func LoadRoomDrafts(ids []string) (map[string]RoomDraft, []RoomSource) {
 // CachedRoomDrafts is the same read with the network taken away, for the paths
 // that end in a rendered frame.
 //
-// `pick6 mock` and `pick6 live` reach this on startup, and a board is not
-// allowed to block on http: cache.Get refetches an aged-out file with a 120s
+// `pick6 mock` and `pick6 live` reach this on startup — for survival prices as
+// well as replacement level since the warp became the default — and a board is
+// not allowed to block on http: cache.Get refetches an aged-out file with a 120s
 // timeout and only falls back to the stale copy if the request errors, so six
 // month-old draft files behind a blackholing proxy is twelve minutes of blank
-// screen. Nothing here is load-bearing — no curve means raw adp and a
-// lineup-shape replacement level, which is the default board.
+// screen. Nothing here is load-bearing: no curve means raw national adp and a
+// lineup-shape replacement level, which is a degraded board rather than no
+// board, and it draws instantly.
 func CachedRoomDrafts(ids []string) (map[string]RoomDraft, []RoomSource) {
 	return loadRoomDrafts(ids, true)
 }
 
+// loadRoomDrafts is both readers. Which pair of functions to call is chosen
+// once, before the loop — never a read followed by an override.
+//
+// It was an override, and `offline` therefore meant nothing:
+// `d, err := sleeper.CachedDraft(id)` ran the network-capable read FIRST and the
+// disk read only replaced its result. Caught by pointing a board at an empty
+// HOME and finding six draft files in the fresh cache dir afterwards, which only
+// a download can put there. On this path that is the twelve-minute blank screen
+// DiskDraft's comment describes: cache.Get gives a missing or month-old file a
+// 120s client timeout, and falls back to stale bytes only when the request
+// ERRORS rather than hangs. TestCachedRoomDraftsNeverFetches pins it.
 func loadRoomDrafts(ids []string, offline bool) (map[string]RoomDraft, []RoomSource) {
 	out := map[string]RoomDraft{}
 	var sources []RoomSource
+	draft, picksOf := sleeper.CachedDraft, sleeper.CachedPicks
+	if offline {
+		draft, picksOf = sleeper.DiskDraft, sleeper.DiskPicks
+	}
 	for _, id := range ids {
 		src := RoomSource{ID: id}
-		d, err := sleeper.CachedDraft(id)
-		if offline {
-			d, err = sleeper.DiskDraft(id)
-		}
+		d, err := draft(id)
 		if err != nil {
 			src.Err = err
 			sources = append(sources, src)
 			continue
 		}
 		src.Season = d.Season
-		picks, err := sleeper.CachedPicks(id)
-		if offline {
-			picks, err = sleeper.DiskPicks(id)
-		}
+		picks, err := picksOf(id)
 		if err != nil {
 			src.Err = err
 			sources = append(sources, src)

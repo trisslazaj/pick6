@@ -18,7 +18,7 @@ func runLive(args []string) error {
 	slot := fs.Int("slot", 0, "your draft slot, if you'd rather say it directly")
 	poll := fs.Int("poll", 3, "seconds between polls (sleeper asks for 2-3+)")
 	replay := fs.Bool("replay", false, "load a finished draft once and print one frame (no tui)")
-	room := fs.Bool("room", false, "price survival against this league's own draft history (opt-in; measured worse than raw adp)")
+	room := roomFlag(fs)
 	width := fs.Int("width", 92, "board width for replay mode")
 	height := fs.Int("height", 40, "board height for replay mode")
 	// Go's flag package stops parsing at the first positional argument, so

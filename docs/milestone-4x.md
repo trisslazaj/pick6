@@ -1,6 +1,8 @@
 # milestone 4x — engine v1.5: calibrated, continuous, league-aware
 
-Status: **spec, ready to implement.** Extends milestone 4 (done) before milestone 6 (the
+Status: **implemented — all four phases.** This file stays as the spec it was written as;
+where the shipped code diverged, an annotated note sits under the phase and CLAUDE.md's
+milestone log is the record of what actually landed. Extends milestone 4 (done) before milestone 6 (the
 Monte Carlo opponent model in `docs/engine-v2.md`, which is NOT this — do not build it here).
 
 Audience: an implementing agent with no prior conversation context. **Read CLAUDE.md first**;
@@ -275,6 +277,15 @@ DoD: the plan line renders in mock; the disagreement test pins the reason this e
 ## phase 3 — league-specific (independent of phases 1–2)
 
 ### 3a. room-warped effective adp
+
+> **Shipped, and not as specified below.** This section is the spec as written; what
+> landed differs in two ways and CLAUDE.md's milestone log is the record. (1) The warp is
+> **on by default**, not opt-in — `-room=false` is the opt-*out*. (2) It reprices only the
+> **top `adp.RoomWarpTopK` (5) players at each position**; everyone deeper keeps raw
+> national ADP, because at full depth the warp lost the gate below. Read the "if brier
+> worsens" paragraph as answered: it did worsen at full depth, the top-of-position variant
+> passed instead, and the scout printout survives as a read for the human on top of that
+> rather than instead of it.
 
 The room is measurably QB-early (CLAUDE.md "our league" table). Build the room's own
 rank→pick curve from the three cached drafts — this uses only pick ORDER and position, so

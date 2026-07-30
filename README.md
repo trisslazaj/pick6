@@ -85,6 +85,23 @@ So a locked-in star (stdev ≈ 1) gets a near-step-function — one pick past hi
 simply gone — while a volatile flier (stdev ≈ 40) gets a nearly flat curve: stop panicking, he
 keeps.
 
+**Your room, not the market.** ADP is a thousand strangers; your league is twelve people who
+draft the same way every year. Measured over three of their completed drafts, this room takes
+its first quarterback at pick 23.0 and its first tight end at 23.3, against 26.1 and 39.5
+nationally. So at the top of each position — where that appetite actually lives — the curve is
+centred on a blend of the two prices instead:
+
+$$\mathrm{adp}_{\text{eff}} = w \cdot \mathrm{adp}_{\text{room}}(P, k) + (1 - w) \cdot \mathrm{adp},
+\qquad w = \frac{n}{n + 2}$$
+
+where $\mathrm{adp}_{\text{room}}(P, k)$ is the mean pick at which this league took the $k$-th
+player at position $P$, over the $n$ drafts that ever got that deep. Only the first five at each
+position are repriced: a national ranked list runs far deeper than any finite draft, so past the
+room's appetite that curve is later than ADP about everyone and backtests worse. Restricted to
+the top five it wins — Brier 0.0670 → 0.0660, log-loss 0.2250 → 0.2222, and no position
+regresses at the four decimals the backtest prints — but that is one fold of two drafts, which
+is thin. `-room=false` prices the whole board on the market's numbers.
+
 One honesty adjustment: a player who's on the board *right now* can only be taken by the picks
 between now and your turn. So the number shown is survival **conditioned on the present**:
 

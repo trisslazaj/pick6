@@ -8,10 +8,11 @@ import (
 // TestADPEffIsTheSurvivalPrice pins the whole mechanism of the room warp: exactly
 // two readers switch to the warped price, and they switch to it completely.
 //
-// The bug it prevents is a half-wired warp. ADP is read in six places — the
-// survival curve, the faller flag, the data tab's column, Available's sort
+// The bug it prevents is a half-wired warp, and it matters on every board now
+// that the warp is the default rather than a flag. ADP is read in six places —
+// the survival curve, the faller flag, the data tab's column, Available's sort
 // tie-break, the group headers, the mock's picker — and only the first two may
-// ever see ADPEff. If PSurviveAt kept reading raw ADP the flag would silently do
+// ever see ADPEff. If PSurviveAt kept reading raw ADP the warp would silently do
 // nothing; if it read ADPEff while Falling did not, the board would put amber
 // discount numbers on players the model still thinks are fairly priced.
 //
