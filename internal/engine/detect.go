@@ -33,7 +33,7 @@ func (s *State) TierHold(pos string) (float64, bool) {
 	if !ok || best.Tier == 0 {
 		return 0, false
 	}
-	at := s.TierHoldPick()
+	at := s.ActPick()
 	c := s.survivalTilt(at, s.opponentPicksBefore(at))
 	allGone := 1.0
 	for id, p := range s.Players {
@@ -45,13 +45,18 @@ func (s *State) TierHold(pos string) (float64, bool) {
 	return 1 - allGone, true
 }
 
-// TierHoldPick is the pick TierHold prices to, exported because the copy has to
-// name it. Off the clock it is NextPick — the same horizon PSurviveTilted uses,
-// so the header and the survival column below it agree and nothing needs saying.
-// On the clock they diverge by design (see TierHold), and a hold of 3% printed
-// directly above three survival cells reading 100% is two horizons one line
-// apart with nothing marking which is which. Naming the pick is what marks it.
-func (s *State) TierHoldPick() int {
+// ActPick is my next chance to act, and the one horizon every probability on
+// screen is priced to — the tier holds in the group headers and the survival
+// column under them both read it, so no two numbers on a frame answer different
+// questions.
+//
+// Off the clock it is NextPick. On the clock NextPick is THIS pick, and pricing
+// to it asks whether a player survives zero picks: the answer is 1 for
+// everybody, and the survival column went blank on the one frame where you are
+// actually choosing. What passing costs you is measured to the pick after, so
+// that is what both numbers use. On my last pick of the draft there is no
+// "after" and it stays NextPick — nothing can be taken, so nothing is at risk.
+func (s *State) ActPick() int {
 	at := s.NextPick()
 	if at <= s.PickNo {
 		if q2 := s.FollowingPick(); q2 > 0 {

@@ -635,6 +635,54 @@ func TestSurvivalColumnsShowTheTiltedNumber(t *testing.T) {
 	}
 }
 
+// The survival column has to say something on the clock, because that is the one
+// frame that spends a pick. Priced to NextPick it could not: on the clock
+// NextPick IS this pick, no picks intervene, and every cell on both tabs
+// rendered 100% — the board's most prominent number, blank at the moment of the
+// decision. It prices to ActPick instead, so a row answers the question the
+// reader is actually holding: pass on him now, is he there when I come back?
+//
+// The fixture is a slot-3 board standing at pick 3, so the horizon is 22 and
+// eighteen opponent picks fall in between. `gone` cannot survive them and `here`
+// comfortably can, which a live column separates and a dead one renders as two
+// identical 100%s — the exact state the raw guard below pins as the regression.
+func TestSurvivalColumnIsLiveOnTheClock(t *testing.T) {
+	players, add := newBoard()
+	add("gone", "RB", 100, 6, 2, 1) // adp 6 against a pick-22 horizon
+	add("here", "RB", 96, 70, 6, 1) // ...and adp 70, which keeps
+	add("wr1", "WR", 90, 10, 3, 1)  // depth so the group is not a singleton
+	add("wr2", "WR", 88, 40, 6, 1)
+	addDepth(add)
+	s := engine.New(players, 12, 15, 3)
+	s.PickNo = 3 // on the clock: NextPick is 3, the pick after is 22
+
+	if s.PicksUntilMine() != 0 {
+		t.Fatalf("fixture is not on the clock: %d picks until mine", s.PicksUntilMine())
+	}
+	for _, id := range []string{"gone", "here"} {
+		if got := s.PSurvive(s.Players[id]); got != 1 {
+			t.Fatalf("fixture proves nothing: %s already reads %v at the old horizon, not the flat 1", id, got)
+		}
+	}
+
+	live := map[string]string{}
+	for _, id := range []string{"gone", "here"} {
+		live[id] = fmt.Sprintf("%.0f%%", 100*s.PSurviveTilted(s.Players[id]))
+	}
+	if live["gone"] == live["here"] {
+		t.Fatalf("column is not separating a doomed player from a safe one: both render %s", live["gone"])
+	}
+	for _, tab := range []int{0, 1} {
+		view := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40, Tab: tab}.View(), "")
+		for _, id := range []string{"gone", "here"} {
+			row := playerRow(view, "fake "+id)
+			if !strings.Contains(row, live[id]) {
+				t.Errorf("tab %d: row %q should price survival to my next pick as %s", tab, row, live[id])
+			}
+		}
+	}
+}
+
 // The zero-urgency tie-break is need-weighted VOR, and the frame it decides is
 // the one where I am on the clock: urgency is continuous since phase 1, so an
 // exact tie is essentially unreachable anywhere else, and on my own pick EVERY

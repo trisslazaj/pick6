@@ -383,16 +383,16 @@ func barFits(tag, msg string, w int) bool {
 func pct(p float64) string { return fmt.Sprintf("%.0f%%", 100*p) }
 
 // holdNote is a tier's hold probability, with the pick it is measured to named
-// only when that pick is not the one the survival column beside it uses.
+// only when that pick is not the one being made right now.
 //
-// Off the clock the two horizons are the same and the extra words are noise. On
-// the clock they are not: survival is priced to my next pick, which IS this one,
-// so every cell reads 100%, while the tier's hold is priced to the pick after —
-// the one passing actually costs me. Both numbers are right for their own
-// horizon and neither said which, which is how "holds 3%" ended up printed
-// directly above three men each reading 100%.
+// Off the clock "my next pick" is unambiguous and the extra words are noise. On
+// the clock it is not — the frame is about pick 3.03 while every probability on
+// it is priced to 4.10 — and the reader is one bad reading away from taking the
+// hold for a verdict on the pick in front of him. The hold and the survival
+// cells under it share a horizon (see engine.ActPick), so this labels the
+// frame's numbers rather than marking a discrepancy between them.
 func (b Board) holdNote(hold float64) string {
-	at := b.State.TierHoldPick()
+	at := b.State.ActPick()
 	if at == b.State.NextPick() {
 		return "holds " + pct(hold)
 	}
