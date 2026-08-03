@@ -221,7 +221,12 @@ func (b Board) legend(tripped bool, w int) string {
 // no opinion on.
 func (b Board) dataRow(p engine.Player, nameW int) string {
 	s := b.State
-	style := Pos(p.Pos, false)
+	// Suppressed k/def render faint here too, not just on the board tab. The old
+	// palette let this slide — a pastel mauve kicker was quiet at full strength
+	// anyway — but sleeper's kicker is a vivid violet, and undimmed it pulls more
+	// eye in round 9 than the receivers above it. Same player, two tabs, opposite
+	// urgency is the one thing this table cannot do.
+	style := Pos(p.Pos, s.Suppressed(p.Pos))
 
 	// Amber numbers mark a faller, same as the board tab.
 	numeric := Dim
