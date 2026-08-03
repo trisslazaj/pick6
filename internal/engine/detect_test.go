@@ -450,7 +450,7 @@ func TestCliffSpeaksTheBestRemainingTierUnderFileValueInversion(t *testing.T) {
 		Player{ID: "gone6", Pos: "WR", Value: 85, ADP: 30, Sigma: 6, Tier: 6},
 		Player{ID: "rb1", Pos: "RB", Value: 95, ADP: 20, Sigma: 6, Tier: 1},
 	)
-	s.Draft("rb1")  // pick 1 filler so the board has history
+	s.Draft("rb1")   // pick 1 filler so the board has history
 	s.Draft("gone6") // tier 6 is touched: a cliff there is at least possible
 	s.PickNo = 4
 
