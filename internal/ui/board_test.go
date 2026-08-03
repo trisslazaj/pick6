@@ -1103,3 +1103,68 @@ func TestSidebarNamesTheGapAfterTheTurn(t *testing.T) {
 		t.Errorf("a zero gap should say so in words:\n%s", view)
 	}
 }
+
+// Off the clock the pane's ordering is a FORECAST — "te 990" at 2.08 means
+// expect to lose 990 of tight-end value before you pick — and it never said so.
+// Rendered as an unlabelled ranking with the leader wearing an accent border it
+// reads as "take this", on the one frame where nothing can be taken.
+//
+// The two captions are mutually exclusive: exactly one lead line per frame, or
+// the pane is claiming to be both a decision and a forecast at once.
+func TestPaneSaysWhetherItIsForecastingOrDeciding(t *testing.T) {
+	players, add := newBoard()
+	add("rb1", "RB", 100, 20, 5, 1)
+	add("wr1", "WR", 90, 24, 5, 1)
+	addDepth(add)
+	s := engine.New(players, 12, 15, 3)
+
+	s.PickNo = 4 // off the clock: slot 3 picks again at 22, which is 2.10
+	off := ansi.ReplaceAllString(Board{State: s, Width: 100, Height: 40}.View(), "")
+	if !strings.Contains(off, "before 2.10") || !strings.Contains(off, "stand to lose") {
+		t.Errorf("off the clock the pane should name its horizon and framing:\n%s", off)
+	}
+	if strings.Contains(off, "the pick — ") {
+		t.Errorf("off the clock the pane must not lead with a decision:\n%s", off)
+	}
+
+	s.PickNo = 3 // on the clock
+	on := ansi.ReplaceAllString(Board{State: s, Width: 100, Height: 40}.View(), "")
+	if !strings.Contains(on, "the pick — ") {
+		t.Errorf("on the clock the pane should lead with the decision:\n%s", on)
+	}
+	if strings.Contains(on, "stand to lose") {
+		t.Errorf("on the clock the pane must not also forecast:\n%s", on)
+	}
+}
+
+// Both tabs band the survival column off ONE function. The board tab used to
+// render it dim unless the man was falling, so the answer to its own central
+// question — will he still be here — was the only uncoloured number on the row,
+// on the frame the board spends most of its life showing.
+func TestSurvivalBandsAgreeAcrossTabs(t *testing.T) {
+	players, add := newBoard()
+	add("safe", "RB", 100, 90, 4, 1) // nobody takes him in 18 picks
+	add("gone", "RB", 98, 4, 2, 1)   // ...and nobody leaves him either
+	add("wr1", "WR", 90, 24, 5, 1)
+	addDepth(add)
+	s := engine.New(players, 12, 15, 3)
+	s.PickNo = 4
+
+	if p := s.PSurviveTilted(s.Players["safe"]); p < engine.SurviveThreshold {
+		t.Fatalf("fixture proves nothing: 'safe' survives at %v", p)
+	}
+	if p := s.PSurviveTilted(s.Players["gone"]); p >= survGoneBand {
+		t.Fatalf("fixture proves nothing: 'gone' survives at %v", p)
+	}
+
+	b := Board{State: s, Width: 100, Height: 44}
+	for _, id := range []string{"safe", "gone"} {
+		want := b.survStyle(s.Players[id]).Render(pct(s.PSurviveTilted(s.Players[id])))
+		for _, tab := range []int{0, 1} {
+			view := Board{State: s, Width: 100, Height: 44, Tab: tab}.View()
+			if !strings.Contains(view, want) {
+				t.Errorf("tab %d: %s should carry the banded survival %q", tab, id, want)
+			}
+		}
+	}
+}
