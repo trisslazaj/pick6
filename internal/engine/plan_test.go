@@ -487,6 +487,132 @@ func TestNeedAfter(t *testing.T) {
 	}
 }
 
+// THE REPRICING: both legs are priced over replacement, and this is the board
+// that shows why. The quarterbacks run 100, 96, 94, 92 with four startable
+// slots, so R(QB) = 92 and the headline man is worth 8 over the one this league
+// would have handed you anyway; the lone back is worth his whole 90. Raw value
+// says qb first (100 > 90, and the second legs are shared); value over
+// replacement says rb first, by an order of magnitude. The old formula scored
+// legs on raw value and recommended the quarterback — the exact shape of the
+// live 3.01 frame that kept arguing for early QBs.
+//
+// Both contested men survive at 5%, so neither position's second leg can
+// compensate: the best second leg for either choice is the same tight end, and
+// a shared leg cancels. What decides is leg one, which is the claim under test.
+func TestPickChoicesPriceLegsOverReplacement(t *testing.T) {
+	s := newTestState(4, 15, 2)
+	s.PickNo = 1 // NextPick 2, FollowingPick 7
+	q2 := s.FollowingPick()
+	survivorAt(s, "qb1", "QB", 1, 100, q2, 0.05)
+	survivorAt(s, "qb2", "QB", 1, 96, q2, 0.9)
+	survivorAt(s, "qb3", "QB", 1, 94, q2, 0.9)
+	survivorAt(s, "qb4", "QB", 1, 92, q2, 0.9)
+	survivorAt(s, "rb1", "RB", 1, 90, q2, 0.05)
+	survivorAt(s, "te1", "TE", 1, 60, q2, 0.9)
+	survivorAt(s, "te2", "TE", 1, 10, q2, 0.9)
+
+	// Fixture sanity: the startable index puts qb replacement at the 4th man and
+	// leaves the back free, so vor inverts the raw-value order.
+	if got := s.Replacement("QB"); got != 92 {
+		t.Fatalf("replacement(qb) = %v, want 92 — 4 teams x 1 startable slot", got)
+	}
+	if got := s.Replacement("RB"); got != 0 {
+		t.Fatalf("replacement(rb) = %v, want 0 — one back valued against nine startable", got)
+	}
+	if qb, rb := s.VOR(s.Players["qb1"]), s.VOR(s.Players["rb1"]); qb >= rb {
+		t.Fatalf("fixture is not a disagreement: vor(qb1) %v does not trail vor(rb1) %v", qb, rb)
+	}
+
+	plan, ok := s.BestPlan()
+	if !ok {
+		t.Fatal("no plan on a board with three live positions and two picks to come")
+	}
+	if plan.First != "RB" {
+		t.Errorf("plan.First = %s, want rb — the 8-point qb discount must not outrank a 90-point back", plan.First)
+	}
+
+	choices := s.PickChoices()
+	var qbScore, rbScore float64
+	for _, c := range choices {
+		switch c.Pos {
+		case "QB":
+			qbScore = c.Score
+		case "RB":
+			rbScore = c.Score
+		}
+	}
+	if qbScore >= rbScore {
+		t.Errorf("score(qb) %v >= score(rb) %v: leg one is being priced on raw value again", qbScore, rbScore)
+	}
+}
+
+// One brain: BestPlan is PickChoices' first row, by construction and now by
+// assertion, because the whole reason PickChoices exists is that the plan line
+// and the ordering under it used to rank the same frame differently.
+func TestBestPlanIsTheTopPickChoice(t *testing.T) {
+	boards := map[string]*State{
+		"lookahead": lookaheadBoard(),
+		"mirror":    mirrorBoard(),
+	}
+	turn := newTestState(12, 15, 12)
+	turn.PickNo = 11
+	q2 := turn.FollowingPick()
+	for i, v := range []int{100, 90, 80, 70} {
+		survivorAt(turn, "rb"+string(rune('1'+i)), "RB", 1, v, q2, 0.75)
+	}
+	boards["turn"] = turn
+
+	for name, s := range boards {
+		plan, ok := s.BestPlan()
+		if !ok {
+			t.Fatalf("%s: no plan", name)
+		}
+		choices := s.PickChoices()
+		if len(choices) == 0 {
+			t.Fatalf("%s: no choices", name)
+		}
+		top := choices[0]
+		if plan.First != top.Pos || plan.Second != top.Second || plan.Score != top.Score {
+			t.Errorf("%s: plan (%s→%s, %v) is not the top choice (%s→%s, %v)",
+				name, plan.First, plan.Second, plan.Score, top.Pos, top.Second, top.Score)
+		}
+	}
+}
+
+// On my last pick there is no second leg: BestPlan honestly says no plan, but
+// PickChoices still ranks the frame — on vor x need alone, with no second-leg
+// position named — because the board still has to order itself on the one frame
+// where "what does he buy over replacement" is the only question left.
+func TestPickChoicesOnMyLastPick(t *testing.T) {
+	s := newTestState(12, 15, 3)
+	s.PickNo = 171 // slot 3's round-15 pick: 14*12 + 3
+	addPlayers(s,
+		Player{ID: "rb1", Pos: "RB", Value: 100, ADP: 20, Sigma: 6},
+		Player{ID: "wr1", Pos: "WR", Value: 80, ADP: 25, Sigma: 6},
+	)
+	if got := s.NextPick(); got != 171 {
+		t.Fatalf("fixture: NextPick = %d, want 171 to be my own last pick", got)
+	}
+	if _, ok := s.BestPlan(); ok {
+		t.Error("BestPlan said ok on my last pick; there is nothing to plan")
+	}
+	choices := s.PickChoices()
+	if len(choices) != 2 {
+		t.Fatalf("choices = %d, want 2", len(choices))
+	}
+	if choices[0].Pos != "RB" || choices[1].Pos != "WR" {
+		t.Errorf("order = %s, %s; want rb then wr on vor x need", choices[0].Pos, choices[1].Pos)
+	}
+	if choices[0].Score != 100 || choices[1].Score != 80 {
+		t.Errorf("scores = %v, %v; want the bare vor x need 100 and 80", choices[0].Score, choices[1].Score)
+	}
+	for _, c := range choices {
+		if c.Second != "" {
+			t.Errorf("%s: second leg = %q on my last pick, want none", c.Pos, c.Second)
+		}
+	}
+}
+
 // The plan is read during a render, so it must not touch the roster it reasons
 // about. A mutate-and-restore would be shorter and wrong twice over: a panic
 // between the two leaves the board describing a roster that never existed, and

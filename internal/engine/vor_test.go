@@ -99,10 +99,11 @@ func TestReplacementWhenTheBoardRunsOut(t *testing.T) {
 // position can fill. On the default 12-team lineup that is qb 12, rb and wr
 // 24 + 12/3 = 28, te 12 + 4 = 16, k and def 12.
 //
-// It is deliberately a floor and not a guess at the truth — measured, this room
-// takes 58 backs, not 28 — because the alternative is a hardcoded constant
-// pretending to be a measurement. A superflex lineup splits its extra slot four
-// ways instead of three, which is the case a hardcoded table would miss.
+// For a flex position it is deliberately a floor and not a guess at the truth —
+// measured, this room takes 58 backs, not 28 — because the alternative is a
+// hardcoded constant pretending to be a measurement. A superflex lineup splits
+// its extra slot four ways instead of three, which is the case a hardcoded
+// table would miss.
 func TestDemandFallsBackToLeagueShape(t *testing.T) {
 	s := newTestState(12, 15, 3)
 	cases := []struct {
@@ -128,13 +129,50 @@ func TestDemandFallsBackToLeagueShape(t *testing.T) {
 		t.Errorf("superflex: demand(qb) = %d, want 15 — a quarter of the flex slot", got)
 	}
 
-	// A measured table always wins where it has an entry, and a position it never
-	// saw still gets the shape fallback rather than zero.
+	// A measured table wins where it has an entry AND the position's bench can
+	// score, and a flex position it never saw still gets the shape fallback
+	// rather than zero.
 	s.Demand = map[string]int{"RB": 58}
 	if got := s.demandAt("RB"); got != 58 {
 		t.Errorf("measured demand(rb) = %d, want 58", got)
 	}
 	if got := s.demandAt("WR"); got != 28 {
 		t.Errorf("unmeasured demand(wr) = %d, want the shape fallback 28", got)
+	}
+}
+
+// The two-index rule itself: a position whose bench cannot score ignores the
+// measured demand outright. This room drafts 19 quarterbacks, and 7 of them are
+// bench arms that never start in a 1QB league — settling for the 19th QB is not
+// a thing anyone does, so replacement sits at the 12th (the worst starter).
+// Measured on the real 2026 board the difference is qb replacement 243 vs 1173:
+// a ~930-point vor subsidy for early quarterbacks, which is exactly how the
+// board kept recommending them.
+//
+// The rule reads the roster, not a position list: the same measured table in a
+// superflex league flips QB back to the measured index, because there a second
+// quarterback genuinely starts.
+func TestReplacementIgnoresBenchDemandWhereBenchCannotScore(t *testing.T) {
+	s := newTestState(12, 15, 3)
+	s.Demand = map[string]int{"QB": 19, "RB": 58, "K": 14, "DEF": 14}
+
+	if got := s.demandAt("QB"); got != 12 {
+		t.Errorf("1qb league: demand(qb) = %d, want 12 startable, not the 19 drafted", got)
+	}
+	if got := s.demandAt("K"); got != 12 {
+		t.Errorf("demand(k) = %d, want 12 startable", got)
+	}
+	if got := s.demandAt("DEF"); got != 12 {
+		t.Errorf("demand(def) = %d, want 12 startable", got)
+	}
+	if got := s.demandAt("RB"); got != 58 {
+		t.Errorf("demand(rb) = %d, want the measured 58 — bench backs score", got)
+	}
+
+	sf := newTestState(12, 15, 3)
+	sf.SetRoster(Roster{Slots: []string{"QB", "RB", "RB", "WR", "WR", "TE", "SUPERFLEX", "K", "DEF"}, Bench: 6})
+	sf.Demand = map[string]int{"QB": 19}
+	if got := sf.demandAt("QB"); got != 19 {
+		t.Errorf("superflex: demand(qb) = %d, want the measured 19 — a second qb starts there", got)
 	}
 }
