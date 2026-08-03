@@ -654,8 +654,21 @@ func (b Board) decisionList(w int) (string, int) {
 		cap = short
 	}
 
+	// Column headers, because without them the two right-hand columns are a bare
+	// integer and an arrow. "8 → same" is not self-describing at any width, and
+	// AT THE TURN it is worse than that: the caption swaps to the back-to-back
+	// wording, which is the only other place the columns were ever named, so the
+	// numbers lose their last explanation on the exact frame where they are
+	// degenerate. `cost` is in board value units — bijan is ~10465 at rank 1 —
+	// and `instead` reads "same" when the man you would settle for is him.
+	head := fmt.Sprintf("  %-4s %-*s %4s %6s", "pos", nameW, "player", "surv", "cost")
+	if showInstead {
+		head += "  " + trunc("instead", insteadW)
+	}
+
 	var sb strings.Builder
 	sb.WriteString("\n  " + Dim.Render(cap) + "\n")
+	sb.WriteString(Dim.Render(head) + "\n")
 	for _, r := range rows {
 		style := Pos(r.pos, false)
 		line := fmt.Sprintf("  %s %s %s %s",
@@ -668,7 +681,7 @@ func (b Board) decisionList(w int) (string, int) {
 		}
 		sb.WriteString(line + "\n")
 	}
-	return sb.String(), len(rows) + 2
+	return sb.String(), len(rows) + 3
 }
 
 // planCopy is the two-pick lookahead in words: which position to take with my
