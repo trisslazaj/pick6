@@ -75,18 +75,23 @@ func runMock(args []string) error {
 	return err
 }
 
-// roomFlag declares -room, which mock and live share and which is ON: survival
-// prices the top adp.RoomWarpTopK players at each position against this league's
-// own rank->pick curve. `-room=false` is the way back to raw national adp for
-// the whole board — the only way, since Go's flag package reads a bare `-room
+// roomFlag declares -room, which mock, live and board share and which is ON:
+// survival prices every player the curve reaches against this league's own
+// rank->pick curve. `-room=false` is the way back to raw national adp for the
+// whole board — the only way, since Go's flag package reads a bare `-room
 // false` as the flag followed by a positional argument, so the help text has to
 // name the `=` form.
 //
-// One declaration for both commands so the default cannot be flipped in one
-// place and not the other, and so there is a single thing for a test to assert.
+// It used to stop at the top five of each position and no longer does; the
+// cutoff and everything that was claimed for it live in adp/room.go, which is
+// the only place entitled to defend it.
+//
+// One declaration for all three commands so the default cannot be flipped in
+// one place and not the others, and so there is a single thing for a test to
+// assert.
 func roomFlag(fs *flag.FlagSet) *bool {
 	return fs.Bool("room", true,
-		"price survival against this league's own draft history at the top of each position; -room=false for raw national adp")
+		"price survival against this league's own draft history, at every depth its curve reaches; -room=false for raw national adp")
 }
 
 // leagueDrafts is calibrateDrafts under the name the room warp cares about. Same
@@ -98,9 +103,9 @@ var leagueDrafts = calibrateDrafts
 // loadBoard reads the cached board written by `pick6 fetch`.
 //
 // room is on by default and turns on the room-warped effective adp: the survival
-// model prices the top adp.RoomWarpTopK players at each position against a blend
-// of national adp and where this league's own drafts actually took the k-th man
-// there. `-room=false` puts the whole board back on raw national adp, which is
+// model prices every player the curve reaches against a blend of national adp
+// and where this league's own drafts actually took the k-th man at his
+// position. `-room=false` puts the whole board back on raw national adp, which is
 // also what happens on its own when no draft is cached. See roomWarp for the
 // numbers behind the default and for how thin they are.
 //
@@ -162,25 +167,26 @@ func loadBoard(room bool, replaying string) (map[string]engine.Player, error) {
 // second field precisely so the display columns, Available's adp tie-break and
 // the mock's picker keep reading the raw market price.
 //
-// ONLY THE TOP adp.RoomWarpTopK AT EACH POSITION. Do not re-derive that cutoff
-// from anything written here — READ adp.RoomWarpTopK, which carries the whole
-// history and is the only place entitled to defend it. The short version, because
-// the long version has been wrong twice:
+// EVERY DEPTH THE CURVE REACHES — there is no cutoff any more. Do not re-derive
+// one from anything written here; adp/room.go carries the whole history and is
+// the only place entitled to defend it. The short version, because the long
+// version has been wrong twice:
 //
-//   - The cutoff is UNIDENTIFIED. It was swept on the 2024 fold, where it won on
-//     both metrics with no position regressing. Both of those claims are
-//     retracted: they fail on both 2025 folds, and the 2024 curve was built
-//     entirely out of drafts that ran a year AFTER that draft, so no live board
-//     could ever have had it. `pick6 calibrate` now holds each fold's future out
-//     and 2024 has no curve left at all.
+//   - A top-five cap shipped first and is GONE. It was swept on the 2024 fold,
+//     where it won on both metrics with no position regressing. Both of those
+//     claims are retracted: they fail on both 2025 folds, and the 2024 curve was
+//     built entirely out of drafts that ran a year AFTER that draft, so no live
+//     board could ever have had it. `pick6 calibrate` now holds each fold's
+//     future out and 2024 has no curve left at all.
 //   - What survives is weaker: on the two folds that do have a causal curve,
 //     every cutoff the sweep tries — including 5, and including no cap — is never
-//     worse than the unwarped model. The cap itself rests on the structural
-//     argument, not on a score: a ranked list runs deeper than any finite draft,
-//     so past the room's appetite rank->room-pick prices players later than the
-//     market by construction.
+//     worse than the unwarped model, and uncapped wins on both. The structural
+//     argument for capping (a ranked list runs deeper than any finite draft, so
+//     past the room's appetite rank->room-pick prices players later than the
+//     market by construction) predicted something measurable that does not
+//     happen on any fold that can test it.
 //
-// It ships on never-worse plus that argument, not on a margin. `-room=false` is
+// The warp ships on never-worse, not on a margin. `-room=false` is
 // the way out and `pick6 calibrate` is the referee — its 3a gate and cutoff sweep
 // recompute all of this on every run instead of trusting any paragraph.
 //
