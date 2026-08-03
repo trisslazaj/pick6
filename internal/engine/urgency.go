@@ -166,12 +166,18 @@ func (s *State) Falling(p Player) bool {
 //
 // Ties keep Available order (value desc, adp asc, id asc), so the answer is
 // deterministic rather than map-order roulette.
+//
+// The horizon is ActPick, for the same reason the survival column uses it: at
+// NextPick on the clock nothing intervenes, every p~ is 1, the first term wins
+// outright and "who would I get instead" answers bestNow himself on the one
+// frame where the question is live. Off the clock the two horizons are the same
+// pick and nothing about this function changes.
 func (s *State) BestLater(pos string) (Player, bool) {
 	avail := s.Available(pos)
 	if len(avail) == 0 {
 		return Player{}, false
 	}
-	at := s.NextPick()
+	at := s.ActPick()
 	c := s.survivalTilt(at, s.opponentPicksBefore(at))
 
 	best, bestWeight, acc := avail[0], -1.0, 1.0
@@ -239,4 +245,39 @@ func (s *State) Urgency(pos string) float64 {
 		return 0 // suppressed positions skip the walk entirely; it can't matter
 	}
 	return (float64(now.Value) - s.EBest(pos, s.NextPick())) * need
+}
+
+// CostOfPassing is what I expect to lose at a position by NOT spending this
+// pick on its best man: his value minus the expected best one still there when
+// I next act, need-weighted. Same shape as Urgency, one horizon further out.
+//
+// It exists because Urgency is exactly 0 on the clock by construction — no
+// picks intervene before NextPick, so nothing can be lost between here and a
+// pick that is this one — and that is correct for what Urgency is for (it is
+// what hands the group sort to the vor tie-break, and the EBest == v(bestNow)
+// exactness chain hangs off it). It is useless as an answer to "who do I take",
+// which is the only question being asked on that frame. Pricing to ActPick asks
+// the live version instead: pass here, come back at my next pick, what is gone?
+//
+// Off the clock the two horizons are the same pick and this returns exactly what
+// Urgency does. The duplication is deliberate: one of these is a sort key with
+// a load-bearing zero, the other is a number shown to a human, and collapsing
+// them would put the zero back on the frame that needs the number.
+//
+// Zero on my last pick of the draft, where there is no "next time I act" and
+// nothing can be taken from me.
+func (s *State) CostOfPassing(pos string) float64 {
+	now, ok := s.BestNow(pos)
+	if !ok {
+		return 0
+	}
+	need := s.Need(pos)
+	if need == 0 {
+		return 0
+	}
+	at := s.ActPick()
+	if at <= s.PickNo {
+		return 0
+	}
+	return (float64(now.Value) - s.EBest(pos, at)) * need
 }

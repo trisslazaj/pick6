@@ -413,8 +413,11 @@ func TestScriptedRunFlipsBannerAndResortsBoard(t *testing.T) {
 	if got := topGroup(after); got != "rb" {
 		t.Errorf("after the run, top group = %q, want rb", got)
 	}
-	if head := groupLine(after, "wr"); !strings.Contains(head, "safe to wait") {
-		t.Errorf("the collapsed wr group should read safe to wait, got %q", head)
+	// The safe marker rides on the man's own number now ("wr5 97% safe"), not on
+	// a bare tag, because the tag and the tier clause beside it were answers to
+	// different questions with nothing saying so. "% safe" is the whole claim.
+	if head := groupLine(after, "wr"); !strings.Contains(head, "% safe") {
+		t.Errorf("the collapsed wr group should call its best man safe, got %q", head)
 	}
 }
 
@@ -430,8 +433,8 @@ func TestSafeToWaitYieldsToCliffCopy(t *testing.T) {
 	b := Board{State: s, Width: 92, Height: 40}
 
 	head := groupLine(ansi.ReplaceAllString(b.View(), ""), "rb")
-	if !strings.Contains(head, "safe to wait") {
-		t.Errorf("an untouched tier of safe players should read safe to wait, got %q", head)
+	if !strings.Contains(head, "% safe") {
+		t.Errorf("an untouched tier of safe players should call its best man safe, got %q", head)
 	}
 	if !strings.Contains(head, "3 left in tier 1 · holds") {
 		t.Errorf("the header should carry the count and the hold, got %q", head)
@@ -517,7 +520,7 @@ func TestRunBannerDoesNotShoutAtATierThatHolds(t *testing.T) {
 		t.Fatalf("fixture proves nothing without a run banner:\n%s", view)
 	}
 	head := groupLine(view, "rb")
-	if !strings.Contains(head, "safe to wait") {
+	if !strings.Contains(head, "% safe") {
 		t.Fatalf("fixture proves nothing unless the header calls rb safe, got %q", head)
 	}
 	if strings.Contains(view, "act now or lose it") {
@@ -683,11 +686,15 @@ func TestSurvivalColumnIsLiveOnTheClock(t *testing.T) {
 	}
 }
 
-// The zero-urgency tie-break is need-weighted VOR, and the frame it decides is
-// the one where I am on the clock: urgency is continuous since phase 1, so an
-// exact tie is essentially unreachable anywhere else, and on my own pick EVERY
-// urgency is exactly zero by construction. The tie-break is therefore not a
-// footnote — on that frame it is the entire ordering.
+// The zero-cost tie-break is need-weighted VOR, and the frame it decides is my
+// LAST pick of the draft: there is no next time I act, nothing can be taken from
+// me, and every position's cost of passing is exactly zero by construction.
+//
+// It used to decide every on-the-clock frame, because the sort key was Urgency
+// and Urgency is zero whenever no picks intervene. That stopped being true when
+// the sort moved to CostOfPassing, which prices to the pick AFTER this one and
+// is live while I am choosing. Vor's remaining job is the genuine tie — rare
+// mid-draft, total here — and this is the frame that still exercises it.
 //
 // The fixture makes the two rules disagree outright. The tight end is the better
 // player (100 against 95) but he is one of a pair, so the man behind him is worth
@@ -699,7 +706,7 @@ func TestSurvivalColumnIsLiveOnTheClock(t *testing.T) {
 // Demand is set explicitly because the engine's fallback derives it from the
 // league's lineup shape, and a fixture this small never reaches those depths:
 // every replacement level would be zero and vor would be plain value again.
-func TestGroupOrderOnMyPickUsesVOR(t *testing.T) {
+func TestGroupOrderOnMyLastPickUsesVOR(t *testing.T) {
 	players, add := newBoard()
 	add("te1", "TE", 100, 40, 8, 1)
 	add("te2", "TE", 90, 44, 8, 1)
@@ -707,11 +714,14 @@ func TestGroupOrderOnMyPickUsesVOR(t *testing.T) {
 	add("rb2", "RB", 60, 45, 8, 1)
 	add("rb3", "RB", 20, 50, 8, 2)
 	s := engine.New(players, 12, 15, 3)
-	s.PickNo = 3 // my own pick: every urgency is exactly 0
+	s.PickNo = 171 // slot 3's last pick of a 12x15 draft: nothing follows it
 	s.Demand = map[string]int{"TE": 2, "RB": 3}
 
-	if u := s.Urgency("RB"); u != 0 {
-		t.Fatalf("fixture proves nothing: urgency is %v, not the exact 0 the tie-break needs", u)
+	if got := s.FollowingPick(); got != 0 {
+		t.Fatalf("fixture is not my last pick: following pick = %d, want none", got)
+	}
+	if c := s.CostOfPassing("RB"); c != 0 {
+		t.Fatalf("fixture proves nothing: cost is %v, not the exact 0 the tie-break needs", c)
 	}
 	if s.VOR(s.Players["rb1"]) <= s.VOR(s.Players["te1"]) {
 		t.Fatal("fixture proves nothing: vor does not disagree with value here")
@@ -1018,5 +1028,78 @@ func TestHoldClauseNamesItsHorizonOnlyOnTheClock(t *testing.T) {
 	}
 	if strings.Contains(head, "% to ") {
 		t.Errorf("off the clock the two horizons agree and the label is noise, got %q", head)
+	}
+}
+
+// The decision list is the on-the-clock left pane and appears on no other
+// frame. Off the clock the browse is the right shape and the list is noise; on
+// the clock it is the other way round, because every urgency is exactly zero,
+// twenty candidates are offered where one is wanted, and the number that ranks
+// them is not otherwise on screen.
+//
+// Ranked by cost of passing, which is what makes it a decision rather than a
+// second copy of the board: rb1 is doomed and expensive to lose, wr1 keeps.
+func TestDecisionListOnlyOnTheClock(t *testing.T) {
+	build := func(pickNo int) *engine.State {
+		players, add := newBoard()
+		add("rb1", "RB", 100, 5, 2, 1) // gone by 22, and the drop behind him is steep
+		add("rb2", "RB", 20, 70, 6, 2)
+		add("wr1", "WR", 90, 80, 6, 1) // nobody is taking him in 18 picks
+		add("wr2", "WR", 85, 84, 6, 1)
+		addDepth(add)
+		s := engine.New(players, 12, 15, 3)
+		s.PickNo = pickNo
+		return s
+	}
+
+	off := ansi.ReplaceAllString(Board{State: build(4), Width: 92, Height: 40}.View(), "")
+	if strings.Contains(off, "the pick — what passing costs") {
+		t.Errorf("the decision list must not render off the clock:\n%s", off)
+	}
+
+	s := build(3)
+	if s.PicksUntilMine() != 0 {
+		t.Fatalf("fixture is not on the clock: %d picks until mine", s.PicksUntilMine())
+	}
+	if s.CostOfPassing("RB") <= s.CostOfPassing("WR") {
+		t.Fatalf("fixture proves nothing: rb %v does not outrank wr %v",
+			s.CostOfPassing("RB"), s.CostOfPassing("WR"))
+	}
+	on := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
+	if !strings.Contains(on, "the pick — what passing costs") {
+		t.Fatalf("the decision list should lead the pane on the clock:\n%s", on)
+	}
+	rbAt, wrAt := strings.Index(on, "fake rb1"), strings.Index(on, "fake wr1")
+	if rbAt < 0 || wrAt < 0 || rbAt > wrAt {
+		t.Errorf("decision list should rank rb1 above wr1 (rb at %d, wr at %d):\n%s", rbAt, wrAt, on)
+	}
+}
+
+// The sidebar used to stop at two upcoming picks, which on the wheel hides the
+// only number that matters: slot 1 picks at 24 and 25 back to back and then not
+// again until 48. "up 2.12, then 3.01" reads as comfort while everything
+// deferred past 3.01 is gone for twenty-two picks.
+func TestSidebarNamesTheGapAfterTheTurn(t *testing.T) {
+	players, add := newBoard()
+	add("rb1", "RB", 100, 20, 5, 1)
+	add("wr1", "WR", 90, 22, 5, 1)
+	addDepth(add)
+	s := engine.New(players, 12, 15, 1) // the wheel: picks 1, 24, 25, 48
+	s.PickNo = 20
+
+	view := ansi.ReplaceAllString(Board{State: s, Width: 100, Height: 40}.View(), "")
+	if !strings.Contains(view, "2.12, then 3.01") {
+		t.Errorf("sidebar should name my next two picks:\n%s", view)
+	}
+	if !strings.Contains(view, "22 picks to 4.12") {
+		t.Errorf("sidebar should name the wait after them:\n%s", view)
+	}
+
+	// Standing on 1.01 the next two ARE the turn, and "0 picks to 3.01" is
+	// arithmetically right and reads like a rendering fault.
+	s.PickNo = 1
+	view = ansi.ReplaceAllString(Board{State: s, Width: 100, Height: 40}.View(), "")
+	if !strings.Contains(view, "3.01 back to back") {
+		t.Errorf("a zero gap should say so in words:\n%s", view)
 	}
 }
