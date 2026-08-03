@@ -1,6 +1,9 @@
 package engine
 
-import "math"
+import (
+	"math"
+	"sort"
+)
 
 // CliffLevel describes how close a tier is to emptying.
 type CliffLevel int
@@ -110,8 +113,19 @@ type Run struct {
 }
 
 // DetectRun looks at the last RunWindow picks and reports a run when at least
-// RunThreshold of them share a position. If two positions qualify, the one with
-// more picks in the window wins.
+// RunThreshold of them share a position AND that count beats what the market
+// itself expected the window to look like. If two positions qualify, the one
+// with more picks in the window wins.
+//
+// The second condition is the base-rate gate. Round 1 is nearly all backs and
+// receivers by construction — this room's own history runs 47% rb, 53% wr —
+// so four backs in six picks there is Tuesday, not a run, and the flat
+// threshold fired on ~69% of round-1 windows by chance. The market's forecast
+// for the window is free: the position mix of the next RunWindow available
+// players by adp is who the market expects to go next, so a run must clear
+// that expectation by RunSurprise picks. The forecast is read off the CURRENT
+// board rather than the board as it stood when the window opened — a gate,
+// not a model, and the difference is at most the window itself.
 func (s *State) DetectRun() (Run, bool) {
 	window := s.Picks
 	if len(window) > RunWindow {
@@ -131,6 +145,9 @@ func (s *State) DetectRun() (Run, bool) {
 	if bestN < RunThreshold {
 		return Run{}, false
 	}
+	if float64(bestN) < s.expectedInWindow(best)+RunSurprise {
+		return Run{}, false
+	}
 
 	r := Run{Pos: best, Count: bestN}
 	if _, tier, remaining := s.Cliff(best); tier != 0 {
@@ -145,4 +162,36 @@ func (s *State) DetectRun() (Run, bool) {
 		r.TierBroke = true
 	}
 	return r, true
+}
+
+// expectedInWindow is the market's forecast for a position's share of the next
+// RunWindow picks: how many of the next RunWindow available players by adp
+// play there. Players without an adp are off the drafted radar and carry no
+// forecast; a board with fewer priced players than the window (the endgame)
+// just counts what it has, which biases the expectation LOW and lets late runs
+// fire more easily — the right direction, since a thin board is exactly where
+// a run empties a position.
+func (s *State) expectedInWindow(pos string) float64 {
+	type pricedPlayer struct {
+		adp float64
+		pos string
+	}
+	var priced []pricedPlayer
+	for id, p := range s.Players {
+		if s.Taken[id] || p.ADP <= 0 {
+			continue
+		}
+		priced = append(priced, pricedPlayer{p.ADP, p.Pos})
+	}
+	sort.Slice(priced, func(i, j int) bool { return priced[i].adp < priced[j].adp })
+	if len(priced) > RunWindow {
+		priced = priced[:RunWindow]
+	}
+	n := 0
+	for _, p := range priced {
+		if p.pos == pos {
+			n++
+		}
+	}
+	return float64(n)
 }

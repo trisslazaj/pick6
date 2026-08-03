@@ -122,7 +122,7 @@ func TestWindowResizeIsApplied(t *testing.T) {
 // since both are reachable states.
 func TestViewRendersAtBothEnds(t *testing.T) {
 	m := NewModel(testState(), firstAvailable, false)
-	if out := m.View(); !strings.Contains(out, "best available") {
+	if out := m.View(); !strings.Contains(out, "your roster") {
 		t.Error("opening frame should show the board")
 	}
 	for i := 0; i < 12*15+5; i++ {
@@ -141,7 +141,7 @@ func TestChromeIsLowercase(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		m.step()
 	}
-	for _, want := range []string{"best available", "your roster", "recent picks", "round "} {
+	for _, want := range []string{"before you pick", "your roster", "recent picks", "round "} {
 		if !strings.Contains(m.View(), want) {
 			t.Errorf("expected lowercase chrome %q in the view", want)
 		}
@@ -207,19 +207,22 @@ func TestWideTerminalCapsAndCentres(t *testing.T) {
 	}
 }
 
-// More vertical space should buy more players, not more blank rows.
-func TestTallerTerminalShowsMorePlayers(t *testing.T) {
+// More vertical space should buy more content, not more blank rows. The
+// ranking is a fixed handful of rows now — depth browsing lives on the data
+// tab — so the element that scales with height is the ticker.
+func TestTallerTerminalShowsMoreTicker(t *testing.T) {
+	tickerRow := regexp.MustCompile(`│\s+(?:▌you )?\d+\.\d{2} (?:qb|rb|wr|te|k|def) `)
 	count := func(h int) int {
 		m := NewModel(testState(), firstAvailable, false)
 		m = send(m, tea.WindowSizeMsg{Width: 92, Height: h})
 		for i := 0; i < 40; i++ {
 			m.step()
 		}
-		return strings.Count(m.View(), "adp ")
+		return len(tickerRow.FindAllString(ansi.ReplaceAllString(m.View(), ""), -1))
 	}
 	short, tall := count(24), count(60)
 	if tall <= short {
-		t.Errorf("tall terminal showed %d players, short showed %d; expected more", tall, short)
+		t.Errorf("tall terminal showed %d ticker rows, short showed %d; expected more", tall, short)
 	}
 }
 

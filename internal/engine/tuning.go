@@ -75,6 +75,14 @@ const (
 	// be the next reader's first wrong guess about how cliffs work.)
 	RunWindow    = 6 // sliding window of recent picks
 	RunThreshold = 4 // shared positions in that window to call a run
+	// RunSurprise is how far above the market's own forecast the count has to
+	// run before the window is a "run" rather than the base rate. The forecast
+	// is the position mix of the next RunWindow available players by adp — in
+	// round 1 the market expects the window to be nearly all backs and
+	// receivers, so a flat 4-of-6 threshold fired on ~69% of round-1 windows by
+	// chance and the banner meant nothing exactly when the room was watching
+	// closest. A run is a SURPRISE in concentration, not concentration itself.
+	RunSurprise = 2.0
 
 	// Value fallback, when no source gives a value.
 	ValueBase  = 250.0
