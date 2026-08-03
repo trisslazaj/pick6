@@ -14,15 +14,44 @@ const (
 	CliffLast               // holds under TierHoldCliff: it probably won't reach me
 )
 
-// TierHold is the probability at least one player in the current tier at a
-// position is still there the next time I can act on it:
+// bestTier is the tier the position's cliff machinery speaks about: the
+// LOWEST-numbered tier that still has an available player, which is the best
+// quality band the rankings file says is left. ok is false when no available
+// player carries a tier at all (K and DEF, or an emptied position).
+//
+// This is NOT always bestNow's tier, and the difference is a real board state
+// rather than a corner case: a rankings file's ordering can disagree with the
+// value curve's. Dynatyze puts carnell tate and davante adams a band above
+// jaylen waddle; fantasycalc values waddle higher. Waddle then leads the
+// position by value wearing tier 8 while tier 6 still has two men — and read
+// off bestNow, the board printed "last one in tier 8 — take him or lose the
+// tier", an empty threat while a better tier per the file's own worldview was
+// stocked. The cliff question that means something is "will the best remaining
+// BAND reach me", so the band is what it asks about. Where file order and
+// value order agree — nearly everywhere — the two definitions are identical.
+func (s *State) bestTier(pos string) (int, bool) {
+	best, found := 0, false
+	for id, p := range s.Players {
+		if s.Taken[id] || p.Pos != pos || p.Tier == 0 {
+			continue
+		}
+		if !found || p.Tier < best {
+			best, found = p.Tier, true
+		}
+	}
+	return best, found
+}
+
+// TierHold is the probability at least one player in the position's best
+// remaining tier (bestTier above) is still there the next time I can act on it:
 //
 //	1 - prod_j (1 - p~_j)   over the tier's available players
 //
 // "At least one" is awkward to sum directly and trivial as a complement: the
-// tier fails me only if every last member is taken. ok is false for tier 0 —
-// K and DEF carry no value from any source, so they carry no tier, and a
-// question about their tier has no answer rather than a zero one.
+// tier fails me only if every last member is taken. ok is false when nothing
+// available carries a tier — K and DEF carry no value from any source, so they
+// carry no tier, and a question about their tier has no answer rather than a
+// zero one.
 //
 // The horizon is my next chance to act on the tier, which ON THE CLOCK is the
 // pick after this one: passing is the decision being priced, and asking whether
@@ -32,15 +61,15 @@ const (
 // scripted mock. On my last pick of the draft there is no "after", so hold
 // stays 1 and nothing can be lost.
 func (s *State) TierHold(pos string) (float64, bool) {
-	best, ok := s.BestNow(pos)
-	if !ok || best.Tier == 0 {
+	tier, ok := s.bestTier(pos)
+	if !ok {
 		return 0, false
 	}
 	at := s.ActPick()
 	c := s.survivalTilt(at, s.opponentPicksBefore(at))
 	allGone := 1.0
 	for id, p := range s.Players {
-		if s.Taken[id] || p.Pos != pos || p.Tier != best.Tier {
+		if s.Taken[id] || p.Pos != pos || p.Tier != tier {
 			continue
 		}
 		allGone *= 1 - math.Pow(s.PSurviveAt(p, at), c)
@@ -69,7 +98,7 @@ func (s *State) ActPick() int {
 	return at
 }
 
-// Cliff reports the tier state of the best available player at a position.
+// Cliff reports the state of the position's best remaining tier (bestTier).
 //
 // The levels come from TierHold, not from the raw remaining count. A count
 // cannot tell the difference between three players the room is about to eat and
@@ -84,22 +113,22 @@ func (s *State) ActPick() int {
 // at pick 1.01 of an empty draft. So a cliff still requires that somebody has
 // actually been drafted out of the tier, whatever the probability says.
 func (s *State) Cliff(pos string) (level CliffLevel, tier, remaining int) {
-	best, ok := s.BestNow(pos)
-	if !ok || best.Tier == 0 {
+	best, ok := s.bestTier(pos)
+	if !ok {
 		return CliffNone, 0, 0
 	}
-	n := s.TierRemaining(pos, best.Tier)
-	if n >= s.TierSize(pos, best.Tier) {
-		return CliffNone, best.Tier, n // untouched
+	n := s.TierRemaining(pos, best)
+	if n >= s.TierSize(pos, best) {
+		return CliffNone, best, n // untouched
 	}
-	hold, _ := s.TierHold(pos) // cannot fail once BestNow found a tiered player
+	hold, _ := s.TierHold(pos) // cannot fail once bestTier found a tiered player
 	switch {
 	case hold < TierHoldCliff:
-		return CliffLast, best.Tier, n
+		return CliffLast, best, n
 	case hold < TierHoldWarn:
-		return CliffWarning, best.Tier, n
+		return CliffWarning, best, n
 	default:
-		return CliffNone, best.Tier, n
+		return CliffNone, best, n
 	}
 }
 
