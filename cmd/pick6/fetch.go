@@ -546,11 +546,13 @@ func printRoomCurve(players map[string]*adp.Player) {
 	fmt.Println("  shown but not averaged — a ranked list runs deeper than any finite draft, so")
 	fmt.Println("  down there the room is later than adp about everyone and the mean flips sign.")
 	fmt.Println("  depth is the deepest k the room ever reached; past it the curve says nothing.")
-	fmt.Printf("  survival on mock and live blends the first %d of each position toward these\n",
+	fmt.Println("  survival on mock and live blends toward these numbers by default, at every depth")
+	fmt.Println("  the curve reaches; -room=false puts the whole board back on raw national adp.")
+	fmt.Printf("  it used to stop after the first %d of each position and that cap is gone — it lost\n",
 		adp.RoomGapTopK)
-	fmt.Println("  numbers by default; everyone deeper keeps raw national adp, and -room=false")
-	fmt.Println("  puts the whole board back on it. `pick6 calibrate` prints the gate that decided")
-	fmt.Println("  that — two drafts building the curve and one scoring it, so read it as thin.")
+	fmt.Println("  to full depth on both folds whose curve predates the draft it scores, and the one")
+	fmt.Println("  fold that ever preferred it turned out to have no curve at all. `pick6 calibrate`")
+	fmt.Println("  prints that gate; read it as thin either way.")
 }
 
 func dash(n int) string {

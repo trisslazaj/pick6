@@ -103,13 +103,26 @@ func (s *State) survivalTilt(at, n int) float64 {
 	return (lo + hi) / 2
 }
 
-// PSurviveTilted is the survival probability the board shows and everything
-// downstream consumes: PSurvive corrected so the model expects exactly as many
-// removals as the draft actually makes. One truth — an untilted probability
-// must never reach the screen, or two panes quote different odds on the same
-// player and the reader has no way to tell which one the ordering used.
+// PSurviveTilted is the survival probability the board shows: PSurvive
+// corrected so the model expects exactly as many removals as the draft actually
+// makes. One truth — an untilted probability must never reach the screen, or
+// two panes quote different odds on the same player and the reader has no way
+// to tell which one the ordering used.
+//
+// It prices to ActPick, not NextPick, and the difference is only visible on the
+// clock. There NextPick is the pick being made, no picks intervene, and every
+// cell read 100% — a whole column of the board dead on the one frame where you
+// are choosing. ActPick asks the question you are actually asking instead: pass
+// on him now and is he there when you come back? That is also the question the
+// backtest has been grading all along — a calibrate vantage stands at my own
+// pick and asks about my next one (see solveTilt) — so the number on screen is
+// now the number `pick6 calibrate` scores.
+//
+// Urgency deliberately does NOT follow: it stays priced to NextPick and stays
+// exactly 0 on the clock, which is what hands the group sort to the vor tie-break.
+// Repointing it is a modelling change and needs its own gate, not a patch.
 func (s *State) PSurviveTilted(p Player) float64 {
-	at := s.NextPick()
+	at := s.ActPick()
 	return math.Pow(s.PSurviveAt(p, at), s.survivalTilt(at, s.opponentPicksBefore(at)))
 }
 

@@ -394,25 +394,40 @@ func TestUntieredRunDoesNotReportABrokenTier(t *testing.T) {
 	}
 }
 
-// TierHold prices to my next chance to act, which ON THE CLOCK is the pick after
-// this one — every survival is 1 across zero intervening picks, so the alarm
-// would go silent on the frame where I am choosing. The horizon is therefore not
-// the one PSurviveTilted uses, and the copy has to be able to name it or the
-// board prints "holds 3%" above three men reading 100% with nothing to
-// distinguish them.
-func TestTierHoldPickNamesItsOwnHorizon(t *testing.T) {
+// Everything on screen prices to my next chance to act, which ON THE CLOCK is
+// the pick after this one — across zero intervening picks every survival is 1,
+// so the tier alarm goes silent and the survival column goes blank on the exact
+// frame where I am choosing. The horizon therefore leaves NextPick behind there,
+// which is also why the copy has to be able to name it.
+func TestActPickLooksPastTheClock(t *testing.T) {
 	s := New(board("RB", 1, 8, 100), 12, 15, 3)
 
 	s.PickNo = 1 // slot 3 picks at 3: off the clock
-	if got, want := s.TierHoldPick(), s.NextPick(); got != want {
+	if got, want := s.ActPick(), s.NextPick(); got != want {
 		t.Errorf("off the clock the horizon is my next pick: got %d, want %d", got, want)
 	}
 
 	s.PickNo = 3 // on the clock
-	if got, want := s.TierHoldPick(), s.FollowingPick(); got != want {
+	if got, want := s.ActPick(), s.FollowingPick(); got != want {
 		t.Errorf("on the clock the horizon is the pick after: got %d, want %d", got, want)
 	}
-	if s.TierHoldPick() == s.NextPick() {
+	if s.ActPick() == s.NextPick() {
 		t.Error("on the clock the two horizons must differ, or nothing needs labelling")
+	}
+}
+
+// The last pick of the draft has no "after": FollowingPick is 0 and the horizon
+// must fall back to NextPick rather than to a pick that does not exist. Nothing
+// can be taken from me after my final selection, so every survival reads 1 and
+// every tier holds — which is the honest answer, not a dead column.
+func TestActPickOnTheFinalPick(t *testing.T) {
+	s := New(board("RB", 1, 8, 100), 12, 2, 3)
+
+	s.PickNo = s.Teams*s.Rounds - 3 + 1 // 2 rounds, slot 3: my last pick is 22
+	if s.FollowingPick() != 0 {
+		t.Fatalf("fixture is not the final pick: following = %d", s.FollowingPick())
+	}
+	if got, want := s.ActPick(), s.NextPick(); got != want {
+		t.Errorf("on my last pick the horizon stays put: got %d, want %d", got, want)
 	}
 }

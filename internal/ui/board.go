@@ -198,7 +198,11 @@ func maxLines(a, b string) int {
 
 // depth decides how many players to show per position group, from the height we
 // actually have. Each group costs a header plus its rows plus a blank line.
-func (b Board) depth(groups int) int {
+// depth is how many players each group shows. `extra` is rows the left pane has
+// already committed to something other than groups — today only the on-clock
+// decision list, which is charged here so the groups shrink to make room for it
+// instead of the frame growing past the terminal.
+func (b Board) depth(groups, extra int) int {
 	if b.Height <= 0 || groups == 0 {
 		return 4
 	}
@@ -208,7 +212,7 @@ func (b Board) depth(groups int) int {
 	// from 39 rows to 36, trading two player rows to reclaim one. The budget is
 	// already approximate (it overshoots by three at 24 lines, which is its own
 	// tracked bug); one predictable row beats a lumpy four.
-	avail := b.Height - 8 - b.Reserve // header, banner, footer, breathing room
+	avail := b.Height - 8 - b.Reserve - extra // header, banner, footer, breathing room
 	perGroup := avail/groups - 2
 	if perGroup < MinDepth {
 		return MinDepth
@@ -383,16 +387,16 @@ func barFits(tag, msg string, w int) bool {
 func pct(p float64) string { return fmt.Sprintf("%.0f%%", 100*p) }
 
 // holdNote is a tier's hold probability, with the pick it is measured to named
-// only when that pick is not the one the survival column beside it uses.
+// only when that pick is not the one being made right now.
 //
-// Off the clock the two horizons are the same and the extra words are noise. On
-// the clock they are not: survival is priced to my next pick, which IS this one,
-// so every cell reads 100%, while the tier's hold is priced to the pick after —
-// the one passing actually costs me. Both numbers are right for their own
-// horizon and neither said which, which is how "holds 3%" ended up printed
-// directly above three men each reading 100%.
+// Off the clock "my next pick" is unambiguous and the extra words are noise. On
+// the clock it is not — the frame is about pick 3.03 while every probability on
+// it is priced to 4.10 — and the reader is one bad reading away from taking the
+// hold for a verdict on the pick in front of him. The hold and the survival
+// cells under it share a horizon (see engine.ActPick), so this labels the
+// frame's numbers rather than marking a discrepancy between them.
 func (b Board) holdNote(hold float64) string {
-	at := b.State.TierHoldPick()
+	at := b.State.ActPick()
 	if at == b.State.NextPick() {
 		return "holds " + pct(hold)
 	}
@@ -499,23 +503,26 @@ func (b Board) bestAvailable(w int) string {
 		if len(avail) == 0 {
 			continue
 		}
-		// Groups sort by urgency: the need-weighted value lost by waiting until
-		// my next pick. On my own pick every urgency is exactly zero — nobody can
-		// be taken in zero picks — so the tie-break is what keeps the board
-		// pointing at the pick instead of going limp exactly when I'm choosing.
+		// Groups sort by the need-weighted value lost by waiting — CostOfPassing,
+		// which off the clock is Urgency exactly and on the clock is the same
+		// question asked at the pick after this one.
 		//
-		// It is need-weighted VOR, not need-weighted value. Raw value ranks a
-		// position by its best man; vor ranks it by what that man buys over the
-		// one this room would have ended up with anyway (engine/vor.go). On
-		// today's board that is a 314-point discount on quarterbacks and 182 on
-		// tight ends against none at all on running backs, which is the depth of
-		// those positions expressed as a number.
+		// It used to be Urgency itself, and on the clock that is zero for every
+		// position by construction, so the whole order fell through to the
+		// tie-break. That was defensible while the tie-break was the only live
+		// signal on the frame; it stopped being defensible the moment the
+		// decision list above started ranking the same positions by cost. Two
+		// orderings of one thing, in one frame, is the failure this file spends
+		// most of its comments avoiding.
 		//
-		// Since phase 1 made urgency continuous, exact ties are essentially
-		// unreachable ANYWHERE ELSE — which makes this tie-break more important
-		// than it sounds, not less: it now fires almost exclusively on the frame
-		// where I am on the clock and about to act on it.
-		groups = append(groups, group{pos, avail, s.Urgency(pos),
+		// The tie-break stays and is still need-weighted VOR rather than
+		// need-weighted value: raw value ranks a position by its best man, vor by
+		// what that man buys over the one this room would have ended up with
+		// anyway (engine/vor.go) — a 314-point discount on quarterbacks and 182
+		// on tight ends against none at all on running backs. It now fires where
+		// costs genuinely tie, which is rare mid-draft and universal on my last
+		// pick, where nothing can be lost and replacement is the only question.
+		groups = append(groups, group{pos, avail, s.CostOfPassing(pos),
 			s.VOR(avail[0]) * s.Need(pos)})
 	}
 	sort.SliceStable(groups, func(i, j int) bool {
@@ -525,15 +532,138 @@ func (b Board) bestAvailable(w int) string {
 		return groups[i].value > groups[j].value
 	})
 
-	depth := b.depth(len(groups))
 	var sb strings.Builder
 	sb.WriteString(sectionHead("best available", w-2) + "\n")
 	sb.WriteString(b.planLine(w))
 	sb.WriteString(b.endgameLine(w))
+
+	// On the clock the pane leads with the decision rather than the browse, and
+	// the groups below shrink by exactly what it spends.
+	list, listRows := b.decisionList(w)
+	sb.WriteString(list)
+
+	depth := b.depth(len(groups), listRows)
 	for gi, g := range groups {
 		sb.WriteString(b.groupBlock(g.pos, g.players, gi == 0, w, depth))
 	}
 	return sb.String()
+}
+
+// decisionList is the top of the left pane ON THE CLOCK, and nothing at all on
+// any other frame.
+//
+// The rest of the board is a browsing layout — four position groups, several men
+// each, ordered by what waiting costs. That is the right shape for the twenty
+// minutes between picks, when the question is "what will be gone when I come
+// back". It is the wrong shape for the frame that actually spends the pick, and
+// on that frame the browsing layout goes limp in three ways at once: every
+// urgency is exactly 0 (nothing can be taken across zero picks), so the group
+// order falls to a tie-break; twenty candidates are offered where one is wanted;
+// and the number that would rank them is not on screen at all.
+//
+// So: one row per position, its best available man, and the two things that
+// actually decide between them —
+//
+//	cost     what passing on him is expected to cost by the time I act again
+//	         (CostOfPassing — Urgency's question at ActPick, where it is live)
+//	instead  who I would most likely be taking at that position instead
+//
+// Ranked by cost, tie-broken by need-weighted vor. That tie-break is where vor
+// still earns its keep: cost ties are rare mid-draft but total on my last pick,
+// where nothing can be lost and "what does he buy over replacement" is the only
+// question left.
+//
+// Returns the block and its row count, which depth() charges against the groups
+// so the frame cannot grow past the terminal.
+func (b Board) decisionList(w int) (string, int) {
+	s := b.State
+	if s.Done() || s.PicksUntilMine() > 0 {
+		return "", 0
+	}
+	type row struct {
+		pos     string
+		now     engine.Player
+		cost    float64
+		vor     float64
+		instead string
+	}
+	var rows []row
+	for _, pos := range positions {
+		if s.Need(pos) == 0 {
+			continue
+		}
+		now, ok := s.BestNow(pos)
+		if !ok {
+			continue
+		}
+		// "same" rather than the name twice, the convention the data tab's pairs
+		// already use: the modal survivor really can be bestNow himself, and one
+		// name printed in both columns reads as a rendering fault.
+		instead := "same"
+		if later, ok := s.BestLater(pos); ok && later.ID != now.ID {
+			instead = lastName(later.Name)
+		}
+		rows = append(rows, row{pos, now, s.CostOfPassing(pos), s.VOR(now) * s.Need(pos), instead})
+	}
+	if len(rows) == 0 {
+		return "", 0
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].cost != rows[j].cost {
+			return rows[i].cost > rows[j].cost
+		}
+		return rows[i].vor > rows[j].vor
+	})
+
+	nameW := 18
+	if w < 56 {
+		nameW = 14
+	}
+	insteadW := w - 26 - nameW
+	showInstead := insteadW >= 10
+
+	// AT THE TURN THE COST COLUMN IS HONESTLY ZERO AND SAYS NOTHING, so the
+	// caption stops claiming otherwise. My next chance to act is the very next
+	// pick, nobody drafts between the two, and nothing can be taken from me —
+	// which is correct, and useless as a ranking. What actually decides a turn is
+	// who survives the long gap AFTER the pair, and the sidebar's "then N picks
+	// to X" line is currently the only thing on screen that knows it.
+	//
+	// Naming it beats printing a table of zeros under a caption that promises a
+	// cost. The real fix is to price the pair against the next real window rather
+	// than against a pick nothing intervenes before, and that is a modelling
+	// change with its own frames to look at, not a caption.
+	long := fmt.Sprintf("the pick — what passing costs, and who you'd get at %s",
+		b.pickLabel(s.ActPick()))
+	short := "the pick — what passing costs"
+	if s.ActPick() == s.PickNo+1 {
+		// Both forms have to be turn-aware or the narrow fallback puts the
+		// misleading caption back: a promise of cost over a column of zeros is
+		// exactly what this branch exists to stop.
+		long = fmt.Sprintf("the pick — %s then %s back to back, nothing between",
+			b.pickLabel(s.PickNo), b.pickLabel(s.ActPick()))
+		short = "the pick — back to back, nothing between"
+	}
+	cap := long
+	if lipgloss.Width(cap)+2 > w-2 {
+		cap = short
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n  " + Dim.Render(cap) + "\n")
+	for _, r := range rows {
+		style := Pos(r.pos, false)
+		line := fmt.Sprintf("  %s %s %s %s",
+			style.Bold(true).Render(fmt.Sprintf("%-4s", strings.ToLower(r.pos))),
+			style.Render(fmt.Sprintf("%-*s", nameW, trunc(strings.ToLower(r.now.Name), nameW))),
+			Dim.Render(fmt.Sprintf("%4s", pct(s.PSurviveTilted(r.now)))),
+			FG.Render(fmt.Sprintf("%6.0f", r.cost)))
+		if showInstead {
+			line += "  " + Dim.Render(trunc("→ "+r.instead, insteadW))
+		}
+		sb.WriteString(line + "\n")
+	}
+	return sb.String(), len(rows) + 2
 }
 
 // planCopy is the two-pick lookahead in words: which position to take with my
@@ -678,6 +808,40 @@ func (b Board) tierLabel(pos string) (long, short string, style lipgloss.Style) 
 	}
 }
 
+// manNote is the header's claim about the one player the group is actually
+// about: its best available man, and his own odds of still being there when I
+// act. It replaced a bare "safe to wait" tag, and the reason is that the tag and
+// the tier clause beside it are answers to DIFFERENT QUESTIONS with nothing on
+// screen saying so.
+//
+// "4 left in tier 1 · holds 100%" is about a tier. "safe to wait" is about one
+// man. Both were true of the same header while that header sat on the group
+// ranked most urgent on the board — mcbride 72% to survive, a 28% chance of
+// falling 3504 points, which is a real 990 of expected loss and also "probably
+// fine". Urgency is a magnitude and safety is a probability; printed side by
+// side as bare verdicts they read as the board contradicting itself.
+//
+// Naming the man is what fixes it. "mcbride 72%" cannot be mistaken for a claim
+// about the tier, and the two percentages differing is the whole point rather
+// than a glitch. The green "safe" survives as a suffix on his number, where its
+// subject is unambiguous.
+func (b Board) manNote(pos string) (string, lipgloss.Style) {
+	now, ok := b.State.BestNow(pos)
+	if !ok {
+		return "", Dim
+	}
+	p := b.State.PSurviveTilted(now)
+	txt := lastName(now.Name) + " " + pct(p)
+	switch {
+	case b.State.SafeToWait(pos):
+		return txt + " safe", Wait
+	case p < survGoneBand:
+		return txt, Cliff
+	default:
+		return txt, Dim
+	}
+}
+
 func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w, depth int) string {
 	s := b.State
 	suppressed := s.Need(pos) == 0
@@ -690,27 +854,34 @@ func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w, depth 
 	// carried (cliff copy wins, untiered k/def never claim safety, nothing is
 	// "safe to wait" when the wait is zero picks long) lives in SafeToWait now.
 	tag := strings.ToLower(pos)
-	wait := ""
-	if s.SafeToWait(pos) {
-		wait = "  safe to wait"
-	}
-
-	// The header drops its hold clause rather than wrapping. At 80 columns the
-	// left pane is 43 wide and the long form plus a safe-to-wait tag overruns
-	// it; a wrapped group header reads as a rendering fault, the same reason
-	// playerLine drops the bye column instead of spilling.
 	long, short, countStyle := b.tierLabel(pos)
-	count := long
-	// Measured in display cells, not bytes: the separators are a middle dot and
-	// an em dash, and counting their utf-8 length would drop the hold clause a
-	// few columns before it actually stopped fitting.
-	if 2+lipgloss.Width(tag)+2+lipgloss.Width(count)+lipgloss.Width(wait) > w-2 {
-		count = short
+	man, manStyle := b.manNote(pos)
+
+	// The header drops whole clauses rather than wrapping. At 80 columns the
+	// left pane is 43 wide and the long form plus a man clause overruns it; a
+	// wrapped group header reads as a rendering fault, the same reason
+	// playerLine drops the bye column instead of spilling. Measured in display
+	// cells, not bytes: the separators are a middle dot and an em dash, and
+	// counting their utf-8 length would drop a clause a few columns before it
+	// actually stopped fitting.
+	fits := func(tier, m string) bool {
+		n := 2 + lipgloss.Width(tag) + 2 + lipgloss.Width(tier)
+		if m != "" {
+			n += 3 + lipgloss.Width(m)
+		}
+		return n <= w-2
+	}
+	tier, m := long, man
+	if !fits(tier, m) {
+		tier = short // the hold clause goes first: it is the tier's second number
+	}
+	if !fits(tier, m) {
+		m = "" // ...and the man goes only when even the short tier won't share
 	}
 
-	head := fmt.Sprintf("%s  %s", style.Bold(true).Render(tag), countStyle.Render(count))
-	if wait != "" {
-		head += "  " + Wait.Render("safe to wait")
+	head := fmt.Sprintf("%s  %s", style.Bold(true).Render(tag), countStyle.Render(tier))
+	if m != "" {
+		head += Dim.Render(" · ") + manStyle.Render(m)
 	}
 
 	// One accent, not five: only the top group gets a left border.
@@ -840,14 +1011,37 @@ func (b Board) insight() string {
 	}
 
 	if !s.Done() {
-		if picks := s.MyUpcomingPicks(2); len(picks) > 0 {
-			parts := make([]string, len(picks))
-			for i, p := range picks {
+		picks := s.MyUpcomingPicks(3)
+		head := picks
+		if len(head) > 2 {
+			head = head[:2]
+		}
+		if len(head) > 0 {
+			parts := make([]string, len(head))
+			for i, p := range head {
 				parts[i] = b.pickLabel(p)
 			}
 			sb.WriteString(fmt.Sprintf("  %s %s\n",
 				Dim.Render("up   "),
 				Accent.Render(strings.Join(parts, ", then "))))
+		}
+		// The wait AFTER those two, which is the number that decides how much of
+		// the board you can afford to leave on it. On the wheel it is the whole
+		// story and the two-pick line actively hides it: slot 1 picks at 24 and
+		// 25 — back to back, nothing intervening — and then not again until 48.
+		// "up 2.12, then 3.01" reads as comfort while the real fact is that
+		// everything you defer past 3.01 is gone for twenty-two picks. Mid-round
+		// seats have an even rhythm and this line just confirms it, which is
+		// cheap; the seats where it matters are the ones where it is severe.
+		if len(picks) > 2 {
+			gap := picks[2] - picks[1] - 1
+			note := fmt.Sprintf("%d picks to %s", gap, b.pickLabel(picks[2]))
+			if gap == 0 {
+				// The turn again, one pick further out. "0 picks to 3.01" is
+				// arithmetically fine and reads like a bug.
+				note = b.pickLabel(picks[2]) + " back to back"
+			}
+			sb.WriteString(fmt.Sprintf("  %s %s\n", Dim.Render("then "), Dim.Render(note)))
 		}
 	}
 	return sb.String()

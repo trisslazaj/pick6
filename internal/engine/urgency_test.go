@@ -490,3 +490,75 @@ func TestNothingIsSafeToWaitOnceIAmOutOfPicks(t *testing.T) {
 		t.Error("no picks left, so no position can be safe to wait for")
 	}
 }
+
+// CostOfPassing is Urgency's question asked one horizon further out, and it
+// exists entirely for the frame where Urgency has no answer to give.
+//
+// The three vantages are the whole contract: off the clock the two horizons are
+// the same pick and the numbers must be bit-identical; on the clock Urgency is
+// exactly 0 by construction and cost is live; on my last pick nothing follows,
+// nothing can be taken, and the zero is real rather than an artifact of asking
+// about zero intervening picks.
+func TestCostOfPassingIsUrgencyAtTheLiveHorizon(t *testing.T) {
+	build := func(pickNo int) *State {
+		players := map[string]Player{
+			"rb1": {ID: "rb1", Pos: "RB", Tier: 1, Value: 100, ADP: 10, Sigma: 4},
+			"rb2": {ID: "rb2", Pos: "RB", Tier: 1, Value: 40, ADP: 60, Sigma: 6},
+			"wr1": {ID: "wr1", Pos: "WR", Tier: 1, Value: 90, ADP: 55, Sigma: 6},
+			"wr2": {ID: "wr2", Pos: "WR", Tier: 1, Value: 80, ADP: 58, Sigma: 6},
+		}
+		s := New(players, 12, 15, 3)
+		s.PickNo = pickNo
+		return s
+	}
+
+	off := build(4) // slot 3's next pick is 22, so 18 picks intervene
+	if off.NextPick() != off.ActPick() {
+		t.Fatalf("fixture is not off the clock: next %d, act %d", off.NextPick(), off.ActPick())
+	}
+	u, c := off.Urgency("RB"), off.CostOfPassing("RB")
+	if u == 0 {
+		t.Fatal("fixture proves nothing: urgency is already zero off the clock")
+	}
+	if u != c {
+		t.Errorf("off the clock urgency = %v but cost = %v; same walk, same board, must be identical", u, c)
+	}
+
+	on := build(3) // my own pick
+	if got := on.Urgency("RB"); got != 0 {
+		t.Fatalf("fixture proves nothing: on-clock urgency is %v, want exactly 0", got)
+	}
+	if got := on.CostOfPassing("RB"); got <= 0 {
+		t.Errorf("on-clock cost of passing = %v, want the live number urgency cannot give", got)
+	}
+
+	last := build(171) // slot 3's last pick of a 12x15 draft
+	if got := last.FollowingPick(); got != 0 {
+		t.Fatalf("fixture is not my last pick: following pick = %d", got)
+	}
+	if got := last.CostOfPassing("RB"); got != 0 {
+		t.Errorf("cost of passing on my last pick = %v, want exactly 0 — nothing follows it", got)
+	}
+}
+
+// BestLater answers "who would I be taking instead", and priced to NextPick on
+// the clock it answered "the man you are already looking at": across zero
+// intervening picks every survival is 1, so the first term takes the whole
+// weight. At ActPick it names a real alternative, which is the only version of
+// the question worth rendering.
+func TestBestLaterOnTheClockNamesAnAlternative(t *testing.T) {
+	players := map[string]Player{
+		"rb1": {ID: "rb1", Pos: "RB", Tier: 1, Value: 100, ADP: 5, Sigma: 2},
+		"rb2": {ID: "rb2", Pos: "RB", Tier: 1, Value: 40, ADP: 80, Sigma: 6},
+	}
+	s := New(players, 12, 15, 3)
+	s.PickNo = 3 // on the clock; I act again at 22
+
+	if now, _ := s.BestNow("RB"); now.ID != "rb1" {
+		t.Fatalf("fixture: bestNow = %q, want rb1", now.ID)
+	}
+	later, ok := s.BestLater("RB")
+	if !ok || later.ID != "rb2" {
+		t.Errorf("bestLater on the clock = %q, want rb2 — rb1 cannot survive 18 picks past adp 5", later.ID)
+	}
+}

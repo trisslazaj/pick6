@@ -18,6 +18,7 @@ func runLive(args []string) error {
 	slot := fs.Int("slot", 0, "your draft slot, if you'd rather say it directly")
 	poll := fs.Int("poll", 3, "seconds between polls (sleeper asks for 2-3+)")
 	replay := fs.Bool("replay", false, "load a finished draft once and print one frame (no tui)")
+	data := fs.Bool("data", false, "render the data tab instead of the board in replay mode")
 	room := roomFlag(fs)
 	width := fs.Int("width", 92, "board width for replay mode")
 	height := fs.Int("height", 40, "board height for replay mode")
@@ -108,6 +109,9 @@ func runLive(args []string) error {
 		fmt.Printf("replayed %d picks\n\n", len(snap.Picks))
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
 			Fresh: loadFreshness()}
+		if *data {
+			b.Tab = 1
+		}
 		fmt.Println(b.View())
 		return nil
 	}
