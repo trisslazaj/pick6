@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,6 +33,20 @@ func NewModel(s *engine.State, pick Autopicker, auto bool) Model {
 		auto:     auto,
 		interval: 550 * time.Millisecond,
 	}
+}
+
+// NewManualModel is `pick6 board`: the same board with nothing driving it. No
+// feed, no autopicker — you find a player with `/` and mark him taken with `x`
+// as the room calls names out, which is also the offline path for any draft
+// sleeper cannot see.
+//
+// It reuses Model rather than getting its own because the difference is one
+// field: a manual draft is a scripted draft whose script is a person. Every
+// key that needs a picker checks for one.
+func NewManualModel(s *engine.State) Model {
+	m := NewModel(s, nil, false)
+	m.board.Mode = ModeManual
+	return m
 }
 
 // WithFreshness attaches how old the cached board is, for the footer's age
@@ -67,9 +82,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quit = true
 			return m, tea.Quit
 		case " ", "n", "right":
+			if m.pick == nil {
+				return m, nil // manual mode: the room advances the draft, not a key
+			}
 			m.step()
 			return m, nil
+		case "x":
+			if m.board.Manual() {
+				m.mark()
+			}
+			return m, nil
 		case "a":
+			if m.pick == nil {
+				return m, nil
+			}
 			m.auto = !m.auto
 			m.board.Status = "auto off"
 			if m.auto {
@@ -80,6 +106,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "u":
 			m.board.State.Undo()
 			m.board.Status = "undid last pick"
+			m.board.Synced = time.Now()
 			return m, nil
 		}
 		return m, nil
@@ -95,6 +122,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.tick()
 	}
 	return m, nil
+}
+
+// mark takes the selected player off the board on behalf of whoever is on the
+// clock. Manual mode only — this is the one place in the tool where a human
+// types a pick, and it says whose name it just spent so a mis-selected fuzzy
+// match is visible immediately rather than three picks later.
+func (m *Model) mark() {
+	id := m.board.Selected
+	if id == "" {
+		m.board.Status = "nobody selected — / to find someone"
+		return
+	}
+	p, ok := m.board.State.Players[id]
+	if !ok {
+		m.board.Status = "not on this board"
+		return
+	}
+	if m.board.State.Taken[id] {
+		m.board.Status = strings.ToLower(p.Name) + " is already gone"
+		return
+	}
+	if m.board.State.Done() {
+		m.board.Status = "draft complete"
+		return
+	}
+	label := m.board.pickLabel(m.board.State.PickNo)
+	m.board.State.Draft(id)
+	m.board.Selected = ""
+	m.board.Synced = time.Now()
+	m.board.Status = label + " " + strings.ToLower(p.Name)
 }
 
 func (m *Model) step() {

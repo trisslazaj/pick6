@@ -49,7 +49,35 @@ type Board struct {
 	Tab        int
 	DataScroll int
 	DataFilter string // "" = all positions
+
+	// Search is the `/` overlay and Selected is the player it produced, held
+	// here rather than in the models for the same reason the data tab's scroll
+	// is: all three entry points get the same keys, and a selection that only
+	// existed in one of them would vanish on a tab flip. See search.go.
+	Search   Search
+	Selected string // player id, "" when nothing is selected
+
+	// Mode is which entry point is driving, and it decides two things: which
+	// keys the footer advertises, and whether x may mark a player taken.
+	Mode Mode
 }
+
+// Mode distinguishes the three drivers. The board renders identically in all
+// three — the numbers do not care where the picks came from — but the keys
+// differ, and a footer offering a key that does nothing is worse than a footer
+// with one fewer key on it.
+type Mode int
+
+const (
+	ModeMock   Mode = iota // scripted draft; space steps it, a autoplays it
+	ModeLive               // sleeper feed; r refreshes it, marks are not ours to make
+	ModeManual             // no feed at all; x marks, u takes it back
+)
+
+// Manual reports whether hand-marking is allowed. Live mode's marks come from
+// the poll, and a hand-typed one there would desync the board it is meant to
+// be checking.
+func (b Board) Manual() bool { return b.Mode == ModeManual }
 
 // Layout bounds. Rows scale with width — wider terminals buy longer names and
 // a roomier sidebar — up to the point where columns can't usefully consume more
@@ -114,8 +142,17 @@ func (b Board) View() string {
 	}
 
 	head, banner, foot := b.header(content), b.banner(content, choices), b.footer(content)
+	// The search prompt and the standing selection sit between the body and the
+	// footer, and they go INSIDE the assembled block rather than being appended
+	// after it — the clamp below measures the block, so rows spent here come off
+	// the bottom of the body instead of off the top of the header.
+	over := b.overlay(content)
 	assemble := func(body string) string {
-		block := strings.Join([]string{head, banner, body, foot}, "\n")
+		parts := []string{head, banner, body}
+		if over != "" {
+			parts = append(parts, over)
+		}
+		block := strings.Join(append(parts, foot), "\n")
 		// An absent banner still contributes its separator, and a body that opens
 		// on a blank line then collapses it again — so the chrome is 4 rows or 5
 		// depending on state, which is why the clamp below measures instead of
@@ -1087,18 +1124,46 @@ func (b Board) insight(w int) string {
 			flexLabel = "fx"
 		}
 		parts := make([]string, len(need))
+		labels := make([]string, len(need))
 		for i, n := range need {
 			// Colour each slot by position, and keep K/DEF faint while the engine
 			// is suppressing them. Otherwise "need k def" in round 9 reads as an
 			// instruction, contradicting the board that just hid every kicker.
 			if n == "FLEX" || n == "SUPERFLEX" {
+				labels[i] = flexLabel
 				parts[i] = FG.Render(flexLabel)
 				continue
 			}
-			parts[i] = Pos(n, s.Need(n) == 0).Render(strings.ToLower(n))
+			labels[i] = strings.ToLower(n)
+			parts[i] = Pos(n, s.Need(n) == 0).Render(labels[i])
 		}
-		sb.WriteString(fmt.Sprintf("\n  %s %s\n",
-			Dim.Render("need "), strings.Join(parts, " ")))
+		// "fx" is not always enough: ten unfilled slots overrun a 34-cell sidebar
+		// even abbreviated, and the line wrapped, which put a lone "def" on its
+		// own row looking exactly like a rendering fault. Show what fits and
+		// count the rest — the list shrinks with every pick you make, so this is
+		// a first-few-picks state and never an endgame one, which is also why the
+		// slots that drop are the ones furthest down the lineup.
+		avail, used, shown := w-10, 0, 0
+		for i := range parts {
+			step := len(labels[i])
+			if shown > 0 {
+				step++
+			}
+			tail := 0
+			if i < len(parts)-1 {
+				tail = len(fmt.Sprintf(" +%d", len(parts)-i))
+			}
+			if shown > 0 && used+step+tail > avail {
+				break
+			}
+			used += step
+			shown++
+		}
+		line := strings.Join(parts[:shown], " ")
+		if shown < len(parts) {
+			line += Dim.Render(fmt.Sprintf(" +%d", len(parts)-shown))
+		}
+		sb.WriteString(fmt.Sprintf("\n  %s %s\n", Dim.Render("need "), line))
 	} else {
 		sb.WriteString("\n  " + Dim.Render("need ") + " " +
 			Wait.Render("lineup complete") + "\n")
@@ -1250,13 +1315,42 @@ func (b Board) ticker(w int) string {
 
 // ---- footer ----
 
-func (b Board) footer(w int) string {
-	keys := []string{"space step", "a auto", "u undo", "tab data", "q quit"}
-	if b.Tab == 1 {
-		keys = []string{"tab board", "j/k scroll", "p filter", "q quit"}
+// footerKeys is the keybind row, and it names the keys that do something in the
+// mode you are actually in. A footer advertising "space step" on a live board
+// is telling you to press a key that has been a no-op all draft, and one
+// advertising "x taken" in live mode invites a hand-typed mark onto a board
+// whose marks come from the feed.
+//
+// Ordered most-useful-first, because the tail is what drops when the row runs
+// out of width. See keyFloor.
+func (b Board) footerKeys() []string {
+	if b.Search.Open {
+		return []string{"↑/↓ pick", "enter select", "esc cancel"}
 	}
-	left := "  " + Dim.Render(strings.Join(keys, "   "))
+	if b.Tab == 1 {
+		return []string{"tab board", "j/k scroll", "p filter", "/ search", "q quit"}
+	}
+	switch b.Mode {
+	case ModeManual:
+		return []string{"/ search", "x taken", "u undo", "tab data", "q quit"}
+	case ModeLive:
+		return []string{"r refresh", "/ search", "tab data", "q quit"}
+	}
+	return []string{"space step", "/ search", "tab data", "u undo", "q quit", "a auto"}
+}
 
+// keyFloor is how many keys the row keeps before the data-age clause starts
+// giving ground instead of them. Four is where the glossary stops being a
+// convenience and starts being a hole — the tab flip and the search key are not
+// guessable, and a reader who never finds them does not know half the tool is
+// there. Past the floor the age note steps down to its short form.
+//
+// What drops first is the most guessable key in the tool: q, on a screen where
+// esc and ctrl+c also quit. That is the trade this ladder makes on purpose —
+// how old the board is cannot be inferred from anything else on it.
+const keyFloor = 4
+
+func (b Board) footer(w int) string {
 	right := Dim.Render(fmt.Sprintf("synced %s ago", since(b.Synced)))
 	if b.Status != "" {
 		right = Accent.Render(strings.ToLower(b.Status))
@@ -1267,18 +1361,16 @@ func (b Board) footer(w int) string {
 	// poll; "adp" is the data the entire board is computed from, frozen at fetch
 	// time along with every injury flag, and only meta.json knows when that was.
 	//
-	// Long form, then short, then nothing: at 80 columns the keybinds and the
-	// sync note have already spent the row and about 15 cells are left, which is
-	// the short form and not the long one. Dropping beats wrapping, the same rule
-	// playerLine and the banner follow.
-	if long, short := b.Fresh.note(); long != "" {
-		avail := w - 3 - lipgloss.Width(left) - lipgloss.Width(right)
-		for _, cand := range []string{long, short} {
-			if lipgloss.Width(cand)+3 <= avail {
-				right = Dim.Render(cand) + "   " + right
-				break
-			}
-		}
+	// Long form, then fewer keys, then the short form, then nothing. Dropping
+	// beats wrapping, the same rule playerLine, the banner and the data tab's
+	// legend all follow.
+	keys := b.footerKeys()
+	long, short := b.Fresh.note()
+	keys, note := fitFooter(w, keys, []string{long, short}, lipgloss.Width(right))
+
+	left := "  " + Dim.Render(strings.Join(keys, "   "))
+	if note != "" {
+		right = Dim.Render(note) + "   " + right
 	}
 
 	pad := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
@@ -1287,6 +1379,34 @@ func (b Board) footer(w int) string {
 	}
 	return Dim.Render("  "+strings.Repeat("─", w-4)) + "\n" +
 		left + strings.Repeat(" ", pad) + right
+}
+
+// fitFooter seats the longest note it can, spending trailing keys down to
+// keyFloor to do it, and returns the pair that fit. No note fitting at all
+// leaves every key on the row, which is the honest rendering for a board with
+// no meta.json: there is nothing to say about its age.
+func fitFooter(w int, keys, notes []string, rightW int) ([]string, string) {
+	floor := keyFloor
+	if len(keys) < floor {
+		// A row already at or under the floor has nothing to spend, but it can
+		// still seat a note — the search prompt's three keys are the case, and
+		// without this the board went quiet about its own age while searching.
+		floor = len(keys)
+	}
+	for _, note := range notes {
+		if note == "" {
+			continue
+		}
+		for n := len(keys); n >= floor; n-- {
+			// The arithmetic the row itself uses: two cells of left margin, three
+			// between the note and the sync clause, and one gap in the middle.
+			left := 2 + lipgloss.Width(strings.Join(keys[:n], "   "))
+			if left+lipgloss.Width(note)+rightW+6 <= w {
+				return keys[:n], note
+			}
+		}
+	}
+	return keys, ""
 }
 
 func since(t time.Time) string {

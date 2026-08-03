@@ -1186,3 +1186,35 @@ func TestSurvivalBandsAgreeAcrossTabs(t *testing.T) {
 		}
 	}
 }
+
+// A ten-slot lineup — two flex, which this user's 2025 league really ran — has
+// more unfilled starters in round 1 than a 34-cell sidebar can print. It counts
+// the overflow instead of wrapping: a lone "def" on its own row reads as a
+// rendering fault, and since the list shrinks with every pick you make, this is
+// a first-few-picks state and never an endgame one.
+func TestNeedLineCountsWhatItCannotFit(t *testing.T) {
+	for _, w := range []int{MinWidth, 92, 100, MaxWidth} {
+		s := runState()
+		s.SetRoster(engine.Roster{
+			Slots: []string{"QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "FLEX", "K", "DEF"},
+			Bench: 6,
+		})
+		view := ansi.ReplaceAllString(Board{State: s, Width: w, Height: 40}.View(), "")
+		need := ""
+		for _, line := range strings.Split(view, "\n") {
+			if strings.Contains(line, "need ") {
+				need = line
+			}
+			if got := len([]rune(line)); got > w {
+				t.Errorf("width %d: a frame row is %d cells: %q", w, got, line)
+			}
+		}
+		if need == "" {
+			t.Fatalf("width %d: no need line in the frame", w)
+		}
+		// Whatever it dropped, it still opens with the slots in lineup order.
+		if !strings.Contains(need, "qb rb rb wr wr te") {
+			t.Errorf("width %d: need line lost its head: %q", w, need)
+		}
+	}
+}
