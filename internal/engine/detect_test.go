@@ -431,3 +431,56 @@ func TestActPickOnTheFinalPick(t *testing.T) {
 		t.Errorf("on my last pick the horizon stays put: got %d, want %d", got, want)
 	}
 }
+
+// A rankings file's ordering can disagree with the value curve's, and then the
+// best player by value wears a DEEPER tier than men still on the board: dynatyze
+// puts tate and adams a band above waddle, fantasycalc values waddle higher, and
+// read off bestNow the board printed "last one in tier 8 — take him or lose the
+// tier" while two tier-6 men sat available. An empty threat: the tier that can
+// still be lost is the best remaining BAND, so that is the tier Cliff and
+// TierHold speak about. Where the orderings agree the two definitions coincide,
+// which is the control case below.
+func TestCliffSpeaksTheBestRemainingTierUnderFileValueInversion(t *testing.T) {
+	s := newTestState(12, 15, 3)
+	s.PickNo = 4
+	addPlayers(s,
+		Player{ID: "waddle", Pos: "WR", Value: 100, ADP: 47, Sigma: 6, Tier: 8},
+		Player{ID: "tate", Pos: "WR", Value: 90, ADP: 60, Sigma: 6, Tier: 6},
+		Player{ID: "adams", Pos: "WR", Value: 80, ADP: 56, Sigma: 6, Tier: 6},
+		Player{ID: "gone6", Pos: "WR", Value: 85, ADP: 30, Sigma: 6, Tier: 6},
+		Player{ID: "rb1", Pos: "RB", Value: 95, ADP: 20, Sigma: 6, Tier: 1},
+	)
+	s.Draft("rb1")   // pick 1 filler so the board has history
+	s.Draft("gone6") // tier 6 is touched: a cliff there is at least possible
+	s.PickNo = 4
+
+	if best, _ := s.BestNow("WR"); best.ID != "waddle" {
+		t.Fatalf("fixture: bestNow(wr) = %s, want waddle leading by value", best.ID)
+	}
+	_, tier, remaining := s.Cliff("WR")
+	if tier != 6 {
+		t.Errorf("cliff speaks tier %d, want 6 — the best band still on the board", tier)
+	}
+	if remaining != 2 {
+		t.Errorf("remaining = %d, want the 2 tier-6 men, not waddle's band", remaining)
+	}
+
+	// Drain the better band and the claim moves down to waddle's own tier.
+	s.Draft("tate")
+	s.Draft("adams")
+	s.PickNo = 6
+	if _, tier, _ := s.Cliff("WR"); tier != 8 {
+		t.Errorf("with tier 6 gone, cliff speaks tier %d, want waddle's 8", tier)
+	}
+
+	// Control: when file order and value order agree, the band IS bestNow's tier.
+	c := newTestState(12, 15, 3)
+	c.PickNo = 4
+	addPlayers(c,
+		Player{ID: "a", Pos: "WR", Value: 100, ADP: 10, Sigma: 6, Tier: 2},
+		Player{ID: "b", Pos: "WR", Value: 90, ADP: 20, Sigma: 6, Tier: 3},
+	)
+	if _, tier, _ := c.Cliff("WR"); tier != 2 {
+		t.Errorf("agreeing orders: cliff speaks tier %d, want bestNow's 2", tier)
+	}
+}

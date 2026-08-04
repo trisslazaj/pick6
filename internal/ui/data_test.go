@@ -18,7 +18,7 @@ func TestTabTogglesDataView(t *testing.T) {
 		t.Error("tab should switch to the data view")
 	}
 	m = send(m, key("tab"))
-	if !strings.Contains(m.View(), "best available") {
+	if !strings.Contains(m.View(), "your roster") {
 		t.Error("tab again should switch back to the board")
 	}
 }
@@ -101,17 +101,17 @@ func TestDataViewScrollClamps(t *testing.T) {
 
 // The urgency strip is the engine's summary on one line: the number, the
 // bestNow→bestLater pair producing it, and a green safe for positions whose own
-// best man will keep. bestLater is the modal best survivor now — rb6 is the man
+// best man will keep. bestLater is the modal best survivor now — rx3 is the man
 // most likely to be the best back left, which is the question the arrow asks.
 func TestDataViewUrgencyStrip(t *testing.T) {
 	s := runState()
 	for _, id := range append(append([]string{}, openingPicks...), runPicks...) {
-		s.Draft(id) // the frame-B state: rb urgency 45, wr safe
+		s.Draft(id) // the frame-B state: rb urgency 49, wr safe
 	}
 	b := Board{State: s, Width: 92, Height: 40, Tab: 1}
 	view := ansi.ReplaceAllString(b.View(), "")
-	if !strings.Contains(view, "rb 45 rb1→rb6") {
-		t.Errorf("strip should show rb 45 with its bestNow→bestLater pair, got:\n%s", view)
+	if !strings.Contains(view, "rb 49 rb1→rx3") {
+		t.Errorf("strip should show rb 49 with its bestNow→bestLater pair, got:\n%s", view)
 	}
 	// A safe position keeps its number: the tag says his own odds are fine, the
 	// number says what the position still costs, and hiding it is what let the
@@ -173,13 +173,13 @@ func stripOrder(view string) []string {
 	return nil
 }
 
-// The two tabs must rank positions identically, because they are rendering one
-// number. The strip used to file every "safe" position under a sort key of 0,
-// which was faithful while safe meant urgency was exactly 0 — under continuous
-// urgency it is a lie, and this fixture is where it shows: te is safe AND the
-// second most urgent position on the board, so the board tab put it second
-// while the strip buried it behind rb, a position worth a third as much.
-func TestTabsAgreeOnPositionOrder(t *testing.T) {
+// The two tabs rank positions by DIFFERENT keys now, on purpose: the board by
+// the primary key (worth to my roster, engine.PickChoices), the data tab's
+// strip by urgency (value evaporating before my pick). They answer different
+// questions and no longer promise the same order — what each promises
+// individually is pinned instead. The board must render PickChoices' order
+// exactly, market-dissent rows aside; the strip must stay urgency-ranked.
+func TestBoardRendersThePrimaryKeysOrder(t *testing.T) {
 	s := runState()
 	for _, id := range openingPicks {
 		s.Draft(id)
@@ -187,14 +187,24 @@ func TestTabsAgreeOnPositionOrder(t *testing.T) {
 	board := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
 	data := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40, Tab: 1}.View(), "")
 
-	// wr 28.3, te 9.6 (safe), qb 3.6 (safe), rb 3.0 — two of the four wear the
-	// green tag and one of those outranks everything but the leader.
-	want := []string{"wr", "te", "qb", "rb"}
-	if got := groupOrder(board); !reflect.DeepEqual(got, want) {
-		t.Errorf("board tab groups = %v, want %v", got, want)
+	var want []string
+	for _, c := range s.PickChoices() {
+		want = append(want, strings.ToLower(c.Pos))
 	}
-	if got := stripOrder(data); !reflect.DeepEqual(got, want) {
-		t.Errorf("data tab strip = %v, want %v", got, want)
+	// A market-dissent row repeats its position's tag directly under the choice
+	// row, so collapse consecutive repeats before comparing.
+	var got []string
+	for _, pos := range choiceOrder(board) {
+		if len(got) == 0 || got[len(got)-1] != pos {
+			got = append(got, pos)
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("board tab order = %v, want the primary key's %v", got, want)
+	}
+	// wr 28.3, te 9.6 (safe), qb 3.6 (safe), rb 3.0 on urgency — unchanged.
+	if got := stripOrder(data); !reflect.DeepEqual(got, []string{"wr", "te", "qb", "rb"}) {
+		t.Errorf("data tab strip = %v, want the urgency order", got)
 	}
 }
 

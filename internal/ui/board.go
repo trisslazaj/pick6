@@ -2,7 +2,7 @@ package ui
 
 import (
 	"fmt"
-	"sort"
+	"math"
 	"strings"
 	"time"
 
@@ -31,13 +31,8 @@ type Board struct {
 	// lines make that permanent: a board older than StaleADPHours sat one row
 	// over for the whole draft, in exactly the state the warning exists for.
 	//
-	// It buys back a row only where the board has one to give. depth() is a
-	// quantised knob — a row per GROUP, not a row total — so at 40 lines charging
-	// one row costs four and the frame comes in three under rather than one over,
-	// which is the right direction. Below MinDepth there is nothing left to give
-	// and the frame stays put: at exactly 28 lines it is still one over, which is
-	// the pre-existing floor (a 24-line terminal already renders 28 rows), not
-	// something this field can fix.
+	// The sidebar's ticker budget charges it, and the final clamp in View takes
+	// whatever is still over off the bottom of the body.
 	Reserve int
 
 	// Fresh is how old the data underneath all of this is, handed in by the cmd
@@ -54,7 +49,35 @@ type Board struct {
 	Tab        int
 	DataScroll int
 	DataFilter string // "" = all positions
+
+	// Search is the `/` overlay and Selected is the player it produced, held
+	// here rather than in the models for the same reason the data tab's scroll
+	// is: all three entry points get the same keys, and a selection that only
+	// existed in one of them would vanish on a tab flip. See search.go.
+	Search   Search
+	Selected string // player id, "" when nothing is selected
+
+	// Mode is which entry point is driving, and it decides two things: which
+	// keys the footer advertises, and whether x may mark a player taken.
+	Mode Mode
 }
+
+// Mode distinguishes the three drivers. The board renders identically in all
+// three — the numbers do not care where the picks came from — but the keys
+// differ, and a footer offering a key that does nothing is worse than a footer
+// with one fewer key on it.
+type Mode int
+
+const (
+	ModeMock   Mode = iota // scripted draft; space steps it, a autoplays it
+	ModeLive               // sleeper feed; r refreshes it, marks are not ours to make
+	ModeManual             // no feed at all; x marks, u takes it back
+)
+
+// Manual reports whether hand-marking is allowed. Live mode's marks come from
+// the poll, and a hand-typed one there would desync the board it is meant to
+// be checking.
+func (b Board) Manual() bool { return b.Mode == ModeManual }
 
 // Layout bounds. Rows scale with width — wider terminals buy longer names and
 // a roomier sidebar — up to the point where columns can't usefully consume more
@@ -66,10 +89,16 @@ const (
 	MaxWidth    = 104
 	SidebarW    = 34 // minimum; grows with the terminal up to SidebarMaxW
 	SidebarMaxW = 38
-	MinDepth    = 3 // players shown per position group
-	MaxDepth    = 8
 	MinTickerN  = 4
 	MaxTickerN  = 10
+
+	// marketGapPicks is how far the market must price a player ahead of the
+	// position's value-best before the board surfaces the disagreement as its
+	// own row. Display judgement, not engine math: the value column and the
+	// adp column disagree constantly by a pick or two, and a row for every
+	// wobble buries the one that matters — rashee rice priced 10 picks ahead
+	// of the receiver the value curve prefers.
+	marketGapPicks = 4
 )
 
 // sidebarWidth gives the sidebar a share of any width beyond the old 92-column
@@ -93,13 +122,17 @@ func (b Board) View() string {
 	if content < MinWidth {
 		content = MinWidth
 	}
+	// The primary key, computed once per frame: the plan line, the banner and
+	// the pane ordering all read the same ranking, which is the point of it.
+	choices := b.State.PickChoices()
+
 	var body string
 	if b.Tab == 1 {
 		body = b.dataPane(content)
 	} else {
 		sw := sidebarWidth(content)
 		leftW := content - sw - 3
-		left := b.bestAvailable(leftW)
+		left := b.bestAvailable(leftW, choices)
 		right := b.sidebar(sw)
 		body = lipgloss.JoinHorizontal(lipgloss.Top,
 			lipgloss.NewStyle().Width(leftW).Render(left),
@@ -108,9 +141,18 @@ func (b Board) View() string {
 		)
 	}
 
-	head, banner, foot := b.header(content), b.banner(content), b.footer(content)
+	head, banner, foot := b.header(content), b.banner(content, choices), b.footer(content)
+	// The search prompt and the standing selection sit between the body and the
+	// footer, and they go INSIDE the assembled block rather than being appended
+	// after it — the clamp below measures the block, so rows spent here come off
+	// the bottom of the body instead of off the top of the header.
+	over := b.overlay(content)
 	assemble := func(body string) string {
-		block := strings.Join([]string{head, banner, body, foot}, "\n")
+		parts := []string{head, banner, body}
+		if over != "" {
+			parts = append(parts, over)
+		}
+		block := strings.Join(append(parts, foot), "\n")
 		// An absent banner still contributes its separator, and a body that opens
 		// on a blank line then collapses it again — so the chrome is 4 rows or 5
 		// depending on state, which is why the clamp below measures instead of
@@ -194,33 +236,6 @@ func maxLines(a, b string) int {
 		return la
 	}
 	return lb
-}
-
-// depth decides how many players to show per position group, from the height we
-// actually have. Each group costs a header plus its rows plus a blank line.
-// depth is how many players each group shows. `extra` is rows the left pane has
-// already committed to something other than groups — today only the on-clock
-// decision list, which is charged here so the groups shrink to make room for it
-// instead of the frame growing past the terminal.
-func (b Board) depth(groups, extra int) int {
-	if b.Height <= 0 || groups == 0 {
-		return 4
-	}
-	// The plan line is one more row the left pane spends and this does not charge
-	// for it, deliberately. Taking it off avail before the division costs a row
-	// per GROUP, not a row total — at 40 lines with four groups the frame shrank
-	// from 39 rows to 36, trading two player rows to reclaim one. The budget is
-	// already approximate (it overshoots by three at 24 lines, which is its own
-	// tracked bug); one predictable row beats a lumpy four.
-	avail := b.Height - 8 - b.Reserve - extra // header, banner, footer, breathing room
-	perGroup := avail/groups - 2
-	if perGroup < MinDepth {
-		return MinDepth
-	}
-	if perGroup > MaxDepth {
-		return MaxDepth
-	}
-	return perGroup
 }
 
 func (b Board) tickerRows() int {
@@ -311,7 +326,14 @@ func untilLabel(n int) string {
 
 // banner renders the run/cliff line, or "" when nothing is active. It never
 // reserves an empty row — an always-present bar reads as broken.
-func (b Board) banner(w int) string {
+//
+// Every path through it is now gated on the RECOMMENDATION, not on raw board
+// state. A banner is the one element that interrupts, so it fires only when
+// what it reports should change what you do: a cliff on a position you were
+// never taking is a fact, not an alert, and at 3.01 the old banner shouted
+// about a wr cliff while the list under it ranked qb first — two urgencies on
+// one frame with no way to tell which one the board believed.
+func (b Board) banner(w int, choices []engine.PickChoice) string {
 	s := b.State
 	// A finished draft has no runs and no cliffs to act on. Anything urgent-
 	// sounding here is stale by definition.
@@ -319,34 +341,27 @@ func (b Board) banner(w int) string {
 		return ""
 	}
 	if run, ok := s.DetectRun(); ok {
-		return b.runBanner(run, w)
-	}
-	// No run: surface the most urgent cliff, if any. Two tiers about to vanish
-	// at once is rare but real, and the one whose position bleeds more value
-	// wins.
-	type c struct {
-		pos, msg string
-	}
-	var worst *c
-	var worstU float64
-	for _, pos := range positions {
-		if s.Need(pos) == 0 {
-			continue
+		if msg := b.runBanner(run, w, choices); msg != "" {
+			return msg
 		}
-		level, tier, remaining := s.Cliff(pos)
+	}
+	// A cliff banners only when it concerns a position in the top two of the
+	// ranking — the pick or its runner-up — because that is when it argues for
+	// acting differently. Walking choices in order keeps the higher-ranked
+	// cliff when both qualify.
+	for i, c := range choices {
+		if i >= 2 {
+			break
+		}
+		level, tier, remaining := s.Cliff(c.Pos)
 		if level != CliffLastLevel {
 			continue
 		}
-		hold, _ := s.TierHold(pos)
-		if u := s.Urgency(pos); worst == nil || u > worstU {
-			worst = &c{pos, cliffMsg(strings.ToLower(pos), tier, remaining, b.holdNote(hold), w)}
-			worstU = u
-		}
+		hold, _ := s.TierHold(c.Pos)
+		return bar(w, ColCliff, "cliff",
+			cliffMsg(strings.ToLower(c.Pos), tier, remaining, b.holdNote(hold), w))
 	}
-	if worst == nil {
-		return ""
-	}
-	return bar(w, ColCliff, "cliff", worst.msg)
+	return ""
 }
 
 // CliffLastLevel aliases the engine constant so callers here read cleanly.
@@ -403,10 +418,14 @@ func (b Board) holdNote(hold float64) string {
 	return fmt.Sprintf("holds %s to %s", pct(hold), b.pickLabel(at))
 }
 
-func (b Board) runBanner(run engine.Run, w int) string {
+// runBanner is the run's banner copy, or "" when the run does not clear the
+// recommendation gate. DetectRun has already established the count is a
+// genuine surprise against the market's own forecast; what remains is whether
+// it should interrupt YOU.
+func (b Board) runBanner(run engine.Run, w int, choices []engine.PickChoice) string {
 	pos := strings.ToLower(run.Pos)
 	if run.TierBroke {
-		alt := b.bestOtherPosition(run.Pos)
+		alt := b.bestOtherPosition(run.Pos, choices)
 		msg := fmt.Sprintf("%s run — tier broke, no value left.", pos)
 		if alt != "" {
 			msg += fmt.Sprintf(" best value now: %s.", alt)
@@ -421,48 +440,44 @@ func (b Board) runBanner(run engine.Run, w int) string {
 		return bar(w, ColRun, "run", fmt.Sprintf("%s run — %d of the last %d picks.",
 			pos, run.Count, engine.RunWindow))
 	}
-	// The count is the run's evidence. Whether it costs you anything is the
-	// tier's hold probability, and "act now or lose it" is a claim about that
-	// rather than about the count: with cliff levels priced by probability, a
-	// run banner sat above a group header reading "safe to wait" on 21 of the 41
-	// run frames of the scripted mock — the same frame telling the reader to act
-	// and to wait about the same position. So the imperative is earned by the
-	// same threshold that turns that header amber, and a run whose tier will
-	// keep reports the room moving instead of manufacturing an alarm.
-	msg := fmt.Sprintf("%s run in progress — %d of the last %d picks. %d left in tier %d",
-		pos, run.Count, engine.RunWindow, run.TierLeft, run.Tier)
+	// A tiered run interrupts only when it is COSTING you something: the tier
+	// it is eating is at risk, and the position is one of the top two things
+	// the board would have you take. The calm variant ("run in progress, holds
+	// 95%") is gone — a run that changes nothing is ticker material, and the
+	// board's own rows already carry the hold.
 	if hold, ok := b.State.TierHold(run.Pos); ok && hold >= engine.TierHoldWarn {
-		// The number goes on the calm wording only, and it is a width budget as
-		// much as a copy choice: the alarm wording plus a percentage overruns
-		// the banner's single row and truncates. When the alarm fires the group
-		// header below is carrying the same number anyway.
-		msg += ", " + b.holdNote(hold) + "."
-	} else {
-		msg += ". act now or lose it."
+		return ""
 	}
-	return bar(w, ColRun, "run", msg)
+	top2 := false
+	for i, c := range choices {
+		if i >= 2 {
+			break
+		}
+		if c.Pos == run.Pos {
+			top2 = true
+		}
+	}
+	if !top2 {
+		return ""
+	}
+	return bar(w, ColRun, "run", fmt.Sprintf(
+		"%s run in progress — %d of the last %d picks. %d left in tier %d. act now or lose it.",
+		pos, run.Count, engine.RunWindow, run.TierLeft, run.Tier))
 }
 
-// bestOtherPosition names the highest-urgency position besides the one on a
-// run, skipping any the board is simultaneously tagging "safe to wait".
-// Returns "" when everything else is safe — the banner drops the clause rather
-// than pointing at a position whose own group header, three lines below, says
-// there is no hurry.
-//
-// The skip used to be implicit: a safe position scored exactly 0 under
-// milestone-4 urgency and lost the argmax by itself. Continuous urgency gives
-// it a real number, and it started winning.
-func (b Board) bestOtherPosition(exclude string) string {
-	best, bestScore := "", 0.0
-	for _, pos := range positions {
-		if pos == exclude || b.State.SafeToWait(pos) {
+// bestOtherPosition names the best-ranked position besides the one on a run,
+// skipping any the board is simultaneously tagging "safe to wait". Returns ""
+// when everything else is safe — the banner drops the clause rather than
+// pointing at a position whose own row, three lines below, says there is no
+// hurry.
+func (b Board) bestOtherPosition(exclude string, choices []engine.PickChoice) string {
+	for _, c := range choices {
+		if c.Pos == exclude || b.State.SafeToWait(c.Pos) {
 			continue
 		}
-		if score := b.State.Urgency(pos); score > bestScore {
-			best, bestScore = strings.ToLower(pos), score
-		}
+		return strings.ToLower(c.Pos)
 	}
-	return best
+	return ""
 }
 
 func bar(w int, color, tag, msg string) string {
@@ -480,208 +495,415 @@ func bar(w int, color, tag, msg string) string {
 		Render(body)
 }
 
-// ---- left pane: best available ----
+// ---- left pane: the pick, and the frames before it ----
 
-func (b Board) bestAvailable(w int) string {
+// bestAvailable is the left pane: the recommendation and the ranking behind
+// it, in one of two tenses. On the clock it leads with a verdict — one name,
+// the reasons, and the field beneath it. Off the clock the same ranking reads
+// as a forecast of that decision: who will likely be there when I pick, and
+// what is slipping away in the meantime. Both are ordered by the one primary
+// key (engine.PickChoices), so no two elements of a frame can disagree about
+// what matters most.
+//
+// The old layout — four position groups, five players each — is gone from both
+// frames. It was a data table wearing a recommendation's accent border, and
+// everything it showed is one keypress away on the data tab.
+func (b Board) bestAvailable(w int, choices []engine.PickChoice) string {
 	s := b.State
-	type group struct {
-		pos     string
-		players []engine.Player
-		score   float64
-		value   float64
-	}
-	var groups []group
-	for _, pos := range positions {
-		// A suppressed position (K and DEF before the last rounds) is hidden
-		// outright, not just sorted last. The tool must never imply you should be
-		// thinking about kickers in round 3, and eight rows of them is exactly
-		// that implication.
-		if s.Need(pos) == 0 {
-			continue
-		}
-		avail := s.Available(pos)
-		if len(avail) == 0 {
-			continue
-		}
-		// Groups sort by the need-weighted value lost by waiting — CostOfPassing,
-		// which off the clock is Urgency exactly and on the clock is the same
-		// question asked at the pick after this one.
-		//
-		// It used to be Urgency itself, and on the clock that is zero for every
-		// position by construction, so the whole order fell through to the
-		// tie-break. That was defensible while the tie-break was the only live
-		// signal on the frame; it stopped being defensible the moment the
-		// decision list above started ranking the same positions by cost. Two
-		// orderings of one thing, in one frame, is the failure this file spends
-		// most of its comments avoiding.
-		//
-		// The tie-break stays and is still need-weighted VOR rather than
-		// need-weighted value: raw value ranks a position by its best man, vor by
-		// what that man buys over the one this room would have ended up with
-		// anyway (engine/vor.go) — a 314-point discount on quarterbacks and 182
-		// on tight ends against none at all on running backs. It now fires where
-		// costs genuinely tie, which is rare mid-draft and universal on my last
-		// pick, where nothing can be lost and replacement is the only question.
-		groups = append(groups, group{pos, avail, s.CostOfPassing(pos),
-			s.VOR(avail[0]) * s.Need(pos)})
-	}
-	sort.SliceStable(groups, func(i, j int) bool {
-		if groups[i].score != groups[j].score {
-			return groups[i].score > groups[j].score
-		}
-		return groups[i].value > groups[j].value
-	})
-
 	var sb strings.Builder
-	sb.WriteString(sectionHead("best available", w-2) + "\n")
+
+	imDone := len(s.MyUpcomingPicks(1)) == 0
+	onClock := !s.Done() && !imDone && s.PicksUntilMine() == 0
+
+	head := "best available"
+	switch {
+	case onClock:
+		head = "the pick — " + b.pickLabel(s.PickNo)
+	case !s.Done() && !imDone:
+		n := s.PicksUntilMine()
+		noun := "picks"
+		if n == 1 {
+			noun = "pick"
+		}
+		head = fmt.Sprintf("before you pick at %s — %d %s", b.pickLabel(s.NextPick()), n, noun)
+	}
+	sb.WriteString(sectionHead(head, w-2) + "\n")
+
+	if len(choices) == 0 {
+		sb.WriteString("\n  " + Dim.Render("nothing left to recommend") + "\n")
+		return sb.String()
+	}
+
+	if onClock {
+		sb.WriteString("\n" + b.verdictBlock(w, choices[0]))
+		sb.WriteString("\n")
+		sb.WriteString(b.planLine(w))
+		sb.WriteString(b.endgameLine(w))
+		if rows := b.choiceRows(w, choices, true); rows != "" {
+			sb.WriteString("\n  " + Dim.Render(fitCaption(w-4,
+				"if not him — ranked by what the pick is worth", "if not him")) + "\n")
+			sb.WriteString(rows)
+		}
+		return sb.String()
+	}
+
 	sb.WriteString(b.planLine(w))
 	sb.WriteString(b.endgameLine(w))
-
-	// The pane always says what it is showing and when. On the clock that is the
-	// decision; off it, the forecast the same ordering actually represents.
-	// Exactly one of the two ever returns anything, and the groups below shrink
-	// by whatever it spends.
-	lead, listRows := b.decisionList(w)
-	if lead == "" {
-		lead, listRows = b.forecastCaption(w)
+	caption := "who'll likely be there — ranked by what taking each is worth"
+	if imDone || s.Done() {
+		caption = "still on the board"
 	}
-	sb.WriteString(lead)
+	sb.WriteString("\n  " + Dim.Render(fitCaption(w-4, caption, "who'll likely be there")) + "\n")
+	sb.WriteString(b.choiceRows(w, choices, false))
+	return sb.String()
+}
 
-	depth := b.depth(len(groups), listRows)
-	for gi, g := range groups {
-		sb.WriteString(b.groupBlock(g.pos, g.players, gi == 0, w, depth))
+// fitCaption is the long-form-then-short rule every caption follows: dropping
+// beats truncating, and both beat wrapping.
+func fitCaption(w int, long, short string) string {
+	if lipgloss.Width(long) <= w {
+		return long
+	}
+	return short
+}
+
+// verdictBlock is the recommendation itself, on the one frame that spends a
+// pick: the top choice's man, and the two or three facts that justify him. It
+// exists because the old on-clock frame offered a four-row table of costs in
+// board-value units — a number nobody feels — and left the aggregation to the
+// reader, at the exact moment the reader has none to spare.
+//
+// The clauses speak in the units a drafter actually feels: picks against his
+// market price, the odds he is gone before I act again, the tier he is the
+// last of, the slot he fills. The value units justify the ORDER; the words
+// justify the pick.
+func (b Board) verdictBlock(w int, top engine.PickChoice) string {
+	p := top.Best
+	style := Pos(p.Pos, false)
+	edge := style.Render("▏") + " "
+
+	var sb strings.Builder
+	sb.WriteString(edge + style.Bold(true).Render(trunc(strings.ToLower(p.Name), w-12)) +
+		"  " + style.Render(strings.ToLower(p.Pos)) + " " + Dim.Render(p.Team) + "\n")
+
+	// Line two: his price, and whether he is still there when I next act. Both
+	// clauses matter, so the PRICE gives ground first — its long form restates
+	// the adp, which the short form drops — and only then does the line fall
+	// back to dropping clauses. The room note rides on the price when the warp
+	// moved him meaningfully: "at his price" is a different claim in a room
+	// that takes him five earlier.
+	long, priceStyle := b.priceClause(p, true)
+	short, _ := b.priceClause(p, false)
+	if p.ADPEff > 0 && math.Abs(p.ADPEff-p.ADP) >= 3 {
+		long += fmt.Sprintf(" · room ~%.0f", p.ADPEff)
+		short += fmt.Sprintf(" · room ~%.0f", p.ADPEff)
+	}
+	gone, goneStyle := b.goneClause(p)
+	line2 := []styledClause{{long, priceStyle}}
+	if gone != "" {
+		line2 = append(line2, styledClause{gone, goneStyle})
+		if lipgloss.Width(long)+3+lipgloss.Width(gone) > w-4 {
+			line2[0].text = short
+		}
+	}
+	sb.WriteString(edge + joinClauses(line2, w-4) + "\n")
+
+	// Line three: what the position looks like behind him. Dropped whole when
+	// there is nothing to say.
+	var l3 []styledClause
+	if long, short, st := b.stateNote(p.Pos); long != "untiered" {
+		l3 = append(l3, styledClause{long, st}, styledClause{short, st})
+		l3 = l3[:1] // long form; joinClauses handles the drop, not a short swap
+	}
+	if cl := b.slotClause(p.Pos); cl != "" {
+		l3 = append(l3, styledClause{cl, Dim})
+	}
+	if mb, ok := b.marketPick(p.Pos); ok && mb.ID != p.ID {
+		l3 = append(l3, styledClause{"market prefers " + lastName(strings.ToLower(mb.Name)), Accent})
+	}
+	if len(l3) > 0 {
+		sb.WriteString(edge + joinClauses(l3, w-4) + "\n")
 	}
 	return sb.String()
 }
 
-// decisionList is the top of the left pane ON THE CLOCK, and nothing at all on
-// any other frame.
+// styledClause is one clause of a sentence assembled to fit a width.
+type styledClause struct {
+	text string
+	st   lipgloss.Style
+}
+
+// joinClauses renders clauses separated by dim middle dots, dropping whole
+// clauses from the RIGHT until the line fits — the same rule the old group
+// header followed, for the same reason: a wrapped clause reads as a rendering
+// fault, and the head of the sentence carries the information. The last clause
+// standing truncates rather than wraps, for the same reason again.
+func joinClauses(clauses []styledClause, w int) string {
+	for len(clauses) > 1 {
+		total := 0
+		for i, c := range clauses {
+			total += lipgloss.Width(c.text)
+			if i > 0 {
+				total += 3
+			}
+		}
+		if total <= w {
+			break
+		}
+		clauses = clauses[:len(clauses)-1]
+	}
+	if len(clauses) == 1 && lipgloss.Width(clauses[0].text) > w && w > 1 {
+		clauses[0].text = trunc(clauses[0].text, w)
+	}
+	parts := make([]string, len(clauses))
+	for i, c := range clauses {
+		parts[i] = c.st.Render(c.text)
+	}
+	return strings.Join(parts, Dim.Render(" · "))
+}
+
+// priceClause is a player's cost in the one currency every drafter already
+// thinks in: picks against his price. long=false gives the compact chip the
+// rows use.
 //
-// The rest of the board is a browsing layout — four position groups, several men
-// each, ordered by what waiting costs. That is the right shape for the twenty
-// minutes between picks, when the question is "what will be gone when I come
-// back". It is the wrong shape for the frame that actually spends the pick, and
-// on that frame the browsing layout goes limp in three ways at once: every
-// urgency is exactly 0 (nothing can be taken across zero picks), so the group
-// order falls to a tie-break; twenty candidates are offered where one is wanted;
-// and the number that would rank them is not on screen at all.
+//	"fell 7"    the draft ran past his price and he is still here — a discount,
+//	            amber, the same state the Falling flag marks
+//	"11 early"  taking him now pays 11 picks over his price
+//	"at price"  he would go about here
 //
-// So: one row per position, its best available man, and the two things that
-// actually decide between them —
-//
-//	cost     what passing on him is expected to cost by the time I act again
-//	         (CostOfPassing — Urgency's question at ActPick, where it is live)
-//	instead  who I would most likely be taking at that position instead
-//
-// Ranked by cost, tie-broken by need-weighted vor. That tie-break is where vor
-// still earns its keep: cost ties are rare mid-draft but total on my last pick,
-// where nothing can be lost and "what does he buy over replacement" is the only
-// question left.
-//
-// Returns the block and its row count, which depth() charges against the groups
-// so the frame cannot grow past the terminal.
-func (b Board) decisionList(w int) (string, int) {
+// The price is the room-warped effective one when a curve is loaded, because
+// it has to be: Falling reads the warped price, and a chip doing its
+// arithmetic on raw adp printed "fell -1" beside an amber flag — the flag and
+// the number disagreeing about the same fact. The long form still restates the
+// raw market adp, which is the number the reader can check anywhere else.
+func (b Board) priceClause(p engine.Player, long bool) (string, lipgloss.Style) {
+	if p.ADP <= 0 {
+		return "unpriced", Dim
+	}
+	price := p.ADP
+	if p.ADPEff > 0 {
+		price = p.ADPEff
+	}
+	diff := float64(b.State.PickNo) - price
+	switch {
+	case b.State.Falling(p):
+		if long {
+			return fmt.Sprintf("fell %.0f past his price — adp %.1f", diff, p.ADP), Run
+		}
+		return fmt.Sprintf("fell %.0f", diff), Run
+	case diff <= -3:
+		if long {
+			return fmt.Sprintf("%.0f before his price — adp %.1f", -diff, p.ADP), Dim
+		}
+		return fmt.Sprintf("%.0f early", -diff), Dim
+	default:
+		if long {
+			return fmt.Sprintf("at his price — adp %.1f", p.ADP), Dim
+		}
+		return "at price", Dim
+	}
+}
+
+// goneClause is the verdict's survival clause: pass on him now, is he there
+// when I come back. "" on my last pick, where there is no coming back and the
+// question has no answer.
+func (b Board) goneClause(p engine.Player) (string, lipgloss.Style) {
 	s := b.State
-	if s.Done() || s.PicksUntilMine() > 0 {
-		return "", 0
+	at := s.ActPick()
+	if at <= s.PickNo {
+		return "", Dim
 	}
-	type row struct {
-		pos     string
-		now     engine.Player
-		cost    float64
-		vor     float64
-		instead string
+	sv := s.PSurviveTilted(p)
+	if sv < engine.SurviveThreshold {
+		return fmt.Sprintf("gone by %s — %s", b.pickLabel(at), pct(sv)), b.survStyle(p)
 	}
-	var rows []row
-	for _, pos := range positions {
-		if s.Need(pos) == 0 {
+	return fmt.Sprintf("keeps to %s — %s", b.pickLabel(at), pct(sv)), b.survStyle(p)
+}
+
+// slotClause names what taking the position buys my lineup, because "need" as
+// a bare weight never reached the screen and the difference between filling a
+// second starter slot and burning a flex is a real argument.
+func (b Board) slotClause(pos string) string {
+	open := 0
+	for _, slot := range b.State.UnfilledStarters(b.State.MySlot) {
+		if slot == pos {
+			open++
+		}
+	}
+	switch {
+	case open >= 2:
+		return fmt.Sprintf("both %s slots open", strings.ToLower(pos))
+	case open == 1:
+		return fmt.Sprintf("fills your %s slot", strings.ToLower(pos))
+	case b.State.Need(pos) >= engine.NeedFlex:
+		return "flex only"
+	default:
+		return "bench depth"
+	}
+}
+
+// marketPick is the market's own choice at a position: the cheapest available
+// player by adp, when the market prices him at least marketGapPicks ahead of
+// the value curve's choice. ok is false when the two curves agree, which is
+// most positions on most frames.
+//
+// This is the rice case, and it is the board refusing to silently take a side:
+// fantasycalc ranked rashee rice wr16 while the market priced him as the best
+// receiver left on the board, and the value-ordered pane buried him seven rows
+// deep — invisible — while championing a man the market priced eleven picks
+// later. Where its two sources disagree, the board shows both and says which
+// is which.
+func (b Board) marketPick(pos string) (engine.Player, bool) {
+	s := b.State
+	valueBest, ok := s.BestNow(pos)
+	if !ok {
+		return engine.Player{}, false
+	}
+	best, found := engine.Player{}, false
+	for _, p := range s.Available(pos) {
+		if p.ADP <= 0 {
 			continue
 		}
-		now, ok := s.BestNow(pos)
-		if !ok {
-			continue
+		if !found || p.ADP < best.ADP {
+			best, found = p, true
 		}
-		// "same" rather than the name twice, the convention the data tab's pairs
-		// already use: the modal survivor really can be bestNow himself, and one
-		// name printed in both columns reads as a rendering fault.
-		instead := "same"
-		if later, ok := s.BestLater(pos); ok && later.ID != now.ID {
-			instead = lastName(later.Name)
-		}
-		rows = append(rows, row{pos, now, s.CostOfPassing(pos), s.VOR(now) * s.Need(pos), instead})
 	}
-	if len(rows) == 0 {
-		return "", 0
+	if !found || best.ID == valueBest.ID || valueBest.ADP <= 0 ||
+		best.ADP+marketGapPicks > valueBest.ADP {
+		return engine.Player{}, false
 	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		if rows[i].cost != rows[j].cost {
-			return rows[i].cost > rows[j].cost
-		}
-		return rows[i].vor > rows[j].vor
-	})
+	return best, true
+}
 
-	nameW := 18
-	if w < 56 {
-		nameW = 14
-	}
-	insteadW := w - 26 - nameW
-	showInstead := insteadW >= 10
-
-	// AT THE TURN THE COST COLUMN IS HONESTLY ZERO AND SAYS NOTHING, so the
-	// caption stops claiming otherwise. My next chance to act is the very next
-	// pick, nobody drafts between the two, and nothing can be taken from me —
-	// which is correct, and useless as a ranking. What actually decides a turn is
-	// who survives the long gap AFTER the pair, and the sidebar's "then N picks
-	// to X" line is currently the only thing on screen that knows it.
-	//
-	// Naming it beats printing a table of zeros under a caption that promises a
-	// cost. The real fix is to price the pair against the next real window rather
-	// than against a pick nothing intervenes before, and that is a modelling
-	// change with its own frames to look at, not a caption.
-	long := fmt.Sprintf("the pick — what passing costs, and who you'd get at %s",
-		b.pickLabel(s.ActPick()))
-	short := "the pick — what passing costs"
-	if s.ActPick() == s.PickNo+1 {
-		// Both forms have to be turn-aware or the narrow fallback puts the
-		// misleading caption back: a promise of cost over a column of zeros is
-		// exactly what this branch exists to stop.
-		long = fmt.Sprintf("the pick — %s then %s back to back, nothing between",
-			b.pickLabel(s.PickNo), b.pickLabel(s.ActPick()))
-		short = "the pick — back to back, nothing between"
-	}
-	cap := long
-	if lipgloss.Width(cap)+2 > w-2 {
-		cap = short
-	}
-
-	// Column headers, because without them the two right-hand columns are a bare
-	// integer and an arrow. "8 → same" is not self-describing at any width, and
-	// AT THE TURN it is worse than that: the caption swaps to the back-to-back
-	// wording, which is the only other place the columns were ever named, so the
-	// numbers lose their last explanation on the exact frame where they are
-	// degenerate. `cost` is in board value units — bijan is ~10465 at rank 1 —
-	// and `instead` reads "same" when the man you would settle for is him.
-	head := fmt.Sprintf("  %-4s %-*s %4s %6s", "pos", nameW, "player", "surv", "cost")
-	if showInstead {
-		head += "  " + trunc("instead", insteadW)
-	}
-
+// choiceRows renders the ranking itself, one row per position: the man, his
+// survival to the pick I next act at, and the clauses that say what taking or
+// leaving him means. onClock also skips the top choice, which the verdict
+// block has already spent three lines on.
+//
+// Where the market disagrees with the value curve about a position's best man
+// (marketPick), the market's choice gets a row of his own directly under the
+// position's — the disagreement rendered as two rows the reader can compare,
+// rather than resolved silently in either direction.
+func (b Board) choiceRows(w int, choices []engine.PickChoice, onClock bool) string {
 	var sb strings.Builder
-	sb.WriteString("\n  " + Dim.Render(cap) + "\n")
-	sb.WriteString(Dim.Render(head) + "\n")
-	for _, r := range rows {
-		style := Pos(r.pos, false)
-		line := fmt.Sprintf("  %s %s %s %s",
-			style.Bold(true).Render(fmt.Sprintf("%-4s", strings.ToLower(r.pos))),
-			style.Render(fmt.Sprintf("%-*s", nameW, trunc(strings.ToLower(r.now.Name), nameW))),
-			Dim.Render(fmt.Sprintf("%4s", pct(s.PSurviveTilted(r.now)))),
-			FG.Render(fmt.Sprintf("%6.0f", r.cost)))
-		if showInstead {
-			line += "  " + Dim.Render(trunc("→ "+r.instead, insteadW))
+	for i, c := range choices {
+		if onClock && i == 0 {
+			// The verdict's own position can still hide a market disagreement,
+			// and the one row worth keeping from it is exactly that.
+			if row := b.marketRow(w, c); row != "" {
+				sb.WriteString(row)
+			}
+			continue
 		}
-		sb.WriteString(line + "\n")
+		sb.WriteString(b.choiceRow(w, c, i == 0 && !onClock, onClock))
+		if row := b.marketRow(w, c); row != "" {
+			sb.WriteString(row)
+		}
 	}
-	return sb.String(), len(rows) + 3
+	return sb.String()
+}
+
+// choiceRow is one row of the ranking. Column budget: edge(2) tag(4)
+// name(nameW) surv(5), then clauses that drop from the right — which makes the
+// ORDER a priority list, and the two tenses hold different priorities.
+//
+// On the clock the price chip leads: the question is whether to buy, and picks
+// against market price is the currency of that argument. Off the clock there
+// is no buying, and "9 early" would even be measured from a pick that isn't
+// mine — so the tier's state leads, the safe tag rides next (the claim a
+// narrow row must not lose), and a falling chip marks the discount forming.
+func (b Board) choiceRow(w int, c engine.PickChoice, accent, onClock bool) string {
+	s := b.State
+	p := c.Best
+	style := Pos(c.Pos, false)
+	edge := "  "
+	if accent {
+		// One accent, not five: only the top choice wears its position colour.
+		edge = style.Render("▏") + " "
+	}
+	nameW := rowNameWidth(w)
+	tag := style.Bold(true).Render(fmt.Sprintf("%-3s", strings.ToLower(c.Pos)))
+	name := b.nameCell(p, style, nameW)
+	surv := b.survStyle(p).Render(fmt.Sprintf("%3.0f%%", 100*s.PSurviveTilted(p)))
+
+	tail := w - (2 + 4 + nameW + 5 + 1)
+	price, priceStyle := b.priceClause(p, false)
+	long, short, noteStyle := b.stateNote(c.Pos)
+
+	// Assemble with the SHORT tier note first, so the claims to its right — the
+	// safe tag, a falling chip — get their space before the note's hold number
+	// does; then upgrade the note to its long form only if the line still fits.
+	// The other order starved "safe" out of every narrow row.
+	var clauses []styledClause
+	noteAt := -1
+	if onClock {
+		clauses = append(clauses, styledClause{price, priceStyle})
+		noteAt = 1
+		clauses = append(clauses, styledClause{short, noteStyle})
+	} else {
+		noteAt = 0
+		clauses = append(clauses, styledClause{short, noteStyle})
+		if s.SafeToWait(c.Pos) {
+			clauses = append(clauses, styledClause{"safe", Wait})
+		}
+		if s.Falling(p) {
+			clauses = append(clauses, styledClause{price, priceStyle})
+		}
+	}
+	if later, ok := s.BestLater(c.Pos); ok && later.ID != p.ID {
+		clauses = append(clauses, styledClause{"→ " + lastName(strings.ToLower(later.Name)), Dim})
+	}
+	total := 0
+	for i, c := range clauses {
+		total += lipgloss.Width(c.text)
+		if i > 0 {
+			total += 3
+		}
+	}
+	if total+lipgloss.Width(long)-lipgloss.Width(short) <= tail {
+		clauses[noteAt].text = long
+	}
+	return fmt.Sprintf("%s%s %s %s %s\n", edge, tag, name, surv,
+		joinClauses(clauses, tail))
+}
+
+// marketRow is the market's dissenting candidate as a row of his own, or "".
+func (b Board) marketRow(w int, c engine.PickChoice) string {
+	s := b.State
+	mb, ok := b.marketPick(c.Pos)
+	if !ok {
+		return ""
+	}
+	style := Pos(c.Pos, false)
+	nameW := rowNameWidth(w)
+	tag := Dim.Render(fmt.Sprintf("%-3s", strings.ToLower(c.Pos)))
+	name := b.nameCell(mb, style, nameW)
+	surv := b.survStyle(mb).Render(fmt.Sprintf("%3.0f%%", 100*s.PSurviveTilted(mb)))
+	// "market's pick", not "market's wr pick" — the row's own tag names the
+	// position, and the shorter label is what lets the price chip survive at
+	// narrow widths, where a falling market pick is the whole story.
+	price, priceStyle := b.priceClause(mb, false)
+	clauses := []styledClause{
+		{"market's pick", Accent},
+		{price, priceStyle},
+	}
+	return fmt.Sprintf("  %s %s %s %s\n", tag, name, surv,
+		joinClauses(clauses, w-(2+4+nameW+5+1)))
+}
+
+// rowNameWidth is the shared name-column budget for ranking rows, so the
+// verdict's field and a market dissent line up as one table. Capped low enough
+// that the clause tail keeps a price chip AND a tier note at 92 columns —
+// names give ground before claims do.
+func rowNameWidth(w int) int {
+	nameW := w - 36
+	if nameW < 16 {
+		nameW = 16 // nameCell's chip budget needs the old playerLine floor
+	}
+	if nameW > 20 {
+		nameW = 20
+	}
+	return nameW
 }
 
 // planCopy is the two-pick lookahead in words: which position to take with my
@@ -790,7 +1012,7 @@ func (b Board) hiddenStarters() []string {
 	return out
 }
 
-// tierLabel is the group header's tier clause, in a long form and a short one.
+// stateNote is a position's tier clause, in a long form and a short one.
 //
 // It carries both the remaining count and the probability at least one of those
 // players is still there the next time I can act (on the clock, that means after
@@ -799,7 +1021,7 @@ func (b Board) hiddenStarters() []string {
 // tell three players the room is about to eat from one player nobody wants, and
 // those are opposite situations; showing the count alone would leave the reader
 // unable to see why an eight-man tier went red.
-func (b Board) tierLabel(pos string) (long, short string, style lipgloss.Style) {
+func (b Board) stateNote(pos string) (long, short string, style lipgloss.Style) {
 	s := b.State
 	level, tier, remaining := s.Cliff(pos)
 	if tier == 0 {
@@ -818,31 +1040,14 @@ func (b Board) tierLabel(pos string) (long, short string, style lipgloss.Style) 
 		short = fmt.Sprintf("tier %d unlikely to hold", tier)
 		return short + " — " + note, short, Cliff.Bold(true)
 	case level == engine.CliffWarning:
-		short = fmt.Sprintf("%d left in tier %d — ending", remaining, tier)
+		short = fmt.Sprintf("%d in tier %d — ending", remaining, tier)
 		return short + " · " + note, short, Run
 	default:
-		short = fmt.Sprintf("%d left in tier %d", remaining, tier)
+		short = fmt.Sprintf("%d in tier %d", remaining, tier)
 		return short + " · " + note, short, Dim
 	}
 }
 
-// manNote is the header's claim about the one player the group is actually
-// about: its best available man, and his own odds of still being there when I
-// act. It replaced a bare "safe to wait" tag, and the reason is that the tag and
-// the tier clause beside it are answers to DIFFERENT QUESTIONS with nothing on
-// screen saying so.
-//
-// "4 left in tier 1 · holds 100%" is about a tier. "safe to wait" is about one
-// man. Both were true of the same header while that header sat on the group
-// ranked most urgent on the board — mcbride 72% to survive, a 28% chance of
-// falling 3504 points, which is a real 990 of expected loss and also "probably
-// fine". Urgency is a magnitude and safety is a probability; printed side by
-// side as bare verdicts they read as the board contradicting itself.
-//
-// Naming the man is what fixes it. "mcbride 72%" cannot be mistaken for a claim
-// about the tier, and the two percentages differing is the whole point rather
-// than a glitch. The green "safe" survives as a suffix on his number, where its
-// subject is unambiguous.
 // survStyle bands a survival probability, and BOTH TABS read it so they cannot
 // drift apart about the same player.
 //
@@ -865,161 +1070,6 @@ func (b Board) survStyle(p engine.Player) lipgloss.Style {
 	}
 }
 
-// forecastCaption is the off-clock counterpart to decisionList's, and it exists
-// because the pane never said what it was showing or when.
-//
-// Off the clock the ordering is a FORECAST, not a recommendation: "te 990" at
-// 2.08 means expect to lose 990 of tight-end value before you pick, which is
-// anticipation expressed as a number. Rendered as an unlabelled ranking with the
-// leader wearing an accent border, it reads as "take this" on the one frame
-// where you cannot take anything — which is exactly how it was read.
-//
-// The number was never the problem. Not naming the horizon was.
-func (b Board) forecastCaption(w int) (string, int) {
-	s := b.State
-	if s.Done() || s.PicksUntilMine() <= 0 {
-		return "", 0
-	}
-	n := s.PicksUntilMine()
-	noun := "picks"
-	if n == 1 {
-		noun = "pick"
-	}
-	long := fmt.Sprintf("before you pick at %s — %d %s · ordered by what you stand to lose",
-		b.pickLabel(s.NextPick()), n, noun)
-	cap := long
-	if lipgloss.Width(cap)+2 > w-2 {
-		cap = fmt.Sprintf("before %s — %d %s · what you stand to lose",
-			b.pickLabel(s.NextPick()), n, noun)
-	}
-	if lipgloss.Width(cap)+2 > w-2 {
-		cap = fmt.Sprintf("before %s — what you stand to lose", b.pickLabel(s.NextPick()))
-	}
-	return "\n  " + Dim.Render(cap) + "\n", 2
-}
-
-func (b Board) manNote(pos string) (string, lipgloss.Style) {
-	now, ok := b.State.BestNow(pos)
-	if !ok {
-		return "", Dim
-	}
-	p := b.State.PSurviveTilted(now)
-	txt := lastName(now.Name) + " " + pct(p)
-	switch {
-	case b.State.SafeToWait(pos):
-		return txt + " safe", Wait
-	case p < survGoneBand:
-		return txt, Cliff
-	default:
-		return txt, Dim
-	}
-}
-
-func (b Board) groupBlock(pos string, avail []engine.Player, top bool, w, depth int) string {
-	s := b.State
-	suppressed := s.Need(pos) == 0
-	style := Pos(pos, suppressed)
-
-	// The green tag comes straight from the engine, which is also what the data
-	// tab's strip asks. It used to be inferred from urgency == 0, and urgency is
-	// continuous now — an exact zero happens only on my own pick, so the old
-	// condition would have quietly stopped firing anywhere else. Every guard it
-	// carried (cliff copy wins, untiered k/def never claim safety, nothing is
-	// "safe to wait" when the wait is zero picks long) lives in SafeToWait now.
-	tag := strings.ToLower(pos)
-	long, short, countStyle := b.tierLabel(pos)
-	man, manStyle := b.manNote(pos)
-
-	// The header drops whole clauses rather than wrapping. At 80 columns the
-	// left pane is 43 wide and the long form plus a man clause overruns it; a
-	// wrapped group header reads as a rendering fault, the same reason
-	// playerLine drops the bye column instead of spilling. Measured in display
-	// cells, not bytes: the separators are a middle dot and an em dash, and
-	// counting their utf-8 length would drop a clause a few columns before it
-	// actually stopped fitting.
-	fits := func(tier, m string) bool {
-		n := 2 + lipgloss.Width(tag) + 2 + lipgloss.Width(tier)
-		if m != "" {
-			n += 3 + lipgloss.Width(m)
-		}
-		return n <= w-2
-	}
-	tier, m := long, man
-	if !fits(tier, m) {
-		tier = short // the hold clause goes first: it is the tier's second number
-	}
-	if !fits(tier, m) {
-		m = "" // ...and the man goes only when even the short tier won't share
-	}
-
-	head := fmt.Sprintf("%s  %s", style.Bold(true).Render(tag), countStyle.Render(tier))
-	if m != "" {
-		head += Dim.Render(" · ") + manStyle.Render(m)
-	}
-
-	// One accent, not five: only the top group gets a left border.
-	edge := "  "
-	if top {
-		edge = style.Render("▏") + " "
-	}
-
-	var sb strings.Builder
-	sb.WriteString("\n" + edge + head + "\n")
-	for i, p := range avail {
-		if i >= depth {
-			break
-		}
-		sb.WriteString(edge + "  " + b.playerLine(p, style, w-6) + "\n")
-	}
-	return sb.String()
-}
-
-// playerLine drops columns rather than wrapping when the pane is tight. A row
-// that wraps costs two lines and reads as broken; a row missing the bye week
-// still tells you who and when.
-//
-// Width budget: the row is name + " " + meta(14) + " " + surv(4), plus "  " +
-// bye(6) when it fits. The name takes whatever the pane can spare (row =
-// nameW+28 with bye, so nameW = w-26 fills the budget exactly); below w=42
-// even the floor name doesn't leave room for the bye column.
-//
-// Chips ride inside the name column and are paid for out of it, so this budget
-// is untouched by them — at 80 columns the row already spends 36 of its 37
-// cells and there is nothing to append to.
-func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
-	nameW := w - 26
-	if nameW < 16 {
-		nameW = 16
-	}
-	if nameW > 26 {
-		nameW = 26
-	}
-	name := b.nameCell(p, style, nameW)
-	// A falling player is a discount — the draft has moved past his price and
-	// he's still here. Amber on the numbers, not the name: it's a state, and
-	// the name keeps its position colour like everyone else's.
-	numStyle := Dim
-	if b.State.Falling(p) {
-		numStyle = Run
-	}
-	meta := numStyle.Render(fmt.Sprintf("%-4s adp %5.1f", p.Team, p.ADP))
-	surv := b.survStyle(p).Render(fmt.Sprintf("%3.0f%%", 100*b.State.PSurviveTilted(p)))
-	// Chance he's still there at my next pick. The number the whole board runs
-	// on, so show it rather than asking anyone to trust the ordering blind —
-	// and specifically the TILTED one, the same probability urgency, tier-hold
-	// and the safe tag consume. One truth: a raw survival on screen next to an
-	// ordering computed from the corrected one leaves nobody able to tell which
-	// number the board actually believed.
-	if w < nameW+26 { // no room for the bye column
-		return fmt.Sprintf("%s %s %s", name, meta, surv)
-	}
-	bye := Dim.Render(fmt.Sprintf("bye %2d", p.Bye))
-	if p.Bye == 0 {
-		bye = Dim.Render("      ")
-	}
-	return fmt.Sprintf("%s %s %s  %s", name, meta, surv, bye)
-}
-
 // ---- right pane: roster + ticker ----
 
 func (b Board) sidebar(w int) string {
@@ -1030,7 +1080,7 @@ func (b Board) sidebar(w int) string {
 	// lineup plus six bench plus a ticker genuinely does not fit 24 rows, and
 	// bench depth is the least useful thing on screen at that moment — you know
 	// who you drafted.
-	insight := b.insight()
+	insight := b.insight(w)
 	fixed := 1 + len(b.State.Roster.Slots) + strings.Count(insight, "\n") + 2
 	benchCap := b.bodyRows() - fixed - MinTickerN
 
@@ -1046,24 +1096,74 @@ func (b Board) sidebar(w int) string {
 // insight is the "so what" under the roster: what's still open, which bye week
 // is quietly stacking up, and when you're up again. Everything here is derivable
 // from the roster, but nobody derives it mid-draft with a clock running.
-func (b Board) insight() string {
+func (b Board) insight(w int) string {
 	s := b.State
 	var sb strings.Builder
 
 	if need := s.UnfilledStarters(s.MySlot); len(need) > 0 {
+		// A two-flex lineup's full list — "qb wr wr te flex flex k def" — is a
+		// cell wider than the sidebar, and a wrapped need line puts a lone "def"
+		// on its own row looking like a rendering fault. "fx" is the fallback,
+		// not the default: flex reads better and usually fits.
+		flexLabel := "flex"
+		width := func(label string) int {
+			n := 8 // "  need  " gutter
+			for i, slot := range need {
+				if i > 0 {
+					n++
+				}
+				if isFlex := slot == "FLEX" || slot == "SUPERFLEX"; isFlex {
+					n += len(label)
+				} else {
+					n += len(slot)
+				}
+			}
+			return n
+		}
+		if width(flexLabel) > w-2 {
+			flexLabel = "fx"
+		}
 		parts := make([]string, len(need))
+		labels := make([]string, len(need))
 		for i, n := range need {
 			// Colour each slot by position, and keep K/DEF faint while the engine
 			// is suppressing them. Otherwise "need k def" in round 9 reads as an
 			// instruction, contradicting the board that just hid every kicker.
-			if n == "FLEX" {
-				parts[i] = FG.Render("flex")
+			if n == "FLEX" || n == "SUPERFLEX" {
+				labels[i] = flexLabel
+				parts[i] = FG.Render(flexLabel)
 				continue
 			}
-			parts[i] = Pos(n, s.Need(n) == 0).Render(strings.ToLower(n))
+			labels[i] = strings.ToLower(n)
+			parts[i] = Pos(n, s.Need(n) == 0).Render(labels[i])
 		}
-		sb.WriteString(fmt.Sprintf("\n  %s %s\n",
-			Dim.Render("need "), strings.Join(parts, " ")))
+		// "fx" is not always enough: ten unfilled slots overrun a 34-cell sidebar
+		// even abbreviated, and the line wrapped, which put a lone "def" on its
+		// own row looking exactly like a rendering fault. Show what fits and
+		// count the rest — the list shrinks with every pick you make, so this is
+		// a first-few-picks state and never an endgame one, which is also why the
+		// slots that drop are the ones furthest down the lineup.
+		avail, used, shown := w-10, 0, 0
+		for i := range parts {
+			step := len(labels[i])
+			if shown > 0 {
+				step++
+			}
+			tail := 0
+			if i < len(parts)-1 {
+				tail = len(fmt.Sprintf(" +%d", len(parts)-i))
+			}
+			if shown > 0 && used+step+tail > avail {
+				break
+			}
+			used += step
+			shown++
+		}
+		line := strings.Join(parts[:shown], " ")
+		if shown < len(parts) {
+			line += Dim.Render(fmt.Sprintf(" +%d", len(parts)-shown))
+		}
+		sb.WriteString(fmt.Sprintf("\n  %s %s\n", Dim.Render("need "), line))
 	} else {
 		sb.WriteString("\n  " + Dim.Render("need ") + " " +
 			Wait.Render("lineup complete") + "\n")
@@ -1215,13 +1315,42 @@ func (b Board) ticker(w int) string {
 
 // ---- footer ----
 
-func (b Board) footer(w int) string {
-	keys := []string{"space step", "a auto", "u undo", "tab data", "q quit"}
-	if b.Tab == 1 {
-		keys = []string{"tab board", "j/k scroll", "p filter", "q quit"}
+// footerKeys is the keybind row, and it names the keys that do something in the
+// mode you are actually in. A footer advertising "space step" on a live board
+// is telling you to press a key that has been a no-op all draft, and one
+// advertising "x taken" in live mode invites a hand-typed mark onto a board
+// whose marks come from the feed.
+//
+// Ordered most-useful-first, because the tail is what drops when the row runs
+// out of width. See keyFloor.
+func (b Board) footerKeys() []string {
+	if b.Search.Open {
+		return []string{"↑/↓ pick", "enter select", "esc cancel"}
 	}
-	left := "  " + Dim.Render(strings.Join(keys, "   "))
+	if b.Tab == 1 {
+		return []string{"tab board", "j/k scroll", "p filter", "/ search", "q quit"}
+	}
+	switch b.Mode {
+	case ModeManual:
+		return []string{"/ search", "x taken", "u undo", "tab data", "q quit"}
+	case ModeLive:
+		return []string{"r refresh", "/ search", "tab data", "q quit"}
+	}
+	return []string{"space step", "/ search", "tab data", "u undo", "q quit", "a auto"}
+}
 
+// keyFloor is how many keys the row keeps before the data-age clause starts
+// giving ground instead of them. Four is where the glossary stops being a
+// convenience and starts being a hole — the tab flip and the search key are not
+// guessable, and a reader who never finds them does not know half the tool is
+// there. Past the floor the age note steps down to its short form.
+//
+// What drops first is the most guessable key in the tool: q, on a screen where
+// esc and ctrl+c also quit. That is the trade this ladder makes on purpose —
+// how old the board is cannot be inferred from anything else on it.
+const keyFloor = 4
+
+func (b Board) footer(w int) string {
 	right := Dim.Render(fmt.Sprintf("synced %s ago", since(b.Synced)))
 	if b.Status != "" {
 		right = Accent.Render(strings.ToLower(b.Status))
@@ -1232,18 +1361,16 @@ func (b Board) footer(w int) string {
 	// poll; "adp" is the data the entire board is computed from, frozen at fetch
 	// time along with every injury flag, and only meta.json knows when that was.
 	//
-	// Long form, then short, then nothing: at 80 columns the keybinds and the
-	// sync note have already spent the row and about 15 cells are left, which is
-	// the short form and not the long one. Dropping beats wrapping, the same rule
-	// playerLine and the banner follow.
-	if long, short := b.Fresh.note(); long != "" {
-		avail := w - 3 - lipgloss.Width(left) - lipgloss.Width(right)
-		for _, cand := range []string{long, short} {
-			if lipgloss.Width(cand)+3 <= avail {
-				right = Dim.Render(cand) + "   " + right
-				break
-			}
-		}
+	// Long form, then fewer keys, then the short form, then nothing. Dropping
+	// beats wrapping, the same rule playerLine, the banner and the data tab's
+	// legend all follow.
+	keys := b.footerKeys()
+	long, short := b.Fresh.note()
+	keys, note := fitFooter(w, keys, []string{long, short}, lipgloss.Width(right))
+
+	left := "  " + Dim.Render(strings.Join(keys, "   "))
+	if note != "" {
+		right = Dim.Render(note) + "   " + right
 	}
 
 	pad := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
@@ -1252,6 +1379,34 @@ func (b Board) footer(w int) string {
 	}
 	return Dim.Render("  "+strings.Repeat("─", w-4)) + "\n" +
 		left + strings.Repeat(" ", pad) + right
+}
+
+// fitFooter seats the longest note it can, spending trailing keys down to
+// keyFloor to do it, and returns the pair that fit. No note fitting at all
+// leaves every key on the row, which is the honest rendering for a board with
+// no meta.json: there is nothing to say about its age.
+func fitFooter(w int, keys, notes []string, rightW int) ([]string, string) {
+	floor := keyFloor
+	if len(keys) < floor {
+		// A row already at or under the floor has nothing to spend, but it can
+		// still seat a note — the search prompt's three keys are the case, and
+		// without this the board went quiet about its own age while searching.
+		floor = len(keys)
+	}
+	for _, note := range notes {
+		if note == "" {
+			continue
+		}
+		for n := len(keys); n >= floor; n-- {
+			// The arithmetic the row itself uses: two cells of left margin, three
+			// between the note and the sync clause, and one gap in the middle.
+			left := 2 + lipgloss.Width(strings.Join(keys[:n], "   "))
+			if left+lipgloss.Width(note)+rightW+6 <= w {
+				return keys[:n], note
+			}
+		}
+	}
+	return keys, ""
 }
 
 func since(t time.Time) string {

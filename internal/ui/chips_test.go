@@ -161,17 +161,26 @@ func chipState() *engine.State {
 // rather than on Contains is the difference between "the chip is there" and
 // "nothing else is" — and the questionable case below is entirely about the
 // second.
+//
+// The next column differs by tab: the data tab's rows carry the team ("AAA" on
+// every fixture), the board tab's ranking rows go straight to the survival
+// percentage. Cut at whichever comes first.
 func chipsOn(row, name string) string {
 	i := strings.Index(row, name)
 	if i < 0 {
 		return ""
 	}
 	rest := row[i+len(name):]
-	if j := strings.Index(rest, "AAA"); j >= 0 { // every fixture's team column
+	if j := strings.Index(rest, "AAA"); j >= 0 {
 		rest = rest[:j]
+	}
+	if m := chipsEndRe.FindStringIndex(rest); m != nil {
+		rest = rest[:m[0]]
 	}
 	return strings.TrimSpace(rest)
 }
+
+var chipsEndRe = regexp.MustCompile(`\s\d+%`)
 
 // A flagged player wears his chip on both tabs; a questionable one wears
 // nothing at all. Both halves matter: the chip is only worth the name column it
@@ -185,18 +194,27 @@ func TestFlaggedPlayerRendersChipAndQuestionableDoesNot(t *testing.T) {
 		{"fake r2", ""}, // questionable
 		{"fake r3", "news 3h"},
 	}
-	for _, tab := range []int{0, 1} {
-		view := ansi.ReplaceAllString(
-			Board{State: chipState(), Width: 104, Height: 40, Tab: tab, Now: pinnedNow}.View(), "")
-		for _, c := range cases {
-			row := playerRow(view, c.id)
-			if row == "" {
-				t.Fatalf("tab %d: %s is not on screen", tab, c.id)
-			}
-			if got := chipsOn(row, c.id); got != c.want {
-				t.Errorf("tab %d: %s carries chips %q, want %q", tab, c.id, got, c.want)
-			}
+	view := ansi.ReplaceAllString(
+		Board{State: chipState(), Width: 104, Height: 40, Tab: 1, Now: pinnedNow}.View(), "")
+	for _, c := range cases {
+		row := playerRow(view, c.id)
+		if row == "" {
+			t.Fatalf("data tab: %s is not on screen", c.id)
 		}
+		if got := chipsOn(row, c.id); got != c.want {
+			t.Errorf("data tab: %s carries chips %q, want %q", c.id, got, c.want)
+		}
+	}
+	// The board tab shows one man per position, so only the flagged rb leader is
+	// on it — and he must carry the chip there too.
+	view = ansi.ReplaceAllString(
+		Board{State: chipState(), Width: 104, Height: 40, Now: pinnedNow}.View(), "")
+	row := playerRow(view, "fake r1")
+	if row == "" {
+		t.Fatalf("board tab: the flagged rb leader is not on screen")
+	}
+	if got := chipsOn(row, "fake r1"); got != "pup" {
+		t.Errorf("board tab: fake r1 carries chips %q, want %q", got, "pup")
 	}
 }
 
@@ -360,7 +378,7 @@ func TestStaleWarning(t *testing.T) {
 	if !strings.Contains(view, "stale — adp and injury flags are 31h old") {
 		t.Errorf("the live view should carry the stale line:\n%s", view)
 	}
-	if !strings.Contains(view, "best available") {
+	if !strings.Contains(view, "your roster") {
 		t.Error("staleness warns, never blocks — the board must still be there")
 	}
 }
@@ -390,7 +408,7 @@ func TestChipsDoNotChangeTheBoard(t *testing.T) {
 		b := ansi.ReplaceAllString(chipped.View(), "")
 
 		if tab == 0 {
-			if x, y := groupOrder(a), groupOrder(b); !reflect.DeepEqual(x, y) {
+			if x, y := choiceOrder(a), choiceOrder(b); !reflect.DeepEqual(x, y) {
 				t.Errorf("chips reordered the board: %v became %v", x, y)
 			}
 		}

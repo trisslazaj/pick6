@@ -19,6 +19,12 @@ func runLive(args []string) error {
 	poll := fs.Int("poll", 3, "seconds between polls (sleeper asks for 2-3+)")
 	replay := fs.Bool("replay", false, "load a finished draft once and print one frame (no tui)")
 	data := fs.Bool("data", false, "render the data tab instead of the board in replay mode")
+	// Matching board's, and here for the same reason -data landed here: the
+	// overlay's taken rows carry the pick that took a man, and a board with no
+	// picks in it cannot show one. A replayed draft is the only headless frame
+	// that can.
+	search := fs.String("search", "", "with -replay: open the search overlay on this query")
+	selected := fs.String("selected", "", "with -replay: select this query's best match, prompt closed")
 	room := roomFlag(fs)
 	width := fs.Int("width", 92, "board width for replay mode")
 	height := fs.Int("height", 40, "board height for replay mode")
@@ -107,10 +113,19 @@ func runLive(args []string) error {
 			}
 		}
 		fmt.Printf("replayed %d picks\n\n", len(snap.Picks))
+		// ModeLive, because a replay is the live board with the poll already
+		// finished: the frame you eyeball has to advertise the keys the live
+		// board binds, not the mock's.
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Fresh: loadFreshness()}
+			Mode: ui.ModeLive, Fresh: loadFreshness()}
 		if *data {
 			b.Tab = 1
+		}
+		if *search != "" {
+			b.Search = ui.Search{Open: true, Query: *search}
+		}
+		if *selected != "" {
+			b.SelectBest(*selected)
 		}
 		fmt.Println(b.View())
 		return nil

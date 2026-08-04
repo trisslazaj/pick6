@@ -70,10 +70,11 @@ func addDepth(add adder) {
 	add("tx7", "TE", 14, 32, 5, 5)
 }
 
-// runState is a board tuned so a scripted rb run genuinely moves the urgency
-// math: rb1 is an elite faller (tight sigma, gone by my next pick), rb2-5 are
-// the safety net the room is about to eat, and the wr tier goes so early that
-// waiting on receivers is expensive until it suddenly isn't.
+// runState is a board tuned so a scripted rb run genuinely moves the primary
+// key: before the run the receiver is the pick — his 100 leads the board and
+// the back depth behind rb1 means a back can be collected on the way home
+// (the pair wr-then-rb) — and after the room eats rb2-6, waiting on backs
+// buys nothing, so the last good back becomes the pick instead.
 //
 // wr1 and wr2 are a two-man tier 1 so that draining them leaves bestNow(wr) in
 // an untouched tier 2 — otherwise the opening frame carries a cliff banner and
@@ -82,15 +83,15 @@ func addDepth(add adder) {
 // behind.
 func runState() *engine.State {
 	players, add := newBoard()
-	add("rb1", "RB", 100, 4, 2, 1)
-	add("rb2", "RB", 98, 26, 4, 1)
-	add("rb3", "RB", 96, 30, 5, 1)
-	add("rb4", "RB", 94, 34, 5, 1)
-	add("rb5", "RB", 92, 38, 6, 1)
+	add("rb1", "RB", 95, 4, 2, 1)
+	add("rb2", "RB", 93, 26, 4, 1)
+	add("rb3", "RB", 92, 30, 5, 1)
+	add("rb4", "RB", 91, 34, 5, 1)
+	add("rb5", "RB", 90, 38, 6, 1)
 	add("rb6", "RB", 55, 60, 8, 2)
-	add("wr1", "WR", 95, 2, 2, 1)
-	add("wr2", "WR", 93, 3, 2, 1)
-	add("wr3", "WR", 90, 8, 3, 2)
+	add("wr1", "WR", 102, 2, 2, 1)
+	add("wr2", "WR", 101, 3, 2, 1)
+	add("wr3", "WR", 100, 8, 3, 2)
 	add("wr4", "WR", 88, 15, 4, 2)
 	add("wr5", "WR", 60, 45, 7, 2)
 	add("wr6", "WR", 58, 52, 7, 2)
@@ -190,57 +191,90 @@ func lookaheadState() *engine.State {
 
 // The scripted drafts the tests replay. Shared so the fixture guard below can
 // stand at exactly the vantages the assertions do.
+//
+// runPicks carries FIVE backs rather than the old four, because a run now has
+// to beat the market's own forecast for the window (engine.RunSurprise): with
+// rb1 and two depth backs among the next six by adp, the market already
+// expects three backs, so four-of-six is Tuesday and five is the run.
 var (
-	openingPicks = []string{"wr1", "wr2", "qb1"}                      // picks 1-3; pick 3 is mine
-	runPicks     = []string{"wr3", "rb2", "rb3", "wr4", "rb4", "rb5"} // picks 4-9: four backs
-	waitPicks    = []string{"r1", "wx3", "qx3"}                       // the leader goes, my turn slides out
+	openingPicks = []string{"wr1", "wr2", "qb1"}                             // picks 1-3; pick 3 is mine
+	runPicks     = []string{"wr3", "wr4", "rb2", "rb3", "rb4", "rb5", "rb6"} // picks 4-10: five backs in the window
+	waitPicks    = []string{"r1", "wx3", "qx3"}                              // the leader goes, my turn slides out
 )
 
-var topGroupRe = regexp.MustCompile(`▏ ([a-z]+)`)
+// choiceRowRe matches a ranking row on the board tab: the two-column edge
+// (blank, or the accent on the top row) then the position tag then the name.
+// The plan line sits at the same indent — "  plan  wr at 1.02 → …" — which is
+// why the tag is spelled out rather than [a-z]+.
+var choiceRowRe = regexp.MustCompile(`^(?:▏ |  )(qb|rb|wr|te|k|def) +\S`)
 
-// topGroup reads the urgency leader off the one visual cue that marks it: only
-// the top group's header starts with the ▏ accent.
-func topGroup(view string) string {
-	m := topGroupRe.FindStringSubmatch(view)
-	if m == nil {
-		return ""
+// verdictRe matches the on-clock verdict's first line: the accent edge, the
+// man's name, two spaces, then his position tag and uppercase team.
+var verdictRe = regexp.MustCompile(`▏ (.+?)  (qb|rb|wr|te|k|def) [A-Z]`)
+
+// leftPane cuts a frame line at the divider, leaving only the left pane's part.
+func leftPane(line string) string {
+	if i := strings.Index(line, "│"); i >= 0 {
+		return line[:i]
 	}
-	return m[1]
+	return line
 }
 
-// groupHeadRe matches a group header on the board tab: the two-column edge
-// (blank, or the accent on the top group) then the position tag then the
-// header's two spaces. Player rows are indented two further, and the sidebar
-// sits past the divider on the same lines, so neither can match.
-//
-// The tag is spelled out rather than [a-z]+ because the plan line sits at the
-// same indent in the same shape — "  plan  wr at 1.02 → …" — and matched as a
-// group called "plan", which put a position that does not exist at the head of
-// every order assertion.
-var groupHeadRe = regexp.MustCompile(`(?m)^(?:▏ |  )(qb|rb|wr|te|k|def)  \S`)
-
-// groupOrder reads the board tab's position groups in the order they render,
-// which is the order urgency put them in.
-func groupOrder(view string) []string {
+// choiceOrder reads the board tab's ranking rows in render order — the order
+// the primary key put them in. A market-dissent row carries the same tag as
+// the choice row above it, so positions can legitimately repeat; assertions on
+// order use fixtures without market rows, and say so.
+func choiceOrder(view string) []string {
 	var out []string
-	for _, m := range groupHeadRe.FindAllStringSubmatch(view, -1) {
-		out = append(out, m[1])
+	for _, line := range strings.Split(view, "\n") {
+		if m := choiceRowRe.FindStringSubmatch(leftPane(line)); m != nil {
+			out = append(out, m[1])
+		}
 	}
 	return out
 }
 
-// groupLine returns a position's group header off the board tab. Assertions
-// scope to it because the frame now legitimately carries "safe to wait" on
-// several groups at once, and a whole-frame Contains would pass on the wrong
-// one.
-func groupLine(view, pos string) string {
+// topChoice reads the ranking's leader off the one visual cue that marks it:
+// the ▏ accent, which off the clock sits on the top row and on the clock on
+// the verdict block.
+func topChoice(view string) string {
 	for _, line := range strings.Split(view, "\n") {
-		l := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "▏"))
-		// The data tab pads its position column wider, so require the tag to be
-		// followed by exactly the header's two spaces and then copy.
-		if strings.HasPrefix(l, pos+"  ") && !strings.HasPrefix(l, pos+"   ") {
-			return l
+		l := leftPane(line)
+		if !strings.Contains(l, "▏") {
+			continue
 		}
+		if m := choiceRowRe.FindStringSubmatch(l); m != nil {
+			return m[1]
+		}
+		if m := verdictRe.FindStringSubmatch(l); m != nil {
+			return m[2]
+		}
+	}
+	return ""
+}
+
+// verdictName reads the recommended man's name off the on-clock verdict block.
+func verdictName(view string) string {
+	for _, line := range strings.Split(view, "\n") {
+		if m := verdictRe.FindStringSubmatch(leftPane(line)); m != nil {
+			return strings.TrimSpace(m[1])
+		}
+	}
+	return ""
+}
+
+// rowLine returns a position's first ranking row off the board tab, edge and
+// tag stripped. Assertions scope to it because the frame legitimately carries
+// "safe" on several rows at once, and a whole-frame Contains would pass on the
+// wrong one.
+func rowLine(view, pos string) string {
+	for _, line := range strings.Split(view, "\n") {
+		l := leftPane(line)
+		m := choiceRowRe.FindStringSubmatch(l)
+		if m == nil || m[1] != pos {
+			continue
+		}
+		return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(l), "▏"))
 	}
 	return ""
 }
@@ -260,31 +294,6 @@ func planRow(view string) string {
 		return strings.TrimSpace(l)
 	}
 	return ""
-}
-
-// leadingBlanks counts the blank left-pane rows between the "best available"
-// section head and whatever renders first under it. groupBlock opens with one
-// blank of its own, so a planless pane reads 1 and a planned pane reads 0 — and
-// 2 means a row was reserved and left empty, which is the failure this is here
-// to name rather than the plan simply being absent.
-func leadingBlanks(view string) int {
-	n, found := 0, false
-	for _, line := range strings.Split(view, "\n") {
-		l := line
-		if i := strings.Index(l, "│"); i >= 0 {
-			l = l[:i] // the sidebar shares these lines; it is not the left pane
-		}
-		l = strings.TrimSpace(l)
-		if !found {
-			found = strings.HasPrefix(l, "best available")
-			continue
-		}
-		if l != "" {
-			break
-		}
-		n++
-	}
-	return n
 }
 
 // playerRow returns the first rendered row mentioning a player, on either tab.
@@ -373,11 +382,13 @@ func TestFixturesAreNotTiltClamped(t *testing.T) {
 	}
 }
 
-// The milestone 4 DoD: a scripted rb run flips the banner and re-sorts the
-// board. Frame A has receivers evaporating (wr on top, no banner, and waiting
-// on wr expressly not safe); six picks later four rbs are gone, the banner is
-// live, rb owns the board, and the wr group — its survivors now safe — has
-// collapsed to "safe to wait".
+// The milestone 4 DoD, restated for the primary key: a scripted rb run flips
+// the banner and re-sorts the board. Frame A has receivers evaporating — wr
+// leads the ranking, because taking the wr now and collecting a back on the
+// way home beats the reverse — and no banner. Seven picks later five backs are
+// gone, the banner is live, rb leads the ranking (its depth died, so the pair
+// score collapses for everyone who waits), and the wr row — its survivors now
+// deep and cheap — reads safe.
 func TestScriptedRunFlipsBannerAndResortsBoard(t *testing.T) {
 	s := runState()
 	for _, id := range openingPicks {
@@ -389,17 +400,14 @@ func TestScriptedRunFlipsBannerAndResortsBoard(t *testing.T) {
 	if strings.Contains(before, "run in progress") {
 		t.Fatalf("no run has happened yet, but the banner is up:\n%s", before)
 	}
-	// wr urgency 28: bestNow wr3 won't reach pick 22 and neither will wr4, so
-	// what is left of the position is a third less valuable. rb urgency 3: rb2-5
-	// back the fallen rb1 up four deep.
-	if got := topGroup(before); got != "wr" {
-		t.Errorf("before the run, top group = %q, want wr", got)
+	if got := topChoice(before); got != "wr" {
+		t.Errorf("before the run, top choice = %q, want wr", got)
 	}
-	if head := groupLine(before, "wr"); strings.Contains(head, "safe to wait") {
-		t.Errorf("receivers are evaporating; wr must not read safe, got %q", head)
+	if row := rowLine(before, "wr"); strings.Contains(row, "safe") {
+		t.Errorf("receivers are evaporating; wr must not read safe, got %q", row)
 	}
 
-	// picks 4-9: the room eats the safe mid rbs. four of the last six.
+	// picks 4-10: the room eats the mid rbs. five of the last six.
 	for _, id := range runPicks {
 		s.Draft(id)
 	}
@@ -408,21 +416,17 @@ func TestScriptedRunFlipsBannerAndResortsBoard(t *testing.T) {
 	if !strings.Contains(after, "rb run in progress") {
 		t.Errorf("expected the rb run banner, got:\n%s", after)
 	}
-	// rb urgency 45: only the doomed rb1 and tier-2 rb6 remain. wr urgency 0.06:
-	// its survivors are safe now, which is exactly why the board flips.
-	if got := topGroup(after); got != "rb" {
-		t.Errorf("after the run, top group = %q, want rb", got)
+	if got := topChoice(after); got != "rb" {
+		t.Errorf("after the run, top choice = %q, want rb", got)
 	}
-	// The safe marker rides on the man's own number now ("wr5 97% safe"), not on
-	// a bare tag, because the tag and the tier clause beside it were answers to
-	// different questions with nothing saying so. "% safe" is the whole claim.
-	if head := groupLine(after, "wr"); !strings.Contains(head, "% safe") {
-		t.Errorf("the collapsed wr group should call its best man safe, got %q", head)
+	if row := rowLine(after, "wr"); !strings.Contains(row, "safe") {
+		t.Errorf("the collapsed wr position should read safe, got %q", row)
 	}
 }
 
-// Cliff copy always beats the safe-to-wait tag: a tier that probably will not
-// reach me is not safe, whatever its best player's own odds look like.
+// Cliff copy always beats the safe tag: a tier that probably will not reach me
+// is not safe, whatever its best player's own odds look like. SafeToWait owns
+// that guard in the engine; this pins that the row renders it.
 //
 // Both halves of the transition are load-bearing under tier-hold. Draining the
 // leader is no longer enough to end a tier — what ends it is the men left being
@@ -432,23 +436,23 @@ func TestSafeToWaitYieldsToCliffCopy(t *testing.T) {
 	s := waitState()
 	b := Board{State: s, Width: 92, Height: 40}
 
-	head := groupLine(ansi.ReplaceAllString(b.View(), ""), "rb")
-	if !strings.Contains(head, "% safe") {
-		t.Errorf("an untouched tier of safe players should call its best man safe, got %q", head)
+	row := rowLine(ansi.ReplaceAllString(b.View(), ""), "rb")
+	if !strings.Contains(row, "safe") {
+		t.Errorf("an untouched tier of safe players should read safe, got %q", row)
 	}
-	if !strings.Contains(head, "3 left in tier 1 · holds") {
-		t.Errorf("the header should carry the count and the hold, got %q", head)
+	if !strings.Contains(row, "3 in tier 1") {
+		t.Errorf("the row should carry the tier count, got %q", row)
 	}
 
 	for _, id := range waitPicks {
 		s.Draft(id)
 	}
-	head = groupLine(ansi.ReplaceAllString(b.View(), ""), "rb")
-	if !strings.Contains(head, "ending") {
-		t.Errorf("an emptying tier should read as ending, got %q", head)
+	row = rowLine(ansi.ReplaceAllString(b.View(), ""), "rb")
+	if !strings.Contains(row, "ending") {
+		t.Errorf("an emptying tier should read as ending, got %q", row)
 	}
-	if strings.Contains(head, "safe to wait") {
-		t.Errorf("cliff copy must win over safe to wait, got %q", head)
+	if strings.Contains(row, "safe") {
+		t.Errorf("cliff copy must win over the safe tag, got %q", row)
 	}
 }
 
@@ -477,23 +481,22 @@ func TestCliffCopyMatchesTheRemainingCount(t *testing.T) {
 	b := Board{State: cliffState(), Width: 92, Height: 40}
 	view := ansi.ReplaceAllString(b.View(), "")
 
-	if head := groupLine(view, "rb"); !strings.Contains(head, "last one in tier 1") {
-		t.Errorf("one man left is still the last one, got %q", head)
+	if row := rowLine(view, "rb"); !strings.Contains(row, "last one in tier 1") {
+		t.Errorf("one man left is still the last one, got %q", row)
 	}
-	head := groupLine(view, "wr")
-	if !strings.Contains(head, "tier 1 unlikely to hold — holds") {
-		t.Errorf("two contested men should read as a tier unlikely to hold, got %q", head)
+	row := rowLine(view, "wr")
+	if !strings.Contains(row, "tier 1 unlikely to hold") {
+		t.Errorf("two contested men should read as a tier unlikely to hold, got %q", row)
 	}
-	if strings.Contains(head, "last one") {
-		t.Errorf("two players are not the last one, got %q", head)
+	if strings.Contains(row, "last one") {
+		t.Errorf("two players are not the last one, got %q", row)
 	}
 }
 
-// The banner and the group header describe the same tier in the same frame, so
-// they cannot disagree. "act now or lose it" is a claim about the tier holding,
-// and probability-driven cliff levels made runs onto tiers that will comfortably
-// keep routine: on the scripted mock, 21 of 41 run frames had the run position
-// tagged "safe to wait" while the banner shouted at the reader to act.
+// A run onto a tier that will comfortably keep draws NO banner: the banner is
+// gated on the run costing something, because probability-driven cliff levels
+// made harmless runs routine — on the scripted mock, 21 of 41 run frames had
+// the run position tagged safe while the banner shouted at the reader to act.
 //
 // A six-team board keeps the vantage short — slot 5 picks at 5 and 8, so two
 // picks intervene — and the two men in rb tier 1 sit thirty picks deep in adp,
@@ -516,15 +519,18 @@ func TestRunBannerDoesNotShoutAtATierThatHolds(t *testing.T) {
 	}
 	view := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
 
-	if !strings.Contains(view, "rb run in progress") {
-		t.Fatalf("fixture proves nothing without a run banner:\n%s", view)
+	if _, ok := s.DetectRun(); !ok {
+		t.Fatalf("fixture proves nothing unless the run is detected at all")
 	}
-	head := groupLine(view, "rb")
-	if !strings.Contains(head, "% safe") {
-		t.Fatalf("fixture proves nothing unless the header calls rb safe, got %q", head)
+	row := rowLine(view, "rb")
+	if !strings.Contains(row, "safe") {
+		t.Fatalf("fixture proves nothing unless the row calls rb safe, got %q", row)
 	}
-	if strings.Contains(view, "act now or lose it") {
-		t.Errorf("the tier holds and the header says so; the banner must not demand action:\n%s", view)
+	// A run whose tier will keep no longer gets a banner AT ALL — not a calmer
+	// wording. A banner is an interruption, the row already carries the hold,
+	// and the ticker already shows the run itself.
+	if strings.Contains(view, "run in progress") || strings.Contains(view, "act now") {
+		t.Errorf("the tier holds; the run must not banner:\n%s", view)
 	}
 }
 
@@ -553,9 +559,6 @@ func TestPlanLineNamesBothLegsByPick(t *testing.T) {
 		if got := planRow(view); got != legs {
 			t.Errorf("width %d: plan line = %q, want %q\n%s", w, got, legs, view)
 		}
-		if got := leadingBlanks(view); got != 0 {
-			t.Errorf("width %d: %d blank rows above the plan, want it directly under the head", w, got)
-		}
 	}
 
 	// Round 15 is my last pick of a 4-team draft, so there is no second leg to
@@ -569,8 +572,10 @@ func TestPlanLineNamesBothLegsByPick(t *testing.T) {
 	if got := planRow(view); got != "" {
 		t.Errorf("no second pick exists, but the board still plans: %q", got)
 	}
-	if got := leadingBlanks(view); got != 1 {
-		t.Errorf("%d blank rows under the section head, want the group separator alone", got)
+	// Pick 58 is my own last pick, so the verdict still renders — ranked on
+	// vor x need alone — with no plan line under it.
+	if got := verdictName(view); got == "" {
+		t.Errorf("my last pick is still a pick; the verdict should render:\n%s", view)
 	}
 }
 
@@ -675,26 +680,28 @@ func TestSurvivalColumnIsLiveOnTheClock(t *testing.T) {
 	if live["gone"] == live["here"] {
 		t.Fatalf("column is not separating a doomed player from a safe one: both render %s", live["gone"])
 	}
-	for _, tab := range []int{0, 1} {
-		view := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40, Tab: tab}.View(), "")
-		for _, id := range []string{"gone", "here"} {
-			row := playerRow(view, "fake "+id)
-			if !strings.Contains(row, live[id]) {
-				t.Errorf("tab %d: row %q should price survival to my next pick as %s", tab, row, live[id])
-			}
+	// The board tab shows one man per position now, and on the clock the rb
+	// leader is the VERDICT — his survival renders as the gone-clause, priced
+	// and labelled to the pick I next act at (2.10 from pick 3).
+	view := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
+	want := fmt.Sprintf("gone by 2.10 — %s", live["gone"])
+	if !strings.Contains(view, want) {
+		t.Errorf("board tab: the verdict should carry %q:\n%s", want, view)
+	}
+	view = ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40, Tab: 1}.View(), "")
+	for _, id := range []string{"gone", "here"} {
+		row := playerRow(view, "fake "+id)
+		if !strings.Contains(row, live[id]) {
+			t.Errorf("data tab: row %q should price survival to my next pick as %s", row, live[id])
 		}
 	}
 }
 
-// The zero-cost tie-break is need-weighted VOR, and the frame it decides is my
-// LAST pick of the draft: there is no next time I act, nothing can be taken from
-// me, and every position's cost of passing is exactly zero by construction.
-//
-// It used to decide every on-the-clock frame, because the sort key was Urgency
-// and Urgency is zero whenever no picks intervene. That stopped being true when
-// the sort moved to CostOfPassing, which prices to the pick AFTER this one and
-// is live while I am choosing. Vor's remaining job is the genuine tie — rare
-// mid-draft, total here — and this is the frame that still exercises it.
+// On my LAST pick of the draft there is no second leg to plan: PickChoices
+// degenerates to need-weighted VOR, which is the honest answer when nothing
+// can be taken from me and "what does he buy over replacement" is the only
+// question left. This is the frame that exercises that degeneration end to
+// end, verdict included.
 //
 // The fixture makes the two rules disagree outright. The tight end is the better
 // player (100 against 95) but he is one of a pair, so the man behind him is worth
@@ -731,12 +738,12 @@ func TestGroupOrderOnMyLastPickUsesVOR(t *testing.T) {
 	}
 
 	view := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
-	if got := groupOrder(view); len(got) < 2 || got[0] != "rb" || got[1] != "te" {
-		t.Errorf("group order = %v, want rb before te — the tie-break is vor, not value\n%s",
+	if got := topChoice(view); got != "rb" {
+		t.Errorf("the verdict is %q, want rb — on my last pick the key is vor, not value\n%s",
 			got, view)
 	}
-	if got := topGroup(view); got != "rb" {
-		t.Errorf("accent border on %q, want rb", got)
+	if got := verdictName(view); got != "fake rb1" {
+		t.Errorf("verdict names %q, want fake rb1", got)
 	}
 }
 
@@ -801,7 +808,10 @@ func TestEndgameLineFiresOnlyWhenEveryPickIsSpokenFor(t *testing.T) {
 	locked := ansi.ReplaceAllString(
 		Board{State: endgameBoard(147, []string{"QB", "RB", "RB", "WR", "WR", "TE"}),
 			Width: 92, Height: 40}.View(), "")
-	order := groupOrder(locked)
+	order := choiceOrder(locked)
+	if v := topChoice(locked); v != "" {
+		order = append(order, v) // the verdict's position is a rendered choice too
+	}
 	for _, pos := range order {
 		if pos == "qb" {
 			t.Errorf("qb still on the board with every pick spoken for: %v\n%s", order, locked)
@@ -860,7 +870,10 @@ func TestEndgameLineNamesTheStartersSuppressionIsHiding(t *testing.T) {
 		if !strings.Contains(view, c.wantLine) {
 			t.Errorf("%s: endgame line is not %q\n%s", c.name, c.wantLine, view)
 		}
-		order := groupOrder(view)
+		order := choiceOrder(view)
+		if v := topChoice(view); v != "" {
+			order = append(order, v)
+		}
 		for _, pos := range c.hidden {
 			for _, got := range order {
 				if got == pos {
@@ -982,12 +995,18 @@ func TestTightSidebarKeepsTheLineupAndCollapsesTheBench(t *testing.T) {
 // the k/def suppression is off and the group is on screen to contradict.
 func TestUntieredRunBannerDoesNotClaimTheValueIsGone(t *testing.T) {
 	players, add := newBoard()
+	// Defenses priced deep, with enough skill players ahead of them that the
+	// market's forecast for the window is all skill — four defenses in a row is
+	// then a genuine surprise and clears the RunSurprise gate.
 	for i := 1; i <= 10; i++ {
-		add(fmt.Sprintf("d%d", i), "DEF", 200-i, float64(70+i), 8, 0)
+		add(fmt.Sprintf("d%d", i), "DEF", 200-i, float64(90+i), 8, 0)
 	}
 	add("r1", "RB", 100, 60, 8, 1)
 	add("r2", "RB", 96, 62, 8, 1)
+	add("r3", "RB", 92, 64, 8, 1)
 	add("w1", "WR", 90, 61, 8, 1)
+	add("w2", "WR", 88, 63, 8, 1)
+	add("w3", "WR", 86, 65, 8, 1)
 	s := engine.New(players, 6, 15, 5)
 	s.PickNo = 73 // round 13 of 15: k and def are out of suppression
 	for i := 1; i <= 4; i++ {
@@ -1001,8 +1020,12 @@ func TestUntieredRunBannerDoesNotClaimTheValueIsGone(t *testing.T) {
 	if strings.Contains(view, "no value left") {
 		t.Errorf("six defenses are still available; the banner must not say the value is gone:\n%s", view)
 	}
-	if !strings.Contains(view, "def  untiered") {
-		t.Fatalf("fixture proves nothing unless the def group is on screen:\n%s", view)
+	// Six defenses remain, so the pane itself contradicts "no value left": the
+	// def row is right there, listing the best of them. It does NOT lead the
+	// pane — the defense curve is flat, so his vor is a rounding error, which
+	// is the replacement pricing working — but it must be visible.
+	if row := rowLine(view, "def"); !strings.Contains(row, "untiered") {
+		t.Fatalf("fixture proves nothing unless the def row is on screen, got %q:\n%s", row, view)
 	}
 }
 
@@ -1016,30 +1039,30 @@ func TestHoldClauseNamesItsHorizonOnlyOnTheClock(t *testing.T) {
 	s := cliffState()
 	s.PickNo = s.MyPick(2) // 2.10 from slot 3: on the clock, next chance is 3.03
 	view := ansi.ReplaceAllString(Board{State: s, Width: 100, Height: 40}.View(), "")
-	if head := groupLine(view, "wr"); !strings.Contains(head, "% to 3.03") {
-		t.Errorf("on the clock the hold must name the pick it is measured to, got %q", head)
+	// The wr cliff leads the ranking, so the hold clause renders on the verdict
+	// block — the one place on the clock with the width for its long form.
+	if got := topChoice(view); got != "wr" {
+		t.Fatalf("fixture drifted: verdict is %q, want the bleeding wr cliff", got)
+	}
+	if !strings.Contains(view, "% to 3.03") {
+		t.Errorf("on the clock the hold must name the pick it is measured to:\n%s", view)
 	}
 
 	s2 := cliffState() // pick 1: my next pick is the horizon and needs no label
 	view2 := ansi.ReplaceAllString(Board{State: s2, Width: 100, Height: 40}.View(), "")
-	head := groupLine(view2, "wr")
-	if !strings.Contains(head, "holds ") {
-		t.Fatalf("fixture proves nothing without a hold clause, got %q", head)
+	row := rowLine(view2, "wr")
+	if !strings.Contains(row, "unlikely to hold") {
+		t.Fatalf("fixture proves nothing without cliff copy, got %q", row)
 	}
-	if strings.Contains(head, "% to ") {
-		t.Errorf("off the clock the two horizons agree and the label is noise, got %q", head)
+	if strings.Contains(view2, "% to ") {
+		t.Errorf("off the clock the two horizons agree and the label is noise:\n%s", view2)
 	}
 }
 
-// The decision list is the on-the-clock left pane and appears on no other
-// frame. Off the clock the browse is the right shape and the list is noise; on
-// the clock it is the other way round, because every urgency is exactly zero,
-// twenty candidates are offered where one is wanted, and the number that ranks
-// them is not otherwise on screen.
-//
-// Ranked by cost of passing, which is what makes it a decision rather than a
-// second copy of the board: rb1 is doomed and expensive to lose, wr1 keeps.
-func TestDecisionListOnlyOnTheClock(t *testing.T) {
+// The verdict block is the on-the-clock left pane's lead and appears on no
+// other frame. Off the clock nothing can be taken, so a "take him" block would
+// be a recommendation about an action that does not exist.
+func TestVerdictOnlyOnTheClock(t *testing.T) {
 	build := func(pickNo int) *engine.State {
 		players, add := newBoard()
 		add("rb1", "RB", 100, 5, 2, 1) // gone by 22, and the drop behind him is steep
@@ -1053,25 +1076,20 @@ func TestDecisionListOnlyOnTheClock(t *testing.T) {
 	}
 
 	off := ansi.ReplaceAllString(Board{State: build(4), Width: 92, Height: 40}.View(), "")
-	if strings.Contains(off, "the pick — what passing costs") {
-		t.Errorf("the decision list must not render off the clock:\n%s", off)
+	if strings.Contains(off, "the pick — ") || verdictName(off) != "" {
+		t.Errorf("the verdict must not render off the clock:\n%s", off)
 	}
 
 	s := build(3)
 	if s.PicksUntilMine() != 0 {
 		t.Fatalf("fixture is not on the clock: %d picks until mine", s.PicksUntilMine())
 	}
-	if s.CostOfPassing("RB") <= s.CostOfPassing("WR") {
-		t.Fatalf("fixture proves nothing: rb %v does not outrank wr %v",
-			s.CostOfPassing("RB"), s.CostOfPassing("WR"))
-	}
 	on := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
-	if !strings.Contains(on, "the pick — what passing costs") {
-		t.Fatalf("the decision list should lead the pane on the clock:\n%s", on)
+	if !strings.Contains(on, "the pick — 1.03") {
+		t.Fatalf("the pane should lead with the pick on the clock:\n%s", on)
 	}
-	rbAt, wrAt := strings.Index(on, "fake rb1"), strings.Index(on, "fake wr1")
-	if rbAt < 0 || wrAt < 0 || rbAt > wrAt {
-		t.Errorf("decision list should rank rb1 above wr1 (rb at %d, wr at %d):\n%s", rbAt, wrAt, on)
+	if got := verdictName(on); got == "" {
+		t.Fatalf("no verdict on the clock:\n%s", on)
 	}
 }
 
@@ -1120,8 +1138,8 @@ func TestPaneSaysWhetherItIsForecastingOrDeciding(t *testing.T) {
 
 	s.PickNo = 4 // off the clock: slot 3 picks again at 22, which is 2.10
 	off := ansi.ReplaceAllString(Board{State: s, Width: 100, Height: 40}.View(), "")
-	if !strings.Contains(off, "before 2.10") || !strings.Contains(off, "stand to lose") {
-		t.Errorf("off the clock the pane should name its horizon and framing:\n%s", off)
+	if !strings.Contains(off, "before you pick at 2.10 — 18 picks") {
+		t.Errorf("off the clock the pane should name its horizon and distance:\n%s", off)
 	}
 	if strings.Contains(off, "the pick — ") {
 		t.Errorf("off the clock the pane must not lead with a decision:\n%s", off)
@@ -1129,10 +1147,10 @@ func TestPaneSaysWhetherItIsForecastingOrDeciding(t *testing.T) {
 
 	s.PickNo = 3 // on the clock
 	on := ansi.ReplaceAllString(Board{State: s, Width: 100, Height: 40}.View(), "")
-	if !strings.Contains(on, "the pick — ") {
+	if !strings.Contains(on, "the pick — 1.03") {
 		t.Errorf("on the clock the pane should lead with the decision:\n%s", on)
 	}
-	if strings.Contains(on, "stand to lose") {
+	if strings.Contains(on, "before you pick") {
 		t.Errorf("on the clock the pane must not also forecast:\n%s", on)
 	}
 }
@@ -1165,6 +1183,38 @@ func TestSurvivalBandsAgreeAcrossTabs(t *testing.T) {
 			if !strings.Contains(view, want) {
 				t.Errorf("tab %d: %s should carry the banded survival %q", tab, id, want)
 			}
+		}
+	}
+}
+
+// A ten-slot lineup — two flex, which this user's 2025 league really ran — has
+// more unfilled starters in round 1 than a 34-cell sidebar can print. It counts
+// the overflow instead of wrapping: a lone "def" on its own row reads as a
+// rendering fault, and since the list shrinks with every pick you make, this is
+// a first-few-picks state and never an endgame one.
+func TestNeedLineCountsWhatItCannotFit(t *testing.T) {
+	for _, w := range []int{MinWidth, 92, 100, MaxWidth} {
+		s := runState()
+		s.SetRoster(engine.Roster{
+			Slots: []string{"QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "FLEX", "K", "DEF"},
+			Bench: 6,
+		})
+		view := ansi.ReplaceAllString(Board{State: s, Width: w, Height: 40}.View(), "")
+		need := ""
+		for _, line := range strings.Split(view, "\n") {
+			if strings.Contains(line, "need ") {
+				need = line
+			}
+			if got := len([]rune(line)); got > w {
+				t.Errorf("width %d: a frame row is %d cells: %q", w, got, line)
+			}
+		}
+		if need == "" {
+			t.Fatalf("width %d: no need line in the frame", w)
+		}
+		// Whatever it dropped, it still opens with the slots in lineup order.
+		if !strings.Contains(need, "qb rb rb wr wr te") {
+			t.Errorf("width %d: need line lost its head: %q", w, need)
 		}
 	}
 }

@@ -141,7 +141,7 @@ func TestLiveSurvivesPollErrors(t *testing.T) {
 	if len(s.Picks) != 1 {
 		t.Error("the previously applied pick should survive a failed poll")
 	}
-	if !strings.Contains(m.View(), "best available") {
+	if !strings.Contains(m.View(), "your roster") {
 		t.Error("the last good board should stay on screen")
 	}
 

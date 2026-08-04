@@ -33,7 +33,7 @@ type pollMsg struct {
 // NewLiveModel builds the live board.
 func NewLiveModel(s *engine.State, feed sleeper.Feed, pollSeconds int, once bool) LiveModel {
 	return LiveModel{
-		board:    Board{State: s, Width: 92, Height: 32},
+		board:    Board{State: s, Width: 92, Height: 32, Mode: ModeLive},
 		feed:     feed,
 		interval: time.Duration(pollSeconds) * time.Second,
 		once:     once,

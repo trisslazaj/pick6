@@ -4,9 +4,41 @@ Terminal war room for fantasy football drafts. Live-syncs Sleeper, tracks tiers,
 
 ## status
 
-Milestone 4 of 6. The board renders, live-syncs a Sleeper draft, and thinks: survival
-probability, urgency ordering, cliff and run alerts are all live. Left: polish + release,
-then the opponent-aware simulation.
+Milestone 5 of 6. Every subcommand is built: the board renders, live-syncs a Sleeper draft,
+runs offline off hand-typed picks, and thinks — survival probability, urgency ordering,
+replacement level, cliff and run alerts. Left is the opponent-aware simulation (milestone 6).
+
+```
+  round 3  pick 3.03  overall 27                              on the clock you   your pick
+  ────────────────────────────────────────────────────────────────────────────────────────
+   cliff  rb tier 3 — last one. take him or lose the tier.
+the pick — 3.03 ───────────────────────────────────     │  your roster ────────────────────
+                                                        │    qb    —
+▏ jeremiyah love  rb ARI                                │    rb    josh jacobs  bye 11
+▏ at price · room ~29 · gone by 4.10 — 1%               │    rb    —
+▏ last one in tier 3 · fills your rb slot               │    wr    ja'marr chase  bye 6
+                                                        │    wr    —
+  plan  rb at 3.03 → wr at 4.10                         │    te    —
+                                                        │    flex  —
+  if not him — ranked by what the pick is worth         │    k     —
+  wr  malik nabers         10% 10 early                 │    def   —
+  wr  a.j. brown            0% market's pick · fell 9   │
+  te  tyler warren         83% 26 early · 2 in tier 2   │    need  qb rb wr te flex k def
+  te  colston loveland     46% market's pick · 15 early │    up    3.03, then 4.10
+  qb  lamar jackson         9% 4 early · 2 in tier 2    │    then  4 picks to 5.03
+                                                        │
+                                                        │  recent picks ───────────────────
+                                                        │       3.02 qb  josh allen
+                                                        │       3.01 wr  drake london
+                                                        │       2.12 wr  george pickens
+                                                        │       2.11 rb  kyren williams
+                                                        │  ▌you 2.10 rb  josh jacobs
+  ────────────────────────────────────────────────────────────────────────────────────────
+  space step   / search   tab data   u undo     adp 17h old · 1,454 drafts   synced 0s ago
+```
+
+In colour, every position wears Sleeper's own hue and the survival column bands green /
+amber / red — this is `pick6 mock -snapshot 26` with the escapes stripped.
 
 ## install
 
@@ -21,6 +53,10 @@ PATH by default. Either add it, or install somewhere that already is:
 GOBIN=$HOME/bin go install ./cmd/pick6
 ```
 
+No Go toolchain? Every tagged release carries prebuilt darwin and linux binaries
+on the [releases page](https://github.com/trisslazaj/pick6/releases); `pick6 version`
+says which build you're on.
+
 Working on the code instead? `go run ./cmd/pick6 <cmd>` always runs current
 source, with nothing to reinstall.
 
@@ -29,15 +65,23 @@ source, with nothing to reinstall.
 ```
 pick6 fetch                  # pull data (do this first)
 pick6 live <draft_id> -user yourname   # the main event: sync a live sleeper draft
+pick6 board                  # same board, no feed: you type the picks as they happen
 pick6 mock                   # watch a scripted draft play out on the real board
 pick6 mock -auto=false       # step through it yourself with space
 pick6 tiers                  # print the current tier board
 pick6 mock -snapshot 26      # print one frame, no tui (for screenshots)
 ```
 
+`pick6 board` is the offline path: no draft id, no polling, no Sleeper. Find a player with
+`/`, mark him gone with `x`, take it back with `u`. Everything downstream is identical —
+the engine never asks where a pick came from — so it's also the way to run this against an
+in-person draft, or any platform with no API.
+
 In the TUI, `tab` flips between the board and a full data table — every available player with
 value, tier, ADP, spread, survival and format spread on one screen (`j/k` scrolls, `p` filters
-by position). The board abstracts; the table doesn't.
+by position). The board abstracts; the table doesn't. `/` searches from either tab: type a name
+or a team code, and taken players stay in the results with the pick that took them, because
+"is he gone?" is the same question.
 
 ```
 go run ./cmd/pick6 fetch

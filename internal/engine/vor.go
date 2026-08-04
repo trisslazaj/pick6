@@ -11,17 +11,29 @@ import "sort"
 // same number while buying completely different things, because behind the
 // receiver sit sixty more and behind the tight end sit two.
 //
-//	D_P  = how many players at position P this league drafts in one draft
+//	D_P  = how deep the position's replacement level sits (see the rule below)
 //	R(P) = the value of the D_P-th best P on the pre-draft board
 //	vor  = max(0, v(j) - R(pos_j))
 //
-// D_P is measured from this room's own completed drafts, not assumed: qb 19,
-// rb 58, wr 67, te 17, k 12, def 12 (median over the three cached drafts —
-// adp.PositionDemand computes it, the cmd layer hands it in, `pick6 fetch`
-// prints it).
+// D_P is NOT one measurement for every position, and the split is the point:
 //
-// On the shipped 2026 board that gives replacement levels of qb 314, te 182,
-// wr 10 and rb 0 — the room drafts 58 backs while only 51 carry a value at all,
+//   - A flex-eligible position (RB/WR/TE, plus QB under a superflex) indexes at
+//     the room's own measured draft demand — qb 19, rb 58, wr 67, te 17 over the
+//     three cached drafts (adp.PositionDemand; the cmd layer hands it in). A
+//     bench back or receiver genuinely converts to lineup points all season —
+//     flex, byes, injuries — so the man you'd have settled for really is the
+//     last one this room rosters.
+//
+//   - A position that cannot reach a lineup through flex (QB in a 1QB league,
+//     K, DEF) indexes at STARTABLE slots: teams x dedicated slots. A bench arm
+//     in a 1QB league scores zero by construction, so the settle-for man is the
+//     worst STARTER (qb12, ~1173 on the 2026 board), not the 19th quarterback
+//     somebody benched (~243). Indexing on drafted counts there handed
+//     quarterbacks a ~930-point vor subsidy and was how the board kept arguing
+//     for early QBs.
+//
+// On the shipped 2026 board that gives replacement levels of qb 1173, te 128,
+// wr 10 and rb 0 — the room drafts 58 backs while only 53 carry a value at all,
 // so replacement at running back is off the bottom of the board and a back's vor
 // is his whole value. That spread is the entire content of this: the shallow
 // positions' headline numbers overstate what taking one early really wins you,
@@ -59,6 +71,12 @@ func (s *State) Replacement(pos string) float64 {
 	return float64(vals[d-1])
 }
 
+// ReplacementIndex is the depth Replacement actually indexed at, exported so
+// `pick6 fetch` can name the settle-for player at the same depth the engine
+// priced him — a printout that re-derived the index would drift the first time
+// the rule changed, which is exactly what happened to it once.
+func (s *State) ReplacementIndex(pos string) int { return s.demandAt(pos) }
+
 // VOR is value over replacement for one player, floored at zero — a player below
 // replacement is not worth negative points, he is worth nothing, and letting the
 // number go negative would sort a position BELOW an empty one.
@@ -69,22 +87,49 @@ func (s *State) VOR(p Player) float64 {
 	return 0
 }
 
-// demandAt is D_P: how many players at a position come off the board in one of
-// this league's drafts. The measured table is handed in through State.Demand by
-// the cmd layer, which is the only place that can read the cached drafts — the
-// engine does no i/o.
+// demandAt is D_P, under the two-index rule the package comment explains: a
+// position whose bench bodies can score (it can reach a lineup through a flex
+// slot) indexes at the room's measured draft demand; one whose bench bodies
+// cannot (QB in 1QB, K, DEF) indexes at startable slots, however many the room
+// drafts. The measured table is handed in through State.Demand by the cmd
+// layer, which is the only place that can read the cached drafts — the engine
+// does no i/o.
 //
-// The fallback is the league's own SHAPE rather than an invented constant, so a
-// board running without the draft cache is still ranked against something real:
-// every team's dedicated slots at the position, plus an equal share of each flex
-// slot the position is eligible for. It is a floor and not an equal — the default
-// 12-team shape gives rb 28 against a measured 58, because rooms hoard backs on
-// the bench and a lineup says nothing about benches. `pick6 fetch` prints which
-// of the two is in play.
+// The rule reads the ROSTER, not a position list, so a superflex league flips
+// QB to the measured index by itself — there a second quarterback genuinely
+// starts, and his settle-for man really is deep.
+//
+// The startable arithmetic doubles as the fallback when no demand table was
+// measured at all: every team's dedicated slots at the position, plus an equal
+// share of each flex slot the position is eligible for. For a flex position it
+// is then a floor and not an estimate — the default 12-team shape gives rb 28
+// against a measured 58, because rooms hoard backs on the bench and a lineup
+// says nothing about benches. `pick6 fetch` prints which index is in play.
 func (s *State) demandAt(pos string) int {
-	if d := s.Demand[pos]; d > 0 {
-		return d
+	if s.canReachFlex(pos) {
+		if d := s.Demand[pos]; d > 0 {
+			return d
+		}
 	}
+	return s.startable(pos)
+}
+
+// canReachFlex reports whether a position has any route into a lineup beyond
+// its dedicated slots — the question that decides which replacement index it
+// gets.
+func (s *State) canReachFlex(pos string) bool {
+	for _, slot := range s.Roster.Slots {
+		if isFlexSlot(slot) && EligibleFor(slot, pos) {
+			return true
+		}
+	}
+	return false
+}
+
+// startable counts the lineup slots a position can fill across the league:
+// dedicated slots at every team, plus an equal share of each flex slot it is
+// eligible for.
+func (s *State) startable(pos string) int {
 	n := 0
 	for _, slot := range s.Roster.Slots {
 		switch {

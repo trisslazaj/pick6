@@ -24,6 +24,22 @@ const survGoneBand = 0.15
 // HandleKey consumes tab-switching and data-tab keys shared by both models.
 // Returns false when the key isn't ours, so the caller's own bindings run.
 func (b *Board) HandleKey(key string) bool {
+	// The prompt eats everything while it is up, so a name with a p or a j in
+	// it types instead of cycling the filter. See searchKey.
+	if b.Search.Open {
+		return b.searchKey(key)
+	}
+	if key == "/" {
+		b.Search = Search{Open: true}
+		return true
+	}
+	// esc clears the selection before it means quit. Both models still bind q
+	// and ctrl+c unconditionally, so there is always a way out that does not
+	// depend on what is on screen.
+	if key == "esc" && b.Selected != "" {
+		b.Selected = ""
+		return true
+	}
 	if key == "tab" {
 		b.Tab = 1 - b.Tab
 		return true

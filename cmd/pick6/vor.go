@@ -81,11 +81,15 @@ func printReplacement(players map[string]*adp.Player) {
 	}
 
 	fmt.Printf("\nvor baseline — replacement level per position, from %s:\n", source)
-	fmt.Printf("  %-5s %5s %6s %8s  %s\n",
-		"pos", "d_p", "valued", "r(pos)", "the player you'd have settled for")
+	fmt.Printf("  %-5s %8s %6s %8s  %s\n",
+		"pos", "depth", "valued", "r(pos)", "the player you'd have settled for")
 	for _, pos := range []string{"QB", "RB", "WR", "TE", "K", "DEF"} {
 		g := byPos[pos]
-		d, r := demand[pos], s.Replacement(pos)
+		// The depth the ENGINE indexed at, not the raw measured count: a position
+		// whose bench cannot score (qb in a 1qb league, k, def) prices replacement
+		// at startable slots however many the room drafts, and a printout indexing
+		// by the measured count would name a player the engine never priced.
+		d, r := s.ReplacementIndex(pos), s.Replacement(pos)
 		who := fmt.Sprintf("nobody — the board values only %d, so replacement is free", len(g))
 		if len(g) >= d && d > 0 {
 			at := g[d-1]
@@ -98,16 +102,21 @@ func printReplacement(players map[string]*adp.Player) {
 			}
 		}
 		depth := dash(d)
-		if d == 0 {
+		switch {
+		case demand[pos] == 0:
 			// No cached draft reached the position, so State.Demand has no entry
 			// and the engine used its lineup-shape fallback for this row.
 			depth = "shape"
+		case d != demand[pos]:
+			// The two-index rule overrode the measurement: bench bodies at this
+			// position score nothing, so replacement sits at the worst starter.
+			depth = fmt.Sprintf("%d st", d)
 		}
-		fmt.Printf("  %-5s %5s %6d %8.0f  %s\n", strings.ToLower(pos), depth, len(g), r, who)
+		fmt.Printf("  %-5s %8s %6d %8.0f  %s\n", strings.ToLower(pos), depth, len(g), r, who)
 	}
-	fmt.Println("  d_p is the median count of the position taken per draft; r(pos) is the value of")
-	fmt.Println("  the d_p-th best one on the pre-draft board. the board's zero-urgency tie-break —")
-	fmt.Println("  the frame where you are on the clock — ranks positions by (value - r) x need.")
+	fmt.Println("  depth is how deep replacement sits: the room's median drafted count where bench")
+	fmt.Println("  bodies can score (rb/wr/te), startable slots where they cannot (qb/k/def, marked")
+	fmt.Println("  \"st\"). r(pos) is the value of the depth-th best one on the pre-draft board.")
 }
 
 // printKDefValues shows what the k/def anchor produced, because a synthesized

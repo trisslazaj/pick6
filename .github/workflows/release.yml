@@ -1,0 +1,51 @@
+name: release
+
+# Tag and push, and this cuts the release:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# `go install github.com/trisslazaj/pick6/cmd/pick6@latest` needs nothing from
+# this workflow — the module proxy serves tags on its own. The archives are for
+# people who would rather not have a go toolchain, which at a draft party is
+# most of them.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # required to create the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # A tag that fails its own tests is worse than no tag: the module proxy
+      # caches it forever and `@latest` starts pointing at it immediately.
+      - run: go test ./...
+
+      # Pure go, no cgo, so every target cross-compiles from one runner and a
+      # build matrix would only buy slower feedback.
+      - name: build
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+            os="${target%/*}"; arch="${target#*/}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+              -o dist/pick6 ./cmd/pick6
+            tar -czf "dist/pick6_${GITHUB_REF_NAME}_${os}_${arch}.tar.gz" \
+              -C dist pick6 -C .. README.md LICENSE
+            rm dist/pick6
+          done
+          cd dist && shasum -a 256 *.tar.gz > checksums.txt
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes

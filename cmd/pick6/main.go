@@ -6,6 +6,10 @@ import (
 	"os"
 )
 
+// version is stamped by the release workflow's -ldflags. A build from source
+// says "dev", which is the honest answer for one.
+var version = "dev"
+
 const usage = `pick6 — terminal draft war room
 
 usage:
@@ -15,7 +19,8 @@ usage:
   pick6 live        poll a sleeper draft and render the board
   pick6 calibrate   score the survival model against drafts that already happened
   pick6 scout       profile your leaguemates from every draft they've played
-  pick6 board       static best-available board, manual mark-taken (not built yet)
+  pick6 board       the same board with no feed: mark picks by hand as they happen
+  pick6 version     what build this is
 `
 
 func main() {
@@ -56,24 +61,17 @@ func main() {
 			os.Exit(1)
 		}
 	case "board":
-		fmt.Fprintf(os.Stderr, "%s isn't built yet — milestone %s\n", os.Args[1], milestoneOf(os.Args[1]))
-		os.Exit(1)
+		if err := runBoard(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "board failed: %v\n", err)
+			os.Exit(1)
+		}
+	case "version", "-v", "--version":
+		fmt.Printf("pick6 %s\n", version)
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s", os.Args[1], usage)
 		os.Exit(2)
-	}
-}
-
-func milestoneOf(cmd string) string {
-	switch cmd {
-	case "mock":
-		return "2"
-	case "live":
-		return "3"
-	default:
-		return "5"
 	}
 }
 
