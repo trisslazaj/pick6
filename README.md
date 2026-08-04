@@ -1,4 +1,6 @@
-<img src="docs/mascot.svg" width="96" alt="a pixel football with little legs">
+<p align="center">
+  <img src="docs/mascot.svg" width="112" alt="a pixel football with little legs">
+</p>
 
 # pick6
 
