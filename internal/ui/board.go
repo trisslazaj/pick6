@@ -537,10 +537,15 @@ func (b Board) bestAvailable(w int) string {
 	sb.WriteString(b.planLine(w))
 	sb.WriteString(b.endgameLine(w))
 
-	// On the clock the pane leads with the decision rather than the browse, and
-	// the groups below shrink by exactly what it spends.
-	list, listRows := b.decisionList(w)
-	sb.WriteString(list)
+	// The pane always says what it is showing and when. On the clock that is the
+	// decision; off it, the forecast the same ordering actually represents.
+	// Exactly one of the two ever returns anything, and the groups below shrink
+	// by whatever it spends.
+	lead, listRows := b.decisionList(w)
+	if lead == "" {
+		lead, listRows = b.forecastCaption(w)
+	}
+	sb.WriteString(lead)
 
 	depth := b.depth(len(groups), listRows)
 	for gi, g := range groups {
@@ -649,8 +654,21 @@ func (b Board) decisionList(w int) (string, int) {
 		cap = short
 	}
 
+	// Column headers, because without them the two right-hand columns are a bare
+	// integer and an arrow. "8 → same" is not self-describing at any width, and
+	// AT THE TURN it is worse than that: the caption swaps to the back-to-back
+	// wording, which is the only other place the columns were ever named, so the
+	// numbers lose their last explanation on the exact frame where they are
+	// degenerate. `cost` is in board value units — bijan is ~10465 at rank 1 —
+	// and `instead` reads "same" when the man you would settle for is him.
+	head := fmt.Sprintf("  %-4s %-*s %4s %6s", "pos", nameW, "player", "surv", "cost")
+	if showInstead {
+		head += "  " + trunc("instead", insteadW)
+	}
+
 	var sb strings.Builder
 	sb.WriteString("\n  " + Dim.Render(cap) + "\n")
+	sb.WriteString(Dim.Render(head) + "\n")
 	for _, r := range rows {
 		style := Pos(r.pos, false)
 		line := fmt.Sprintf("  %s %s %s %s",
@@ -663,7 +681,7 @@ func (b Board) decisionList(w int) (string, int) {
 		}
 		sb.WriteString(line + "\n")
 	}
-	return sb.String(), len(rows) + 2
+	return sb.String(), len(rows) + 3
 }
 
 // planCopy is the two-pick lookahead in words: which position to take with my
@@ -825,6 +843,61 @@ func (b Board) tierLabel(pos string) (long, short string, style lipgloss.Style) 
 // about the tier, and the two percentages differing is the whole point rather
 // than a glitch. The green "safe" survives as a suffix on his number, where its
 // subject is unambiguous.
+// survStyle bands a survival probability, and BOTH TABS read it so they cannot
+// drift apart about the same player.
+//
+// The board tab used to render this column dim unless the man was falling. That
+// is backwards for the frame it spends most of its life on: off the clock,
+// twenty minutes to read, "will he still be here when I pick" is the entire
+// question, and the answer to it was the one number on the row with no colour.
+// You had to parse eleven of them where you should be able to glance at one.
+func (b Board) survStyle(p engine.Player) lipgloss.Style {
+	surv := b.State.PSurviveTilted(p)
+	switch {
+	case b.State.Falling(p):
+		return Run
+	case surv >= engine.SurviveThreshold:
+		return Wait
+	case surv < survGoneBand:
+		return Cliff
+	default:
+		return Dim
+	}
+}
+
+// forecastCaption is the off-clock counterpart to decisionList's, and it exists
+// because the pane never said what it was showing or when.
+//
+// Off the clock the ordering is a FORECAST, not a recommendation: "te 990" at
+// 2.08 means expect to lose 990 of tight-end value before you pick, which is
+// anticipation expressed as a number. Rendered as an unlabelled ranking with the
+// leader wearing an accent border, it reads as "take this" on the one frame
+// where you cannot take anything — which is exactly how it was read.
+//
+// The number was never the problem. Not naming the horizon was.
+func (b Board) forecastCaption(w int) (string, int) {
+	s := b.State
+	if s.Done() || s.PicksUntilMine() <= 0 {
+		return "", 0
+	}
+	n := s.PicksUntilMine()
+	noun := "picks"
+	if n == 1 {
+		noun = "pick"
+	}
+	long := fmt.Sprintf("before you pick at %s — %d %s · ordered by what you stand to lose",
+		b.pickLabel(s.NextPick()), n, noun)
+	cap := long
+	if lipgloss.Width(cap)+2 > w-2 {
+		cap = fmt.Sprintf("before %s — %d %s · what you stand to lose",
+			b.pickLabel(s.NextPick()), n, noun)
+	}
+	if lipgloss.Width(cap)+2 > w-2 {
+		cap = fmt.Sprintf("before %s — what you stand to lose", b.pickLabel(s.NextPick()))
+	}
+	return "\n  " + Dim.Render(cap) + "\n", 2
+}
+
 func (b Board) manNote(pos string) (string, lipgloss.Style) {
 	now, ok := b.State.BestNow(pos)
 	if !ok {
@@ -930,14 +1003,13 @@ func (b Board) playerLine(p engine.Player, style lipgloss.Style, w int) string {
 		numStyle = Run
 	}
 	meta := numStyle.Render(fmt.Sprintf("%-4s adp %5.1f", p.Team, p.ADP))
+	surv := b.survStyle(p).Render(fmt.Sprintf("%3.0f%%", 100*b.State.PSurviveTilted(p)))
 	// Chance he's still there at my next pick. The number the whole board runs
 	// on, so show it rather than asking anyone to trust the ordering blind —
 	// and specifically the TILTED one, the same probability urgency, tier-hold
 	// and the safe tag consume. One truth: a raw survival on screen next to an
 	// ordering computed from the corrected one leaves nobody able to tell which
 	// number the board actually believed.
-	surv := numStyle.Render(fmt.Sprintf("%3.0f%%", 100*b.State.PSurviveTilted(p)))
-
 	if w < nameW+26 { // no room for the bye column
 		return fmt.Sprintf("%s %s %s", name, meta, surv)
 	}

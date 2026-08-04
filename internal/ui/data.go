@@ -236,17 +236,12 @@ func (b Board) dataRow(p engine.Player, nameW int) string {
 
 	// The tilted survival, same as the board tab's column: two panes quoting
 	// different odds on the same player is the one failure this table cannot
-	// afford, since reading the numbers is its entire job.
+	// afford, since reading the numbers is its entire job. The BANDS come from
+	// the same place too — they used to be written out here and dim-unless-
+	// falling over on the board tab, which is how the board tab spent its whole
+	// life rendering the answer to its own question in grey.
 	surv := s.PSurviveTilted(p)
-	survStyle := Dim
-	switch {
-	case s.Falling(p):
-		survStyle = Run
-	case surv >= engine.SurviveThreshold:
-		survStyle = Wait
-	case surv < survGoneBand:
-		survStyle = Cliff
-	}
+	survStyle := b.survStyle(p)
 
 	tier := "  — "
 	if p.Tier > 0 {
