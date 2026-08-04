@@ -43,7 +43,11 @@ jobs:
               -C dist pick6 -C .. README.md LICENSE
             rm dist/pick6
           done
-          cd dist && shasum -a 256 *.tar.gz > checksums.txt
+          # sha256sum, not shasum: the runner is linux, so coreutils is
+          # guaranteed and perl only very probably is. This step runs after the
+          # tests have passed and after the tag exists, which is the worst place
+          # in the pipeline to discover a missing binary.
+          cd dist && sha256sum *.tar.gz > checksums.txt
 
       - name: publish
         env:
