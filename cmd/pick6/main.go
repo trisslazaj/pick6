@@ -4,11 +4,33 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/debug"
 )
 
-// version is stamped by the release workflow's -ldflags. A build from source
-// says "dev", which is the honest answer for one.
+// version is stamped by the release workflow's -ldflags, which only the
+// prebuilt archives get.
 var version = "dev"
+
+// buildVersion is what `pick6 version` actually prints, and the fallback is the
+// point of it: the readme leads with `go install ...@latest`, which compiles
+// from source on the user's own machine with no ldflags anywhere, so every
+// installation down that path called itself "dev" — including the one that had
+// just fetched a tagged release. go records the module version it built from,
+// so ask it.
+//
+// "(devel)" is what that field says for a plain `go build` in a checkout, which
+// is a build with no version rather than a version called "(devel)".
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if v := info.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return version
+}
 
 const usage = `pick6 — terminal draft war room
 
@@ -66,7 +88,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "version", "-v", "--version":
-		fmt.Printf("pick6 %s\n", version)
+		fmt.Printf("pick6 %s\n", buildVersion())
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
