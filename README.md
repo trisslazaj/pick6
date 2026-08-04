@@ -1,3 +1,5 @@
+<img src="docs/mascot.svg" width="96" alt="a pixel football with little legs">
+
 # pick6
 
 Terminal war room for fantasy football drafts. Live-syncs Sleeper, tracks tiers, and tells you when the RB run means the value's gone.
@@ -8,37 +10,13 @@ Milestone 5 of 6. Every subcommand is built: the board renders, live-syncs a Sle
 runs offline off hand-typed picks, and thinks — survival probability, urgency ordering,
 replacement level, cliff and run alerts. Left is the opponent-aware simulation (milestone 6).
 
-```
-  round 3  pick 3.03  overall 27                              on the clock you   your pick
-  ────────────────────────────────────────────────────────────────────────────────────────
-   cliff  rb tier 3 — last one. take him or lose the tier.
-the pick — 3.03 ───────────────────────────────────     │  your roster ────────────────────
-                                                        │    qb    —
-▏ jeremiyah love  rb ARI                                │    rb    josh jacobs  bye 11
-▏ at price · room ~29 · gone by 4.10 — 1%               │    rb    —
-▏ last one in tier 3 · fills your rb slot               │    wr    ja'marr chase  bye 6
-                                                        │    wr    —
-  plan  rb at 3.03 → wr at 4.10                         │    te    —
-                                                        │    flex  —
-  if not him — ranked by what the pick is worth         │    k     —
-  wr  malik nabers         10% 10 early                 │    def   —
-  wr  a.j. brown            0% market's pick · fell 9   │
-  te  tyler warren         83% 26 early · 2 in tier 2   │    need  qb rb wr te flex k def
-  te  colston loveland     46% market's pick · 15 early │    up    3.03, then 4.10
-  qb  lamar jackson         9% 4 early · 2 in tier 2    │    then  4 picks to 5.03
-                                                        │
-                                                        │  recent picks ───────────────────
-                                                        │       3.02 qb  josh allen
-                                                        │       3.01 wr  drake london
-                                                        │       2.12 wr  george pickens
-                                                        │       2.11 rb  kyren williams
-                                                        │  ▌you 2.10 rb  josh jacobs
-  ────────────────────────────────────────────────────────────────────────────────────────
-  space step   / search   tab data   u undo     adp 17h old · 1,454 drafts   synced 0s ago
-```
+![pick6 in a mock draft](docs/demo.gif)
 
-In colour, every position wears Sleeper's own hue and the survival column bands green /
-amber / red — this is `pick6 mock -snapshot 26` with the escapes stripped.
+A scripted room drafts, the cliff banner fires, the ranking re-sorts under it; `a` stops the
+clock, `/` finds a player — Devonta Smith at 8% to survive, Jaxon Smith-Njigba already gone at
+1.10 — and `tab` drops to every number the engine holds. Every position wears Sleeper's own
+colour, because the board is read next to Sleeper's draft screen all night. It's recorded from
+the real thing: [`docs/demo.tape`](docs/demo.tape), `vhs docs/demo.tape` to regenerate.
 
 ## install
 

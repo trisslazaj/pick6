@@ -29,6 +29,11 @@ func runMock(args []string) error {
 	auto := fs.Bool("auto", true, "auto-advance picks")
 	snapshot := fs.Int("snapshot", -1, "advance N picks, print one frame, exit (no tui)")
 	data := fs.Bool("data", false, "render the data tab instead of the board in snapshot mode")
+	// The same pair board and live -replay carry. This is the command CLAUDE.md
+	// points at for readme screenshots, so it is the one that most needs to be
+	// able to frame the overlay.
+	search := fs.String("search", "", "with -snapshot: open the search overlay on this query")
+	selected := fs.String("selected", "", "with -snapshot: select this query's best match, prompt closed")
 	room := roomFlag(fs)
 	width := fs.Int("width", 100, "terminal width for snapshot mode")
 	height := fs.Int("height", 40, "terminal height for snapshot mode")
@@ -62,6 +67,12 @@ func runMock(args []string) error {
 			Fresh: loadFreshness()}
 		if *data {
 			b.Tab = 1
+		}
+		if *search != "" {
+			b.Search = ui.Search{Open: true, Query: *search}
+		}
+		if *selected != "" {
+			b.SelectBest(*selected)
 		}
 		fmt.Println(b.View())
 		return nil
