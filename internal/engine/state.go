@@ -43,6 +43,10 @@ type Player struct {
 	FormatSpread float64 // largest ADP gap across scoring formats
 	TierSrc      string  // "rankings" or "derived", "" when untiered
 
+	// Sentiment is the rankings file's opinion — "target", "pass" or "avoid",
+	// "" when it said nothing. Display only: nothing in this package reads it.
+	Sentiment string
+
 	// Sample support behind ADP: the drafts it averages, and the earliest and
 	// latest pick he actually went at in any of them. TimesDrafted has already
 	// done its work at fetch time, where it weights the sigma shrink — the

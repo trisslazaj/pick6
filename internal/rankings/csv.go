@@ -12,13 +12,14 @@ import (
 
 // Row is one line of a user-supplied rankings file.
 type Row struct {
-	Name   string
-	Pos    string
-	Team   string
-	Tier   int
-	Points float64
-	ADP    float64
-	Rank   int
+	Name      string
+	Pos       string
+	Team      string
+	Tier      int
+	Points    float64
+	ADP       float64
+	Rank      int
+	Sentiment string // "target", "pass" or "avoid"; "" when the file says nothing
 }
 
 // File is a loaded rankings file plus what we learned about it.
@@ -37,13 +38,14 @@ type File struct {
 // header aliases, lowercased. Covers the generic format plus FantasyPros exports,
 // which vary between their overall and positional files.
 var headerAliases = map[string][]string{
-	"name":   {"name", "player", "player name", "playername", "full name"},
-	"pos":    {"pos", "position"},
-	"team":   {"team", "tm"},
-	"tier":   {"tier", "tiers"},
-	"points": {"points", "pts", "fpts", "proj", "proj pts", "proj. pts", "projection", "projected points", "fantasy points"},
-	"adp":    {"adp", "avg pick", "average draft position", "avg. pick"},
-	"rank":   {"rank", "rk", "#", "overall"},
+	"name":      {"name", "player", "player name", "playername", "full name"},
+	"pos":       {"pos", "position"},
+	"team":      {"team", "tm"},
+	"tier":      {"tier", "tiers"},
+	"points":    {"points", "pts", "fpts", "proj", "proj pts", "proj. pts", "projection", "projected points", "fantasy points"},
+	"adp":       {"adp", "avg pick", "average draft position", "avg. pick"},
+	"rank":      {"rank", "rk", "#", "overall"},
+	"sentiment": {"sentiment", "opinion"},
 }
 
 // LoadCSV reads a rankings file. Column order doesn't matter and unknown columns
@@ -96,6 +98,7 @@ func LoadCSV(path string) (*File, error) {
 		row.Points = atof(get(rec, col, "points"))
 		row.ADP = atof(get(rec, col, "adp"))
 		row.Rank = atoi(get(rec, col, "rank"))
+		row.Sentiment = normalizeSentiment(get(rec, col, "sentiment"))
 
 		out.HasTier = out.HasTier || row.Tier > 0
 		out.HasPoints = out.HasPoints || row.Points > 0
@@ -254,6 +257,21 @@ func get(rec []string, col map[string]int, field string) string {
 // stripDigits turns "RB12" into "RB" — FantasyPros positional files number them.
 func stripDigits(s string) string {
 	return strings.TrimRight(strings.TrimSpace(s), "0123456789")
+}
+
+// normalizeSentiment maps an opinion column onto the three words the board
+// renders. Tolerant of a source's own vocabulary ("avoiding", "i'll pass");
+// anything unrecognized is dropped rather than guessed.
+func normalizeSentiment(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "target", "targets":
+		return "target"
+	case "pass", "i'll pass", "ill pass":
+		return "pass"
+	case "avoid", "avoiding":
+		return "avoid"
+	}
+	return ""
 }
 
 // splitTrailingTeam pulls "CIN" off the end of "Ja'Marr Chase CIN".

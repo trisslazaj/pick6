@@ -654,6 +654,39 @@ func TestSurvivalColumnsShowTheTiltedNumber(t *testing.T) {
 // eighteen opponent picks fall in between. `gone` cannot survive them and `here`
 // comfortably can, which a live column separates and a dead one renders as two
 // identical 100%s — the exact state the raw guard below pins as the regression.
+// The rankings file's opinion is display-only, which means the display is the
+// only place a regression can show. Three claims: the verdict names the file's
+// dissent about its own man, the avoid badge rides the data tab row, and the
+// milder target chip rides its row too.
+func TestSentimentReachesVerdictAndChips(t *testing.T) {
+	players, add := newBoard()
+	add("gone", "RB", 100, 6, 2, 1)
+	add("here", "RB", 96, 70, 6, 1)
+	add("wr1", "WR", 90, 10, 3, 1)
+	add("wr2", "WR", 88, 40, 6, 1)
+	addDepth(add)
+	p := players["gone"]
+	p.Sentiment = "avoid"
+	players["gone"] = p
+	p = players["wr1"]
+	p.Sentiment = "target"
+	players["wr1"] = p
+	s := engine.New(players, 12, 15, 3)
+	s.PickNo = 3 // on the clock: the rb leader is the verdict
+
+	view := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
+	if !strings.Contains(view, "file says avoid") {
+		t.Errorf("verdict should carry the file's dissent about its own man:\n%s", view)
+	}
+	view = ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40, Tab: 1}.View(), "")
+	if row := playerRow(view, "fake gone"); !strings.Contains(row, " avoid") {
+		t.Errorf("data row should badge the avoid: %q", row)
+	}
+	if row := playerRow(view, "fake wr1"); !strings.Contains(row, " target") {
+		t.Errorf("data row should carry the target chip: %q", row)
+	}
+}
+
 func TestSurvivalColumnIsLiveOnTheClock(t *testing.T) {
 	players, add := newBoard()
 	add("gone", "RB", 100, 6, 2, 1) // adp 6 against a pick-22 horizon

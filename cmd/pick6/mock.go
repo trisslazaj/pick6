@@ -151,6 +151,7 @@ func loadBoard(room bool, replaying string) (map[string]engine.Player, error) {
 			Stdev:        p.Stdev,
 			FormatSpread: p.FormatSpread,
 			TierSrc:      string(p.TierSrc),
+			Sentiment:    p.Sentiment,
 
 			TimesDrafted: p.TimesDrafted,
 			High:         p.High,

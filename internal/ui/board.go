@@ -615,6 +615,20 @@ func (b Board) verdictBlock(w int, top engine.PickChoice) string {
 		l3 = append(l3, styledClause{long, st}, styledClause{short, st})
 		l3 = l3[:1] // long form; joinClauses handles the drop, not a short swap
 	}
+	// The file's opinion of the verdict's own man, when it has one. "avoid" is
+	// the dissent case — the value curve crowning a man your rankings warned you
+	// off is exactly the market-dissent situation with a different second voice,
+	// so it wears the same accent. Milder opinions confirm rather than dissent
+	// and stay dim. It sits directly after the tier state because clauses drop
+	// from the right: on a narrow pane the file's dissent outlives the slot
+	// note, which the roster pane is already showing.
+	if p.Sentiment != "" {
+		st := Dim
+		if p.Sentiment == "avoid" {
+			st = Accent
+		}
+		l3 = append(l3, styledClause{"file says " + p.Sentiment, st})
+	}
 	if cl := b.slotClause(p.Pos); cl != "" {
 		l3 = append(l3, styledClause{cl, Dim})
 	}

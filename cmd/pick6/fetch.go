@@ -122,6 +122,9 @@ func runFetch(args []string) error {
 		}
 		detail := fmt.Sprintf("%d rows, %d applied, has %s",
 			len(rf.Rows), res.Applied, strings.Join(what, " + "))
+		if res.Opinions > 0 {
+			detail += fmt.Sprintf(", %d opinions", res.Opinions)
+		}
 		if res.OffBoard > 0 {
 			detail += fmt.Sprintf(" (%d too deep to be drafted)", res.OffBoard)
 		}

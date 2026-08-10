@@ -94,4 +94,13 @@ var (
 			Foreground(lipgloss.Color(ColInk)).
 			Background(lipgloss.Color(ColCliff)).
 			Bold(true)
+
+	// ChipNote is the opinion badge — the rankings file's "avoid" beside a name.
+	// Reverse video on dim rather than a hue: every position colour and alert
+	// colour on this board means a fact somewhere, and an opinion the board is
+	// merely repeating stays in the grey band. Same badge-over-text reasoning as
+	// ChipAlarm, one notch quieter.
+	ChipNote = lipgloss.NewStyle().
+			Foreground(lipgloss.Color(ColInk)).
+			Background(lipgloss.Color(ColDim))
 )

@@ -86,6 +86,11 @@ type Player struct {
 	Tier    int // per-position tier; 0 when unknown
 	TierSrc TierSource
 
+	// Sentiment is the rankings file's opinion of him — "target", "pass" or
+	// "avoid", "" when the file said nothing. Display only, like the injury
+	// fields: value, survival and ordering must never read it.
+	Sentiment string
+
 	// Sample support behind ADP, from the primary source only. TimesDrafted is
 	// live: it is the weight ShrinkSigma gives a player's own stdev against the
 	// pool prior. High and Low are carried for the board — High is what
@@ -613,6 +618,10 @@ func ApplyRankings(players map[string]*Player, ix *rankings.Index, f *rankings.F
 			p.Tier = row.Tier
 			p.TierSrc = TierFromRankings
 		}
+		if row.Sentiment != "" {
+			p.Sentiment = row.Sentiment
+			r.Opinions++
+		}
 	}
 
 	// A points column rewrites skill values, and k/def values are read off that
@@ -630,5 +639,6 @@ func ApplyRankings(players map[string]*Player, ix *rankings.Index, f *rankings.F
 type RankingsResult struct {
 	Applied   int  // rows that landed on a player in the ADP board
 	OffBoard  int  // rows that resolved to a real player who is too deep to be drafted
+	Opinions  int  // applied rows that carried a target/pass/avoid opinion
 	TiersUsed bool // whether the file's tiers were granular enough to use
 }

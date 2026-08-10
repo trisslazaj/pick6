@@ -183,3 +183,16 @@ Eli Stowers,TE,,8,
 Pat Freiermuth,TE,,8,
 Gunnar Helm,TE,,8,
 Tyler Higbee,TE,,8,
+Philadelphia Eagles,DEF,PHI,,target
+Baltimore Ravens,DEF,BAL,,target
+New England Patriots,DEF,NE,,avoid
+Jacksonville Jaguars,DEF,JAX,,avoid
+Chicago Bears,DEF,CHI,,avoid
+Cleveland Browns,DEF,CLE,,avoid
+Cam Little,K,JAX,,target
+Eddie Pineiro,K,SF,,target
+Chase McLaughlin,K,TB,,target
+Chris Boswell,K,PIT,,target
+Will Reichard,K,MIN,,target
+Spencer Shrader,K,IND,,target
+Nick Folk,K,ATL,,target

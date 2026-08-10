@@ -244,22 +244,47 @@ func (b Board) tripwireShown(p engine.Player, nameW int) bool {
 func (b Board) nameCell(p engine.Player, style lipgloss.Style, w int) string {
 	name := strings.ToLower(p.Name)
 
-	chips, cw, _ := renderChips(b.alarmChips(p), chipBudget(w))
+	// The rankings file's "avoid" rides with the alarms — it changes what you do
+	// at the clock the way an injury does — but wears the grey badge, because it
+	// is an opinion the board is repeating, not a fact it verified. It comes
+	// AFTER the alarms so tripwireShown's prediction (which only counts
+	// alarmChips) stays exact: renderChips stops at the first chip that doesn't
+	// fit, so a dropped avoid can never hide a tripwire that rendered.
+	cs := b.alarmChips(p)
+	if p.Sentiment == "avoid" {
+		cs = append(cs, chip{"avoid", ChipNote})
+	}
+	chips, cw, _ := renderChips(cs, chipBudget(w))
 
-	// The news flag is spent out of what the name did NOT want, never out of the
-	// name itself. It is context rather than an instruction, and it is on 54 of
-	// the shipped board's 203 players — measured — so charging a truncated name
-	// for it would cost a quarter of the rows their last few letters to say
-	// "somebody wrote something about him". Short names carry the chip, long ones
-	// keep their letters, and the trade always favours the name.
-	if c := newsChip(p, b.now()); c != "" {
-		if slack := w - cw - lipgloss.Width(name); slack >= 1+lipgloss.Width(c) {
-			chips += " " + Dim.Render(c)
-			cw += 1 + lipgloss.Width(c)
+	// Context chips are spent out of what the name did NOT want, never out of
+	// the name itself. They are context rather than an instruction — the news
+	// flag alone sits on 54 of the shipped board's 203 players, measured — so
+	// charging a truncated name for them would cost a quarter of the rows their
+	// last few letters. Short names carry them, long ones keep their letters,
+	// and the trade always favours the name. The file's milder opinions come
+	// before news: an opinion about the man beats "somebody wrote about him".
+	for _, c := range b.contextChips(p) {
+		if slack := w - cw - lipgloss.Width(name); slack >= 1+lipgloss.Width(c.text) {
+			chips += " " + c.style.Render(c.text)
+			cw += 1 + lipgloss.Width(c.text)
 		}
 	}
 
 	name = trunc(name, w-cw)
 	return style.Render(name) + chips +
 		strings.Repeat(" ", w-cw-lipgloss.Width(name))
+}
+
+// contextChips are the slack-funded badges: the rankings file's milder opinions
+// (target, pass — avoid is an alarm-budget chip, see nameCell), then the news
+// flag. All dim text: opinions and context stay in the grey band.
+func (b Board) contextChips(p engine.Player) []chip {
+	var out []chip
+	if p.Sentiment == "target" || p.Sentiment == "pass" {
+		out = append(out, chip{p.Sentiment, Dim})
+	}
+	if c := newsChip(p, b.now()); c != "" {
+		out = append(out, chip{c, Dim})
+	}
+	return out
 }
