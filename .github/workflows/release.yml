@@ -52,4 +52,7 @@ jobs:
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
+        # The engine paper rides along so the readme's math section can point at
+        # a pdf that matches the tagged code. It's committed prebuilt — putting
+        # texlive on this runner would take longer than every other step combined.
+        run: gh release create "$GITHUB_REF_NAME" dist/* docs/pick6-engine.pdf --generate-notes

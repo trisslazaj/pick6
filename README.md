@@ -2,203 +2,185 @@
   <img src="docs/mascot.svg" width="112" alt="a pixel football with little legs">
 </p>
 
-# pick6
+<h1 align="center">pick6</h1>
 
-Terminal war room for fantasy football drafts. Live-syncs Sleeper, tracks tiers, and tells you when the RB run means the value's gone.
+<p align="center">
+  Terminal war room for fantasy football drafts. Live-syncs Sleeper, tracks tiers,
+  and tells you when the RB run means the value's gone.
+</p>
 
-## status
-
-Milestone 5 of 6. Every subcommand is built: the board renders, live-syncs a Sleeper draft,
-runs offline off hand-typed picks, and thinks — survival probability, urgency ordering,
-replacement level, cliff and run alerts. Left is the opponent-aware simulation (milestone 6).
+<p align="center">
+  <a href="https://github.com/trisslazaj/pick6/releases/latest"><img src="https://img.shields.io/github/v/release/trisslazaj/pick6" alt="latest release"></a>
+  <a href="https://github.com/trisslazaj/pick6/actions/workflows/ci.yml"><img src="https://github.com/trisslazaj/pick6/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT"></a>
+</p>
 
 ![pick6 in a mock draft](docs/demo.gif)
 
 A scripted room drafts, the cliff banner fires, the ranking re-sorts under it; `a` stops the
-clock, `/` finds a player — Devonta Smith at 8% to survive, Jaxon Smith-Njigba already gone at
-1.10 — and `tab` drops to every number the engine holds. Every position wears Sleeper's own
-colour, because the board is read next to Sleeper's draft screen all night. It's recorded from
-the real thing: [`docs/demo.tape`](docs/demo.tape), `vhs docs/demo.tape` to regenerate.
+clock, `/` finds a player, and `tab` drops to every number the engine holds. Recorded from the
+real thing — [`docs/demo.tape`](docs/demo.tape), `vhs docs/demo.tape` to regenerate.
+
+## what it does
+
+- **Survival odds on every player** — the chance he's still there at your next pick, from
+  measured draft data, corrected for the picks actually between you and your turn.
+- **Tiers that alarm** — amber when a tier is probably gone before you act, red when the man on
+  screen is the last of it. Tiers come from your rankings file; where it runs out, they're
+  derived from the value curve.
+- **Run detection that isn't noise** — four RBs in six picks only fires when it beats what the
+  market itself expected for those picks.
+- **Your room, not the market** — feeds it your league's past drafts and it reprices survival
+  against how *those* people actually draft.
+- **A verdict, not a spreadsheet** — on the clock it names a man and the two or three facts that
+  justify him, in picks and odds rather than abstract points.
 
 ## install
 
+**Download a release** (no toolchain needed) — grab the tarball for your platform from the
+[releases page](https://github.com/trisslazaj/pick6/releases/latest), then:
+
+```sh
+tar -xzf pick6_*.tar.gz
+xattr -d com.apple.quarantine pick6   # macOS only: clears the "unverified developer" block
+mv pick6 ~/bin/                       # or anywhere on your PATH
+pick6 version
 ```
+
+`checksums.txt` on the release page carries the sha256 of every tarball.
+
+**Or with Go:**
+
+```sh
 go install github.com/trisslazaj/pick6/cmd/pick6@latest
 ```
 
-That puts the binary in `go env GOPATH`/bin, which is **not** on most people's
-PATH by default. Either add it, or install somewhere that already is:
+That installs to `go env GOPATH`/bin, which is often not on PATH — `GOBIN=$HOME/bin go install ...`
+puts it somewhere that is. Working on the code? `go run ./cmd/pick6 <cmd>` always runs current source.
 
-```
-GOBIN=$HOME/bin go install ./cmd/pick6
-```
+## quickstart
 
-No Go toolchain? Every tagged release carries prebuilt darwin and linux binaries
-on the [releases page](https://github.com/trisslazaj/pick6/releases); `pick6 version`
-says which build you're on.
-
-Working on the code instead? `go run ./cmd/pick6 <cmd>` always runs current
-source, with nothing to reinstall.
-
-## use
-
-```
-pick6 fetch                  # pull data (do this first)
-pick6 live <draft_id> -user yourname   # the main event: sync a live sleeper draft
-pick6 board                  # same board, no feed: you type the picks as they happen
-pick6 mock                   # watch a scripted draft play out on the real board
-pick6 mock -auto=false       # step through it yourself with space
-pick6 tiers                  # print the current tier board
-pick6 mock -snapshot 26      # print one frame, no tui (for screenshots)
+```sh
+pick6 fetch                          # 1. pull data (players, adp, values, tiers)
+pick6 live <draft_id> -user yourname # 2. sync your live sleeper draft
 ```
 
-`pick6 board` is the offline path: no draft id, no polling, no Sleeper. Find a player with
-`/`, mark him gone with `x`, take it back with `u`. Everything downstream is identical —
-the engine never asks where a pick came from — so it's also the way to run this against an
-in-person draft, or any platform with no API.
+That's the whole thing. **Your draft id is in the url**: open the draft room in a browser and
+it reads `sleeper.com/draft/nfl/<draft_id>`. `-user` finds your seat from the draft order;
+`-slot 4` sets it directly if the draft hasn't been seeded yet.
 
-In the TUI, `tab` flips between the board and a full data table — every available player with
-value, tier, ADP, spread, survival and format spread on one screen (`j/k` scrolls, `p` filters
-by position). The board abstracts; the table doesn't. `/` searches from either tab: type a name
-or a team code, and taken players stay in the results with the pick that took them, because
-"is he gone?" is the same question.
+No Sleeper league? `pick6 board` runs the same war room with you typing the picks.
 
-```
-go run ./cmd/pick6 fetch
-```
+## commands
 
-Pulls the Sleeper player pool, half-PPR ADP, and player values; matches everything onto Sleeper
-player ids; derives value tiers; and caches it all under `~/Library/Caches/pick6/`. Re-running
-inside 12 hours is served entirely from disk.
+### `pick6 fetch` — pull the data
 
-```
-pick6 fetch -format half-ppr -teams 12
-pick6 fetch -rankings my-rankings.csv     # your tiers and points win
+Downloads the Sleeper player pool, half-PPR ADP, and player values; joins everything onto
+Sleeper ids; applies your rankings; caches it all. Run it once before drafting and again on
+draft morning — inside 12 hours it's served from disk.
+
+```sh
+pick6 fetch                            # defaults: 12-team half-ppr
+pick6 fetch -format ppr                # other scoring
+pick6 fetch -rankings my-tiers.csv     # your tiers and points win (see below)
 ```
 
-Bring your own rankings and they take priority over everything fetched. Column order doesn't
-matter and unknown columns are ignored, so FantasyPros exports and hand-made files both load:
+### `pick6 live <draft_id>` — the main event
 
+Polls the draft every few seconds and updates the board in place. Every pick is cross-checked
+against the snake math; traded picks land on the right roster; a dropped poll self-heals on the
+next one. Reads your league's real lineup (two flex? superflex?) from Sleeper.
+
+<img src="docs/shots/board-clock.svg" alt="on the clock: the verdict block">
+
+On the clock the board leads with a **verdict** — the man, his price, his odds, the tier he's
+the last of — then the field ranked by what the pick is worth.
+
+### `pick6 board` — no feed, same brain
+
+For in-person drafts, or any platform without an API. `/` finds a player, `x` marks him gone,
+`u` takes it back. Everything downstream is identical — the engine never asks where a pick
+came from.
+
+```sh
+pick6 board -slot 7 -teams 10 -lineup "qb rb rb wr wr te flex flex k def" -bench 6
 ```
-name,position,team,tier,points
+
+### `pick6 mock` — watch it think
+
+Replays a scripted draft against the real UI with real players — only the pick sequence is
+synthetic. `-seed N` replays the same draft every time; `space` steps, `a` autoplays.
+
+<img src="docs/shots/board-forecast.svg" alt="off the clock: forecast, cliff banner, chips">
+
+Off the clock the same ranking reads as a forecast: who'll likely be there, who's falling
+(amber — the draft moved past his price), what you'd settle for.
+
+### `pick6 tiers` — the tier board, printed
+
+```sh
+pick6 tiers -pos wr -depth 15
 ```
 
-## the math, in plain english
+<img src="docs/shots/tiers.svg" alt="the wr tier board">
 
-The whole board answers one question: **what does waiting cost?**
+### the data tab
 
-**Survival.** Every player has an ADP — the average pick where real drafts take him, measured
-across about a thousand recent drafts — and a spread, because the market doesn't agree on
-everyone equally: a locked-in first-rounder goes inside a two-pick window, a late flier goes
-anywhere across three rounds. The chance he lasts to pick $p$ is a logistic S-curve centred on
-his ADP, with the width set by his *own* spread:
+`tab` flips any board to a flat table of every available player and every number the engine
+holds — value, tier, adp, spread, survival, format gap — with your rankings file's opinions
+riding the names.
 
-$$S(p) = \frac{1}{1 + e^{(p - \mathrm{adp})/\sigma}}$$
+<img src="docs/shots/data-tab.svg" alt="the data tab">
 
-ADP already passed → $S$ near 0, probably gone. ADP far ahead → near 1, safe. And at
-$p = \mathrm{adp}$ it's exactly $\tfrac{1}{2}$ — a coin flip, which is literally what ADP means:
-half the rooms had taken him by then.
+Late in the draft, kickers and defenses light up exactly when they should and not a round
+before:
 
-The width comes from the measured standard deviation of his real draft slot (for a logistic
-distribution $\mathrm{stdev} = \sigma \pi / \sqrt{3}$):
+<img src="docs/shots/endgame.svg" alt="kicker o'clock">
 
-$$\sigma = \frac{\sqrt{3}}{\pi}\thinspace\mathrm{stdev} \approx \frac{\mathrm{stdev}}{1.8138},
-\qquad \sigma \ \text{clamped to} \ [0.5,\ 25]$$
+### for the curious
 
-So a locked-in star (stdev ≈ 1) gets a near-step-function — one pick past his ADP and he is
-simply gone — while a volatile flier (stdev ≈ 40) gets a nearly flat curve: stop panicking, he
-keeps.
+`pick6 scout` profiles each manager's tendencies from your league's cached drafts; `pick6
+calibrate` backtests the survival model against real completed drafts and grades every model
+choice. Neither is needed to draft.
 
-**Your room, not the market.** ADP is a thousand strangers; a home league is a dozen people who
-already know what each other do. Measured over three completed drafts from this user's leagues,
-they take the first quarterback at pick 23.0 and the first tight end at 23.3, against 26.1 and
-39.5 nationally. So at the top of each position — where that appetite actually lives — the curve
-is centred on a blend of the two prices instead:
+## keys
 
-$$\mathrm{adp_{eff}} = w \cdot \mathrm{adp_{room}}(P, k) + (1 - w) \cdot \mathrm{adp},
-\qquad w = \frac{n}{n + 2}$$
+| key | does |
+|-----|------|
+| `/` | search players — taken ones stay in the results with the pick that took them |
+| `x` / `u` | mark taken / undo (board mode) |
+| `tab` | flip board ↔ data table |
+| `j` `k` / `p` | scroll / position filter (data tab) |
+| `space` / `a` | step / autoplay (mock mode) |
+| `q` | quit |
 
-where $\mathrm{adp_{room}}(P, k)$ is the mean pick at which those drafts took the $k$-th player
-at position $P$, over the $n$ of them that ever got that deep. Every player the curve reaches is
-repriced.
+## bring your own rankings
 
-**And this is the shakiest thing in the tool, so it says so.** Those three drafts are three
-*different* leagues — 9, 5 and 6 shared managers out of 12 — so the curve is a portrait of
-casual home leagues, not of one room. It used to reprice only the first five at each position,
-on the theory that a ranked list runs deeper than any finite draft and the tail is therefore
-junk. That cutoff won cleanly on the first backtest fold and then lost on both folds that
-arrived later — on both metrics, on the per-position gate, and at a common board size — so it
-was removed. Worse, the fold that chose it had a curve built entirely from drafts that happened
-a year *after* it, which no live board could ever have; holding out each fold's future leaves
-that fold with no curve at all. So the argument for a cap is still readable and the measurement
-never backed it. `pick6 calibrate` re-derives all of this on every run, and `-room=false` prices
-the whole board on the market's numbers.
+A CSV turns the board into *your* board — its tiers drive the cliff alarms, its opinions ride
+the names. Column order doesn't matter, unknown columns are ignored, FantasyPros exports load
+as-is:
 
-One honesty adjustment: a player who's on the board *right now* can only be taken by the picks
-between now and your turn. So the number shown is survival **conditioned on the present**:
+```csv
+name,position,team,tier,points,sentiment
+Jahmyr Gibbs,RB,,1,,target
+De'Von Achane,RB,,4,,avoid
+Philadelphia Eagles,DEF,PHI,,,target
+```
 
-$$p_{\text{survive}} = \frac{S(\text{nextPick})}{S(\text{pickNo})}$$
+- `tier` — your tier lines, kept exactly; oversized tiers are subdivided, never merged.
+- `points` — projected points; overrides the fetched values.
+- `sentiment` — `target` / `pass` / `avoid`. Display-only: an *avoid* badge rides the player's
+  name, and a verdict crowning a man you flagged says so. Rows with only a name, position and
+  sentiment are valid — that's how kicker and defense calls work.
 
-Without that, a player the room keeps passing on reads 90% gone when only one team picks before
-you do. Deep past his ADP the ratio's tail becomes a clean per-pick hazard,
-$e^{-(\text{nextPick} - \text{pickNo})/\sigma}$ — each pick that passes costs him the same
-factor, no matter how far he's fallen. (It's computed in log space so the extremes don't
-flatten; see `internal/engine/urgency.go`.)
+## the math
 
-One correction on top of that. Exactly $N$ players come off the board before your turn — that's
-what a draft is — but treating every survival as independent "expects" $\sum_j (1 - p_j)$ of them
-to go, and that sum is measurably not $N$. Backtested against three real drafts, the model was
-pessimistic on all of them. So raise every probability to the single power that reconciles
-them:
-
-$$\text{find } c \gt 0 \ \text{ with } \ \sum_j \big(1 - p_j^{\thinspace c}\big) = N,
-\qquad \tilde p_j = p_j^{\thinspace c}$$
-
-It's the gentlest fix there is: $\ln p$ is a player's hazard over those picks, so $p^c$ scales
-everyone's hazard by the same factor. Certainties stay certain ($1^c = 1$), nobody overtakes
-anybody, and $\tilde p$ is what every number on screen means.
-
-**Urgency.** Per position: the best player available now, versus the expected value of whoever
-is still there at your next pick. Line the position up best-first — the best survivor is #1 if he
-survives, #2 only if #1 is gone *and* #2 survives, and so on:
-
-$$\mathbb{E}[\text{best later}] = \sum_j v_j\thinspace \tilde p_j \prod_{i \lt j} \big(1 - \tilde p_i\big)$$
-
-$$\text{urgency} = \Big( v(\text{bestNow}) - \mathbb{E}[\text{best later}] \Big) \times \text{need}$$
-
-— where need is 1.0 for an open starter slot, 0.6 for flex depth, 0.25 for bench, and 0 for
-kickers and defenses until the last rounds. The expected drop is what waiting costs; need is
-whether you should care. The board sorts by it. And because it's an expectation rather than a
-cutoff, nothing jumps: a player crossing 50% doesn't re-sort the board on a rounding error. The
-wait signal is its own claim now — *safe to wait*, green, when the best man himself is more
-likely than not to still be sitting there.
-
-**Counting.** Tiers come from human rankings; where no file covers, they're derived by breaking
-the value curve wherever it genuinely drops:
-
-$$\frac{v_{i-1} - v_i}{v_{i-1}} \gt 0.10
-\quad\text{and}\quad
-v_{i-1} - v_i \ \ge\ 0.015 \cdot v_{\max}$$
-
-A tier is a cliff when it probably won't reach you, which is a probability and not a headcount —
-three players the room is about to eat is a worse cliff than one player nobody wants:
-
-$$p_{\text{hold}} = 1 - \prod_j \big(1 - \tilde p_j\big) \quad \text{over what's left in the tier}$$
-
-Under 50% is amber, under 15% is red, and a tier nobody has drafted out of yet is never either.
-Four of the last six picks at one position is a run. And a player still available a full spread
-past his ADP,
-
-$$\frac{\text{pickNo} - \mathrm{adp}}{\sigma} \ \ge\ 1,$$
-
-is *falling*: the draft moved past his price and he's still here. His numbers turn amber.
-That's a discount.
-
-The long version is [`docs/pick6-engine.tex`](docs/pick6-engine.tex) — every formula above
-derived from its definition, the calibration methodology and the measured backtest results,
-and the ideas that were tried and didn't work. It's written for someone who likes math but
-hasn't formally studied it, so every symbol gets introduced before it's used; `make paper`
-builds the PDF.
+Everything on screen is a probability with a paper trail — survival curves per player, an
+exactly-N correction, expected-best-later urgency, probabilistic tier holds — and every
+constant was chosen by backtesting against real completed drafts. The whole derivation, the
+calibration methodology, and the ideas that measured worse and were removed live in
+[**the engine paper**](docs/pick6-engine.pdf) (also attached to every
+[release](https://github.com/trisslazaj/pick6/releases/latest)).
 
 ## data sources
 
