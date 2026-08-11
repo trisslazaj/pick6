@@ -126,7 +126,18 @@ type State struct {
 	// measure one from.
 	OffBoard []float64
 
-	sim *simTable // cached rollouts for this vantage; every mutator nils it
+	sim  *simTable  // cached rollouts for this vantage; every mutator nils it
+	plan *planTable // ...and the conditioned lookahead's, on the same rule
+}
+
+// invalidate drops every vantage-keyed cache. One method rather than two
+// assignments at five call sites, because the failure mode of forgetting the
+// second one is a board that quotes last pick's plan next to this pick's
+// survivals — two vantages on one frame, which is the exact bug the caches are
+// keyed to the vantage to prevent.
+func (s *State) invalidate() {
+	s.sim = nil
+	s.plan = nil
 }
 
 // New builds a state for a snake draft with the natural slot order 1..T.
@@ -240,7 +251,7 @@ func (s *State) Draft(playerID string) {
 		PlayerID:  playerID,
 	})
 	s.PickNo++
-	s.sim = nil
+	s.invalidate()
 }
 
 // ApplyRemote records a pick reported by a live feed, trusting the feed's own
@@ -275,7 +286,7 @@ func (s *State) ApplyRemote(r RemotePick) error {
 	if r.PickNo >= s.PickNo {
 		s.PickNo = r.PickNo + 1
 	}
-	s.sim = nil
+	s.invalidate()
 	return nil
 }
 
@@ -307,14 +318,14 @@ func (s *State) EnsurePlayer(p Player) {
 		p.Name = "unknown player"
 	}
 	s.Players[p.ID] = p
-	s.sim = nil
+	s.invalidate()
 }
 
 // SetRoster replaces the assumed lineup, e.g. with one read from Sleeper.
 func (s *State) SetRoster(r Roster) {
 	if len(r.Slots) > 0 {
 		s.Roster = r
-		s.sim = nil
+		s.invalidate()
 	}
 }
 
@@ -334,7 +345,7 @@ func (s *State) Undo() {
 		s.Rosters[owner] = r[:len(r)-1]
 	}
 	s.PickNo = last.PickNo
-	s.sim = nil
+	s.invalidate()
 }
 
 // ---- queries ----

@@ -17,6 +17,15 @@ type Plan struct {
 	FirstPick  int     // NextPick()
 	SecondPick int     // FollowingPick()
 	Score      float64 // the pair's expected need-weighted value over replacement, both legs
+
+	// SecondTier and SecondOdds are the conditioned lookahead's outcome claim:
+	// the modal tier leg two lands at Second, and how often it lands that tier
+	// or better across the simulated futures. "lands a tier-2 rb 78%."
+	//
+	// SecondOdds is 0 when the plan was priced by the v1 formula (sim off),
+	// which has no futures to count and must not be made to look like it does.
+	SecondTier int
+	SecondOdds float64
 }
 
 // planPositions is the order candidates are considered in, and therefore the
@@ -32,9 +41,14 @@ var planPositions = []string{"QB", "RB", "WR", "TE", "K", "DEF"}
 type PickChoice struct {
 	Pos    string
 	Best   Player
-	Score  float64 // leg one's vor x need, plus the best second leg's
+	Score  float64 // leg one's vor x need, plus the second leg's
 	Fills  int     // how many of the legs fill open starting slots, capped at what feasibility demands
 	Second string  // the second leg the score chose; "" on my last pick, where there is none
+
+	// SecondTier and SecondOdds carry the conditioned rollouts' outcome claim
+	// for this choice; both are zero under the v1 formula. See Plan.
+	SecondTier int
+	SecondOdds float64
 }
 
 // PickChoices ranks every way to spend my next pick, and it is THE PRIMARY KEY:
@@ -92,13 +106,8 @@ func (s *State) PickChoices() []PickChoice {
 	// reader cannot see. The WEIGHT is the slack-free need, because the second
 	// leg is priced by NeedAfter, which has no slack either; mixing the two made
 	// the score depend on the order of two legs that end at the same roster.
-	type candidate struct {
-		pos  string
-		best Player
-		need float64
-	}
 	filled, _ := s.FilledSlots(s.MySlot)
-	var cands []candidate
+	var cands []planCand
 	for _, pos := range planPositions {
 		if s.Need(pos) == 0 {
 			continue
@@ -107,16 +116,31 @@ func (s *State) PickChoices() []PickChoice {
 		if !ok {
 			continue
 		}
-		cands = append(cands, candidate{pos: pos, best: best, need: s.needFrom(pos, filled)})
+		c := planCand{pos: pos, best: best, need: s.needFrom(pos, filled)}
+		// Need above bench weight IS "this pick takes an open starting slot",
+		// dedicated or flex — that is exactly what needFrom encodes, so asking
+		// it here cannot drift from the need the score is weighted by.
+		if c.need > NeedBench {
+			c.fills1 = 1
+		}
+		cands = append(cands, c)
 	}
 	if len(cands) == 0 {
 		return nil
 	}
 
-	q2 := s.FollowingPick()
-	legs := 2
-	if q2 == 0 {
-		legs = 1 // my last pick: nothing to plan, one leg to score
+	// How many of my own picks the score plans over. Two under the v1 formula,
+	// PlanDepth under the conditioned rollouts — identical today, since
+	// PlanDepth ships at 2. Fewer when the draft ends first; one on my last
+	// pick, where there is nothing to plan.
+	depth := 2
+	if s.Survival == SurvivalSim {
+		depth = PlanDepth
+	}
+	mine := s.MyUpcomingPicks(depth)
+	legs := len(mine)
+	if legs < 1 {
+		legs = 1 // the draft is over for me: score the one leg that is left
 	}
 
 	// mustFill is how many of the legs have to take an open starting slot. The
@@ -132,6 +156,15 @@ func (s *State) PickChoices() []PickChoice {
 		mustFill = 0
 	}
 
+	// The conditioned second leg (milestone 7, lookahead.go), for every
+	// candidate on one shared seed. Sim only: rollouts exist where the sim
+	// does, and under -survival=adp the plan keeps the formula below — one
+	// switch, the same chokepoint philosophy survivalAt follows.
+	var cond map[string]planResult
+	if legs > 1 && s.Survival == SurvivalSim {
+		cond = s.conditionedLegs(cands, mine, mustFill)
+	}
+
 	// Every pair re-solves the same tilt: both second legs share the horizon q2
 	// and its pick count, so the bisection returns the same c every time.
 	// Measured at ~2ms per call on the full 201-player board against ~0.4ms for
@@ -141,25 +174,41 @@ func (s *State) PickChoices() []PickChoice {
 	choices := make([]PickChoice, 0, len(cands))
 	for _, first := range cands {
 		leg1 := s.VOR(first.best) * first.need
-		// Need above bench weight IS "this pick takes an open starting slot",
-		// dedicated or flex — that is exactly what needFrom encodes, so asking
-		// it here cannot drift from the need the score is weighted by.
-		fills1 := 0
-		if first.need > NeedBench {
-			fills1 = 1
-		}
 		if legs == 1 {
-			f := fills1
+			f := first.fills1
 			if f > mustFill {
 				f = mustFill
 			}
 			choices = append(choices, PickChoice{Pos: first.pos, Best: first.best, Score: leg1, Fills: f})
 			continue
 		}
+		if cond != nil {
+			// The second leg is no longer chosen by a max over Q — it is
+			// whatever the rollouts' own policy actually took, so Fills
+			// describes the plan that happens rather than the best pair
+			// available. They agree by construction: the policy is forced to
+			// close a slot exactly when mustFill demands one, which is the same
+			// condition the max used to satisfy.
+			r := cond[first.best.ID]
+			fills := first.fills1
+			if r.Second != "" && s.NeedAfter(r.Second, first.best.ID) > NeedBench {
+				fills++
+			}
+			if fills > mustFill {
+				fills = mustFill // past the requirement, extra fills buy nothing
+			}
+			choices = append(choices, PickChoice{
+				Pos: first.pos, Best: first.best,
+				Score: leg1 + r.Legs, Fills: fills,
+				Second: r.Second, SecondTier: r.SecondTier, SecondOdds: r.SecondOdds,
+			})
+			continue
+		}
+		q2 := mine[1]
 		best := PickChoice{Pos: first.pos, Best: first.best, Score: math.Inf(-1), Fills: -1}
 		for _, second := range cands {
 			needAfter := s.NeedAfter(second.pos, first.best.ID)
-			fills := fills1
+			fills := first.fills1
 			if needAfter > NeedBench {
 				fills++
 			}
@@ -215,5 +264,7 @@ func (s *State) BestPlan() (Plan, bool) {
 		FirstPick:  s.NextPick(),
 		SecondPick: q2,
 		Score:      top.Score,
+		SecondTier: top.SecondTier,
+		SecondOdds: top.SecondOdds,
 	}, true
 }

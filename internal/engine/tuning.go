@@ -141,6 +141,20 @@ const (
 	Tau           = 5.0
 	CandidatePool = 25
 	Rollouts      = 500
+
+	// Milestone 7 (the conditioned lookahead, lookahead.go). PlanDepth is how
+	// many of MY OWN picks a plan rollout plays through. Two ships. The
+	// three-leg variant is implemented and tested and stays off until a real
+	// frame shows a decision it changes — the wheel is where to look, since
+	// "what survives two of my turns" is the question the sidebar already says
+	// is the whole story at slots 1 and 12.
+	PlanDepth = 2
+	// PlanRollouts is its own number rather than Rollouts because the two want
+	// different resolution: the survival column is a percentage a human reads
+	// off the screen, the plan is a ranking. Sub-percent precision is wasted on
+	// a ranking, so this is the first thing to drop (to 300) if the per-pick
+	// cost ever creeps — before optimizing anything.
+	PlanRollouts = 500
 )
 
 // Survival mode names for State.Survival. The zero value means adp: the
