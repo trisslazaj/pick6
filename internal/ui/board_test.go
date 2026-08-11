@@ -1287,3 +1287,56 @@ func TestDenyChipRenders(t *testing.T) {
 		t.Fatal("rendered frame is missing the deny chip")
 	}
 }
+
+// Milestone 7: the plan line's odds clause. It is the conditioned lookahead's
+// outcome claim — how often leg two lands the band it is planning on — and it
+// only exists where the rollouts do.
+func TestPlanLineCarriesTheConditionedOdds(t *testing.T) {
+	s := lookaheadState()
+	s.Survival = engine.SurvivalSim
+	view := ansi.ReplaceAllString(Board{State: s, Width: 92, Height: 40}.View(), "")
+	line := ""
+	for _, l := range strings.Split(view, "\n") {
+		if strings.Contains(l, "plan  ") {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatal("no plan line on the board")
+	}
+	if !strings.Contains(line, "lands ") || !strings.Contains(line, "%") {
+		t.Errorf("plan line carries no odds clause: %q", line)
+	}
+	// Under the v1 formula there are no futures to count, and the clause must
+	// not appear at all rather than appear as a zero.
+	adp := lookaheadState()
+	adp.Survival = engine.SurvivalADP
+	adpView := ansi.ReplaceAllString(Board{State: adp, Width: 92, Height: 40}.View(), "")
+	for _, l := range strings.Split(adpView, "\n") {
+		if strings.Contains(l, "plan  ") && strings.Contains(l, "lands ") {
+			t.Errorf("adp mode printed an odds clause it cannot compute: %q", l)
+		}
+	}
+}
+
+// The odds drop before the plan does: the plan is the recommendation, the odds
+// are how much to trust it, and a wrapped clause reads as a rendering fault.
+func TestPlanOddsDropBeforeThePlanDoes(t *testing.T) {
+	for _, w := range []int{80, 92, 100, 120} {
+		s := lookaheadState()
+		s.Survival = engine.SurvivalSim
+		view := ansi.ReplaceAllString(Board{State: s, Width: w, Height: 40}.View(), "")
+		var line string
+		for _, l := range strings.Split(view, "\n") {
+			if strings.Contains(l, "plan  ") {
+				line = l
+			}
+		}
+		if !strings.Contains(line, "→") {
+			t.Errorf("width %d: the plan itself was dropped: %q", w, line)
+		}
+		if w >= 92 && !strings.Contains(line, "lands ") {
+			t.Errorf("width %d: odds dropped where they fit: %q", w, line)
+		}
+	}
+}
