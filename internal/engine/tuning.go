@@ -143,11 +143,28 @@ const (
 	Rollouts      = 500
 
 	// Milestone 7 (the conditioned lookahead, lookahead.go). PlanDepth is how
-	// many of MY OWN picks a plan rollout plays through. Two ships. The
-	// three-leg variant is implemented and tested and stays off until a real
-	// frame shows a decision it changes — the wheel is where to look, since
-	// "what survives two of my turns" is the question the sidebar already says
-	// is the whole story at slots 1 and 12.
+	// many of MY OWN picks a plan rollout plays through. Two ships; the
+	// three-leg variant is implemented and tested (TestConditionedPlanAtDepthThree)
+	// and stays off.
+	//
+	// It is off despite clearing the spec's stated bar. The wheel is where the
+	// spec said to look and it looked back loudly: over 54 scripted frames at
+	// slots 1 and 12, depth 3 changes the FIRST leg on 16 of them, and every
+	// flip moves away from running back — which is what you would expect at the
+	// wheel, where two back-to-back picks let you double-tap the deep position
+	// later and take the scarce one now. That is a real strategic argument.
+	//
+	// What is missing is evidence it is RIGHT, and this repo does not ship a
+	// change of that size on plausibility (see the room warp's cap, which won
+	// on one fold, was kept as never-worse, and was eventually retracted). A
+	// decision score has no labels, so the only honest promotion path is a
+	// scenario fixture like the depth-2 one in dod_test.go, showing a wheel
+	// frame where depth 2 is demonstrably wrong and depth 3 is right. Two
+	// confounds to separate first: mustFill is computed FROM the leg count, so
+	// depth 3 carries one more unit of feasibility pressure at the endgame and
+	// some of those 16 flips may be that rather than the third leg; and the
+	// cost is 115ms per pick event against 36ms, past the spec's ~50ms budget,
+	// so promotion means dropping PlanRollouts too.
 	PlanDepth = 2
 	// PlanRollouts is its own number rather than Rollouts because the two want
 	// different resolution: the survival column is a percentage a human reads

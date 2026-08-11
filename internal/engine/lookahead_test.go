@@ -317,3 +317,65 @@ func TestConditionedPlanCacheDiesOnAPick(t *testing.T) {
 		t.Errorf("plan unchanged after two picks off the board: %+v", after)
 	}
 }
+
+// The three-leg variant: built, tested, and OFF (PlanDepth = 2). The spec's
+// rule is that it ships only when a real frame shows a decision it changes,
+// and the wheel is where to look — "what survives two of my turns" is the
+// question the sidebar already says is the whole story at slots 1 and 12.
+//
+// Everything past leg two recomputes its policy inside the rollout, because
+// leg two changed the roster the need is read off. That path is unreachable at
+// the shipped depth, so it is exercised here or it is not exercised at all.
+func TestConditionedPlanAtDepthThree(t *testing.T) {
+	if PlanDepth != 2 {
+		t.Fatalf("PlanDepth is %d: the gate has been opened, and this test's premise "+
+			"(the depth-3 path is otherwise unreachable) no longer holds", PlanDepth)
+	}
+	s := lookaheadState()
+	mine := s.MyUpcomingPicks(3)
+	if len(mine) != 3 {
+		t.Fatalf("MyUpcomingPicks(3) = %v", mine)
+	}
+	p := s.Players["rb1"]
+	c := planCand{pos: "RB", best: p, need: s.Need("RB"), fills1: 1}
+
+	run := func(depth, mustFill int) planResult {
+		core := s.newSimCore(s.planSeed())
+		core.reseed(s.planSeed())
+		return s.planRollout(core, c, mine[:depth], mustFill)
+	}
+	two, three := run(2, 0), run(3, 0)
+
+	// A third leg can only add value: it is one more pick, scored the same way.
+	if three.Legs <= two.Legs {
+		t.Errorf("depth 3 scored %.1f against depth 2's %.1f: a third pick cannot be worth nothing",
+			three.Legs, two.Legs)
+	}
+	// ...and it must not move leg two's own claim, which is about a horizon the
+	// third leg sits entirely past. Not bit-identical, and deliberately not
+	// asserted as such: a longer window spends more draws per rollout, so
+	// rollout m+1 starts the depth-3 run from a different point in the random
+	// stream. What has to hold is that the answer is the same answer — same
+	// band, inside sampling noise on the odds.
+	if three.Second != two.Second || three.SecondTier != two.SecondTier {
+		t.Errorf("leg two moved from tier-%d %s to tier-%d %s when a third leg was added",
+			two.SecondTier, two.Second, three.SecondTier, three.Second)
+	}
+	if d := three.SecondOdds - two.SecondOdds; d > 0.05 || d < -0.05 {
+		t.Errorf("leg two's odds moved %+.3f with a third leg (%.3f → %.3f): that is past sampling noise",
+			d, two.SecondOdds, three.SecondOdds)
+	}
+	// Determinism holds at depth three too.
+	if again := run(3, 0); again != three {
+		t.Errorf("depth 3 is not deterministic: %+v vs %+v", three, again)
+	}
+	// And the feasibility ladder reaches the third leg: with every one of my
+	// three legs required to close a starting slot, the policy must be forced
+	// at each of them rather than only at the second.
+	if !mustFillAt(3, 3, 3, 2) {
+		t.Error("mustFillAt did not force the third leg with two of three already filled")
+	}
+	if mustFillAt(3, 3, 1, 1) {
+		t.Error("mustFillAt forced the third leg when the requirement was already met")
+	}
+}
