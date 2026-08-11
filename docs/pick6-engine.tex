@@ -1816,6 +1816,110 @@ A proper fix exists and is scoped as future work: search over \emph{my} picks in
 Monte Carlo rollout that engine v2 already runs for opponents. That is milestone 7
 material, not a patch.
 
+\subsection{Milestone 7: the second leg stops being a formula (2026-08-11)}
+\label{sec:plancond}
+
+That future work landed, and it took the \emph{second} leg, not the first. Under
+\code{-survival=sim} --- the board's default --- $\mathbb{E}[M_Q^{-x}]$ in
+\eqref{eq:plan} is replaced by what the rollouts actually deliver. For each first-leg
+candidate $P$, extend the v2 window from $[p_{\text{now}}, q_2)$ to
+$[p_{\text{now}}, q_2]$ and play it $500$ times: $\mathrm{bestNow}(P)$ comes off the
+board, the opponents draft exactly as \S\ref{sec:sim} models them, and at $q_2$ the
+engine's own greedy rule --- $\operatorname*{arg\,max}_j \mathrm{vor}(j)\cdot\mathrm{needAfter}(\mathrm{pos}_j
+\mid x)$ over whoever is still there --- takes a player. The pair is scored on him. The
+first leg's optimism is untouched: this milestone made the second leg real, and
+\S\ref{sec:plan}'s simplification above still stands as written.
+
+Four things are worth stating precisely, because each is a choice and not an
+implementation detail.
+
+\begin{itemize}
+\item \textbf{The candidate is removed at the start of the rollout, not at $q_1$.} That
+defines what the score is: $\mathrm{score}(P)$ is the pair's value \emph{given I get} $P$.
+In futures where an opponent would have taken him first the plan's premise has already
+failed --- the first leg would be quoting a man I do not have --- so those futures are
+excluded by construction, and the opponents who did not take him spent their picks
+elsewhere, which is exactly what removing him first makes them do. It is also the
+semantics \eqref{eq:plan} always had, since $\mathbb{E}[M_Q^{-x}]$ excluded him too.
+``Will I even get him'' is answered on the same frame, in its own units, by the survival
+column.
+
+\item \textbf{Common random numbers, and they are not optional.} Every candidate at one
+vantage is evaluated on one seed. Two candidates scored on independent samples differ by
+their choice \emph{plus} sampling noise, and at $500$ futures that noise is worth a few
+hundred value points --- which is the scale of the gaps that decide these rankings. The
+board would reorder itself between renders on nothing. Measured on the fixture of
+\S\ref{sec:plancond}: the variance of the score gap between two candidates is under half
+the unpaired variance.
+
+\item \textbf{$\mathbb{E}[\max] \ge \max \mathbb{E}$, and the gap is the point.}
+\eqref{eq:plan} takes the best of the per-position expectations; a rollout takes the best
+man across \emph{all} positions in each future. The difference is the value of having
+more than one way for a future to go well, and it is the lookahead's own contribution as
+distinct from the survival model's. Measured on the scenario below: $+50$ and $+40$ value
+points on the two candidates that matter.
+
+\item \textbf{Feasibility is a preference in the policy, not a filter.} Written as a
+filter --- ``this leg may only take a man who closes an open slot'' --- it produced a
+genuine dead end at $12.09$ of the scripted mock: only K and DEF unfilled, three picks
+left, and our own K/DEF suppression forbidding the only two positions that could satisfy
+it. The policy had nothing legal to take. Sorting slot-closers ahead of the rest is
+identical whenever one is alive and degrades to the best available man when none is,
+which is the same shape $\mathrm{mustFill}$ has carried all along.
+\end{itemize}
+
+\subsubsection*{What can and cannot be claimed}
+
+A decision score has no counterfactual labels, so \S\ref{sec:backtest}'s referee cannot
+grade it and this document does not pretend otherwise. The evidence is a scenario. Build
+the mirror of \S\ref{sec:sim}'s flagship board: national ADP says the backs are going now
+(ADP $103$--$110$ against a pick at $102$) and the receivers will keep (ADP $120$--$122$
+against my next pick at $115$), while all six seats picking in between are full at
+running back with both receiver slots open. Greedy reads the market --- receivers
+surviving at $65\%$, backs at $0.8\%$ --- and plans \emph{rb now, wr later}, coming back
+for two men the room is about to eat. The conditioned score plans \emph{wr now, rb
+later}: take the man you cannot get back, because the one you can wait for is still going
+to be there.
+
+Attribution matters and is pinned in the tests rather than asserted here. Two things
+differ between those runs --- the survival model \emph{and} the second leg --- and on
+that board the survival model carries most of the flip; greedy's own formula computed on
+top of sim survivals already prefers the receiver. The lookahead's separable contribution
+is the $\mathbb{E}[\max]$ gap above.
+
+One honesty check, run because the conditioning could leak: a player's survival to $q_2$
+inside the conditioned rollouts should differ from the unconditioned row
+\S\ref{sec:backtest} scores only through the knock-on effects of removing one player from
+a board of ninety. Worst move measured, $0.064$, every sign in the direction removing a
+player predicts.
+
+\subsubsection*{Three picks: built, measured, switched off}
+
+The same machinery extends to $q_3$ and does, behind \code{PlanDepth} $= 2$. The wheel is
+where the effect should be largest and it is: over $54$ scripted frames at seats 1 and
+12, depth three changes the \emph{first} leg on $16$ of them, and every flip moves away
+from running back --- coherent with the wheel's own arithmetic, where two back-to-back
+picks let you double-tap the deep position later and take the scarce one now.
+
+Coherent is not right, and this project does not ship a change of that size on
+plausibility; \S\ref{sec:roomfail} is the cautionary tale. Promotion needs a scenario
+fixture of its own showing a wheel frame where depth two is demonstrably wrong. Two
+confounds to separate first: $\mathrm{mustFill}$ is computed \emph{from} the leg count, so
+depth three carries one more unit of endgame feasibility pressure and some of those $16$
+flips may be that rather than the third leg; and the cost is $115$\,ms per pick event
+against $36$\,ms, past budget, so promotion means dropping the rollout count with it.
+
+\subsubsection*{On screen}
+
+One clause, on the plan line, in both tenses: \code{plan wr at 3.03 $\to$ rb at 4.10
+$\cdot$ lands tier-3 rb 100\%}. It is an \emph{outcome} claim --- how often leg two lands
+the band the plan is counting on --- which is why it earns a place on the frame that
+\code{CostOfPassing} was taken off. ``You stand to lose 990 of TE value'' is a forecast in
+board units about a thing that has not happened; ``the tier-2 backs are there when you
+come back, $78\%$ of the time'' is the plan's own premise, stated as odds the reader can
+disagree with. The claim is \emph{that tier or better}, since landing a better one is
+strictly good news. It drops whole below $92$ columns, before the plan does.
+
 \subsection{The one thing that outranks the score}
 
 Late in a draft, finishing the lineup beats maximising the score, and by a lot, because
@@ -4224,10 +4328,14 @@ simulated pick removing a ranked player when real rooms spend half their endgame
 off-board. With the causal escape of \S\ref{sec:escape}, v2 beats what shipped on both
 metrics on both folds that can test it as it runs live, and it is the board's default.
 
-\paragraph{Multi-pick lookahead (milestone 7).} \S\ref{sec:plan}'s honest simplification
---- pricing the first leg at today's best available --- goes away once a rollout is
-simulating the draft forward anyway. Search over \emph{my} picks inside it, not just
-over opponents'. The rollouts now exist; this is the next real move, alongside the
+\paragraph{Multi-pick lookahead (milestone 7) --- SHIPPED (2026-08-11).}
+\S\ref{sec:plancond}. It took the \emph{second} leg rather than the first, which is the
+one thing this section got wrong when it asked for it: the honest simplification named in
+\S\ref{sec:plan} is about leg one's optimism, and that survives untouched, because every
+candidate still carries it equally and it is a ranking. What the rollouts replaced was the
+expectation --- the second leg is now the player who actually landed, averaged over the
+futures. Two leftovers with their own promotion bars: the third leg
+(built, measured, off --- see the depth-three note in \S\ref{sec:plancond}) and the
 v2.1 levers named at the end of \S\ref{sec:sim}.
 
 Two things that are deliberately \emph{not} next: an ADP over/under-performance model

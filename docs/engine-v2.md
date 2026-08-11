@@ -171,6 +171,17 @@ would hit someone else, so second-leg survivals read slightly safe. Modelling it
 per-candidate rollout sets (~6× the work for a second-order correction on a display ranking).
 Accept it for v2.0 and note it here so nobody rediscovers it as a bug.
 
+> **Superseded by milestone 7 (2026-08-11), `internal/engine/lookahead.go`.** The
+> per-candidate rollout sets got built, and the "~6× the work" estimate was right — 36ms
+> per pick event against the survival table's 18ms, inside the spec's budget. Under sim
+> mode `PickChoices`' second leg is no longer `ebest` at all: it is the player the
+> rollouts actually landed at `q2`, averaged over 500 futures, with the candidate removed
+> from the pool at the start of each one. The paragraph above still describes the
+> `-survival=adp` path exactly, which is why it stays. The full write-up is
+> §"Two-pick lookahead" of `docs/pick6-engine.tex`; the one-line summary is that the
+> correction turned out not to be second-order — it flips the first leg on 4 of 84
+> scripted frames, twice off a quarterback.
+
 ## Phase 0 — the referee comes first
 
 **Build the rollout engine, then point `calibrate` at it before the board ever sees a sim
