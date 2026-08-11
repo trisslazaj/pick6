@@ -1866,6 +1866,18 @@ left, and our own K/DEF suppression forbidding the only two positions that could
 it. The policy had nothing legal to take. Sorting slot-closers ahead of the rest is
 identical whenever one is alive and degrades to the best available man when none is,
 which is the same shape $\mathrm{mustFill}$ has carried all along.
+
+\item \textbf{But the policy may only name a position the board is offering.} Candidate
+membership is decided by \eqref{eq:need} \emph{with} the endgame multiplier of
+\eqref{eq:endgame} --- which is exactly $0$ at $L = U$ --- while the policy prices need
+with $\mathrm{need}^{\circ}$, which carries no slack by design. \eqref{eq:plan} got the
+agreement for free by maximising over the candidate set; a rollout has to be told, and
+was not. Adversarial review caught it on the scripted mock at $13.09$: the plan line read
+``rb at 13.09 $\to$ wr at 14.04'' directly above ``every remaining pick must fill a
+starter'', with WR carrying $\mathrm{need} = 0$ and no rendered row. It is the wrong
+\emph{action} as much as the wrong label --- with RB, K and DEF open and three picks left
+you take a back, a kicker and a defense. Measured footprint after the fix: $7$ of $116$
+scripted plan lines, none before pick $120$.
 \end{itemize}
 
 \subsubsection*{What can and cannot be claimed}

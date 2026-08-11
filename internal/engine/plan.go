@@ -185,10 +185,20 @@ func (s *State) PickChoices() []PickChoice {
 		if cond != nil {
 			// The second leg is no longer chosen by a max over Q — it is
 			// whatever the rollouts' own policy actually took, so Fills
-			// describes the plan that happens rather than the best pair
-			// available. They agree by construction: the policy is forced to
-			// close a slot exactly when mustFill demands one, which is the same
-			// condition the max used to satisfy.
+			// describes the plan that HAPPENS rather than the best pair
+			// available.
+			//
+			// The two agree wherever it matters and not by construction, which
+			// is worth stating precisely rather than asserting: the policy
+			// ranks slot-closers ahead of everyone else when mustFill demands
+			// one (a preference, not a filter — legPolicy explains why), so the
+			// modal leg two closes a slot whenever one is alive in most
+			// futures, which is exactly when the old max could have closed one.
+			// The residue is a genuine discontinuity — a filler alive in 51% of
+			// futures scores a fill and in 49% does not, and Fills sorts above
+			// Score. v1 carried the same 0/1 cliff off its own max, no frame of
+			// the scripted mock reorders on it, and softening it means making
+			// feasibility continuous everywhere rather than here.
 			r := cond[first.best.ID]
 			fills := first.fills1
 			if r.Second != "" && s.NeedAfter(r.Second, first.best.ID) > NeedBench {

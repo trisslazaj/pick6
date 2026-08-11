@@ -186,7 +186,7 @@ func TestConditioningDoesNotLeak(t *testing.T) {
 	c := planCand{pos: "RB", best: bn, need: s.Need("RB"), fills1: 1}
 	core := s.newSimCore(s.planSeed())
 	core.reseed(s.planSeed())
-	_ = s.planRollout(core, c, s.MyUpcomingPicks(2), 0)
+	_ = s.planRollout(core, c, s.MyUpcomingPicks(2), 0, allPositions(s))
 
 	// Per-player: the unconditioned sim row against the conditioned one, over
 	// the men who can actually be affected. Conditioned survival is read from a

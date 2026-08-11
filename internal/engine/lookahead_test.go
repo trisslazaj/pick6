@@ -36,7 +36,7 @@ func planLegs(s *State, id string, seed int64) planResult {
 	}
 	core := s.newSimCore(seed)
 	core.reseed(seed)
-	return s.planRollout(core, c, s.MyUpcomingPicks(PlanDepth), 0)
+	return s.planRollout(core, c, s.MyUpcomingPicks(PlanDepth), 0, allPositions(s))
 }
 
 // A re-render must not move the plan. Same state, same seed: bit-identical
@@ -196,7 +196,7 @@ func TestConditionedLegNeverTakesASuppressedPosition(t *testing.T) {
 	// Directly, over every candidate rather than only the modal answer: the
 	// policy order itself must not contain them.
 	core := s.newSimCore(1)
-	order, _, _ := s.legPolicy(core, s.Rosters[s.MySlot], false)
+	order, _, _ := s.legPolicy(core, s.Rosters[s.MySlot], allPositions(s), false)
 	for _, i := range order {
 		if p := core.pool[i].pos; p == "K" || p == "DEF" {
 			t.Fatalf("legPolicy offered a %s while suppressed", p)
@@ -342,7 +342,7 @@ func TestConditionedPlanAtDepthThree(t *testing.T) {
 	run := func(depth, mustFill int) planResult {
 		core := s.newSimCore(s.planSeed())
 		core.reseed(s.planSeed())
-		return s.planRollout(core, c, mine[:depth], mustFill)
+		return s.planRollout(core, c, mine[:depth], mustFill, allPositions(s))
 	}
 	two, three := run(2, 0), run(3, 0)
 
@@ -377,5 +377,62 @@ func TestConditionedPlanAtDepthThree(t *testing.T) {
 	}
 	if mustFillAt(3, 3, 1, 1) {
 		t.Error("mustFillAt forced the third leg when the requirement was already met")
+	}
+}
+
+// allPositions is the unrestricted candidate set, for tests that drive
+// planRollout directly rather than through PickChoices. The shipped path passes
+// exactly the positions PickChoices is offering; a test asking a narrower
+// question should not have to reconstruct that.
+func allPositions(s *State) map[string]bool {
+	out := map[string]bool{}
+	for _, pos := range planPositions {
+		out[pos] = true
+	}
+	return out
+}
+
+// The leg-two policy may not name a position the board has deleted. Found by
+// adversarial review on the scripted mock at 13.09 of seed 5 slot 9: rb, k and
+// def open with exactly three picks left, so the endgame guard zeroes Need on
+// every bench position and the pane shows two rb rows — and the plan line read
+// "rb at 13.09 -> wr at 14.04" directly above "every remaining pick must fill a
+// starter". Membership is decided by Need (which carries the endgame slack) and
+// the policy priced need with needFrom (which deliberately does not), so the
+// rollout planned a pick the tool had already ruled out.
+func TestConditionedLegNeverNamesAPositionTheBoardDeleted(t *testing.T) {
+	s := newTestState(12, 15, 9)
+	s.PickNo = 137 // mine at 153, 160, 177: three picks left
+	s.Survival = SurvivalSim
+	// A lineup with rb, k and def open and everything else filled: R == U == 3,
+	// so endgameSlack zeroes every bench position's Need.
+	for i, pos := range []string{"QB", "RB", "WR", "WR", "TE", "WR"} { // the third wr takes the flex
+		id := fmt.Sprintf("mine%d", i)
+		s.Players[id] = Player{ID: id, Pos: pos, Value: 100}
+		s.Taken[id] = true
+		s.Rosters[9] = append(s.Rosters[9], id)
+	}
+	for i := 0; i < 30; i++ {
+		addPlayers(s, Player{ID: fmt.Sprintf("w%d", i), Pos: []string{"WR", "TE", "QB", "RB"}[i%4],
+			ADP: float64(137 + i), Sigma: 6, Value: 500 - 5*i, Tier: 6})
+	}
+	if !s.MustFillStarters() {
+		t.Fatalf("fixture is not at R == U: picks %d, unfilled %v", s.MyPicksLeft(), s.UnfilledStarters(9))
+	}
+	if s.Need("WR") != 0 || s.Need("RB") == 0 {
+		t.Fatalf("fixture needs: wr %v (want 0), rb %v (want nonzero)", s.Need("WR"), s.Need("RB"))
+	}
+	choices := s.PickChoices()
+	if len(choices) == 0 {
+		t.Fatal("no choices")
+	}
+	for _, c := range choices {
+		if c.Second != "" && s.Need(c.Second) == 0 {
+			t.Errorf("%s: leg two named %s, which the board is not showing (Need 0)", c.Pos, c.Second)
+		}
+	}
+	// And the plan still exists: the restriction must not starve the policy.
+	if plan, ok := s.BestPlan(); !ok || plan.Second == "" {
+		t.Errorf("the restriction left no second leg at all: %+v ok=%v", plan, ok)
 	}
 }

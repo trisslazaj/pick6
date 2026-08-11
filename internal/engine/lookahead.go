@@ -105,13 +105,34 @@ func (s *State) conditionedLegs(cands []planCand, mine []int, mustFill int) map[
 	if t := s.plan; t != nil && t.pickNo == s.PickNo && t.covers(cands) {
 		return t.res
 	}
+	// The leg-two policy may only take a position that passed the SAME
+	// membership test the first leg's candidates passed. Not a formality: the
+	// v1 formula got this for free by maxing over `cands`, and the rollouts had
+	// to be told.
+	//
+	// The gap is the endgame guard. Membership is decided by Need, which
+	// multiplies bench weight by endgameSlack and takes it to ZERO at R == U;
+	// the policy prices need with needFrom, which carries no slack (deliberately
+	// — see NeedAfter, where charging it made the pair score depend on the order
+	// of two legs ending at the same roster). So without this the policy would
+	// happily "actually do" what PickChoices deleted from the board. Found by
+	// review on the scripted mock at 13.09 of seed 5 slot 9: the plan line read
+	// "rb at 13.09 → wr at 14.04" directly above "every remaining pick must fill
+	// a starter", with wr not a rendered row at all and Need(WR) exactly 0. It
+	// is the wrong ACTION as much as the wrong label — with rb, k and def open
+	// and three picks left you take an rb, a k and a def, and a bench receiver
+	// is not a plan.
+	allowed := make(map[string]bool, len(cands))
+	for _, c := range cands {
+		allowed[c.pos] = true
+	}
 	// One pool, built once and shared: the board is the same board for every
 	// candidate. Only the random stream is restarted per candidate.
 	core := s.newSimCore(s.planSeed())
 	res := make(map[string]planResult, len(cands))
 	for _, c := range cands {
 		core.reseed(s.planSeed())
-		res[c.best.ID] = s.planRollout(core, c, mine, mustFill)
+		res[c.best.ID] = s.planRollout(core, c, mine, mustFill, allowed)
 	}
 	s.plan = &planTable{pickNo: s.PickNo, res: res}
 	return res
@@ -132,7 +153,7 @@ func (s *State) conditionedLegs(cands []planCand, mine []int, mustFill int) map[
 // from the pool. Milestone 7 makes leg two real; it does not re-open "will I
 // even get him", which the survival column and the → fallback clauses answer
 // directly and in their own units.
-func (s *State) planRollout(core *simCore, c planCand, mine []int, mustFill int) planResult {
+func (s *State) planRollout(core *simCore, c planCand, mine []int, mustFill int, allowed map[string]bool) planResult {
 	legs := len(mine)
 	last := mine[legs-1]
 
@@ -166,7 +187,7 @@ func (s *State) planRollout(core *simCore, c planCand, mine []int, mustFill int)
 	mineIDs := make([]string, 0, len(s.Rosters[s.MySlot])+legs)
 	mineIDs = append(mineIDs, s.Rosters[s.MySlot]...)
 	mineIDs = append(mineIDs, c.best.ID)
-	order2, w2, need2 := s.legPolicy(core, mineIDs, mustFillAt(2, legs, mustFill, c.fills1))
+	order2, w2, need2 := s.legPolicy(core, mineIDs, allowed, mustFillAt(2, legs, mustFill, c.fills1))
 
 	n := PlanRollouts
 	if opp == 0 {
@@ -203,7 +224,7 @@ func (s *State) planRollout(core *simCore, c planCand, mine []int, mustFill int)
 			}
 			ord, wts, need := order2, w2, need2
 			if leg > 2 {
-				ord, wts, need = s.legPolicy(core, ids, mustFillAt(leg, legs, mustFill, done))
+				ord, wts, need = s.legPolicy(core, ids, allowed, mustFillAt(leg, legs, mustFill, done))
 			}
 			pick := -1
 			for _, i := range ord {
@@ -294,10 +315,12 @@ func mustFillAt(k, legs, mustFill, done int) bool {
 // what I would actually do there", and it is deliberately the same vocabulary
 // the score is written in rather than a second opinion.
 //
-// A suppressed position — k/def before the last three rounds — is dropped
-// outright rather than merely scoring zero, because a rollout must not
-// "actually do" what the tool would never recommend: an argmax over a board of
-// zeros lands on a round-four kicker and the plan line recommends one.
+// Two positions are dropped outright rather than merely scoring zero, because a
+// rollout must not "actually do" what the tool would never recommend: a
+// SUPPRESSED one (k/def before the last three rounds), since an argmax over a
+// board of zeros lands on a round-four kicker and the plan line recommends one;
+// and one the caller did not put in `allowed`, which is PickChoices' own
+// candidate set — see conditionedLegs for the endgame case that needs it.
 //
 // Feasibility is the OTHER rule and it is a preference, not a filter, which is
 // the same shape PickChoices' Fills has always had — a pair that closes an open
@@ -315,7 +338,7 @@ func mustFillAt(k, legs, mustFill, done int) bool {
 // need is a property of a position, replacement of a position, value of a
 // player. So the argmax a rollout runs is a walk down this order to the first
 // man still alive.
-func (s *State) legPolicy(core *simCore, ids []string, mustFill bool) (order []int, weight []float64, need map[string]float64) {
+func (s *State) legPolicy(core *simCore, ids []string, allowed map[string]bool, mustFill bool) (order []int, weight []float64, need map[string]float64) {
 	filled, _ := s.fillSlots(ids)
 	need = map[string]float64{}
 	repl := map[string]float64{}
@@ -330,8 +353,10 @@ func (s *State) legPolicy(core *simCore, ids []string, mustFill bool) (order []i
 	order = make([]int, 0, len(core.pool))
 	for i, cand := range core.pool {
 		n := need[cand.pos]
-		if n == 0 {
-			continue // suppressed: the tool would not recommend him, so it does not simulate him
+		if n == 0 || !allowed[cand.pos] {
+			// Suppressed, or a position the board is not offering at all: the
+			// tool would not recommend him, so it does not simulate taking him.
+			continue
 		}
 		if v := float64(s.Players[cand.id].Value) - repl[cand.pos]; v > 0 {
 			weight[i] = v * n
