@@ -33,6 +33,7 @@ func runBoard(args []string) error {
 	lineup := fs.String("lineup", "", "starting slots, e.g. \"qb rb rb wr wr te flex flex k def\"")
 	bench := fs.Int("bench", 0, "bench spots; only read with -lineup")
 	room := roomFlag(fs)
+	survival := survivalFlag(fs)
 	snapshot := fs.Bool("snapshot", false, "print one frame and exit (no tui)")
 	search := fs.String("search", "", "with -snapshot: open the search overlay on this query")
 	selected := fs.String("selected", "", "with -snapshot: select this query's best match, prompt closed")
@@ -75,6 +76,9 @@ func runBoard(args []string) error {
 	s := engine.New(players, *teams, *rounds, *slot)
 	s.SetRoster(roster)
 	s.Demand = leagueDemand()
+	if err := applySim(s, *survival, "", 0); err != nil {
+		return err
+	}
 
 	// Snapshot renders one frame to stdout, which is how the readme's pictures
 	// get taken and how a layout change gets eyeballed without driving the tui

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -78,6 +79,7 @@ type fold struct {
 	undated   []string // held out for carrying no start time, so order is unknowable
 	lookahead bool     // -lookahead: posterior drafts put back in, for the retracted regime
 	curve     adp.RoomCurve
+	escape    []float64 // v2's off-board escape rates, measured from allowed only
 }
 
 // pool is every draft id the fold could see under its own rules, which is what
@@ -214,7 +216,8 @@ func runCalibrate(args []string) error {
 		if err := checkCurve(roomDrafts, f); err != nil {
 			return err
 		}
-		f.preds, f.vantages = walk(d, picks, b, f.curve)
+		f.escape = escapeRates(f.allowed, boards)
+		f.preds, f.vantages = walk(d, picks, b, f.curve, f.escape, true)
 		// idx is assigned once, per fold, over that fold's own slice: the tilt
 		// hands its per-vantage answers back through this index, so pred.idx must
 		// be the row's position in the slice being graded and nothing else.
@@ -806,7 +809,11 @@ func sharedManagers(a, b map[string]bool) (int, bool) {
 // curve is 3a's room warp, already built without this draft in it. It produces a
 // second survival per row rather than replacing the first: the gate is a
 // comparison, so both prices have to be on every prediction.
-func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, curve adp.RoomCurve) (out []pred, vantages int) {
+// withSim gates the v2 rollouts: the main fold walk pays for them once, and
+// the re-walks (purity subsets swap the curve and walk again) skip them —
+// nothing in those tables reads qSim, and 360 discarded sims per re-walk was
+// a third of calibrate's runtime.
+func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, curve adp.RoomCurve, escape []float64, withSim bool) (out []pred, vantages int) {
 	board := b.players
 	drafted := make(map[string]int, len(picks))
 	for _, p := range picks {
@@ -836,6 +843,45 @@ func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, curve adp.Ro
 	// is indexed by and the two columns do not agree about it.
 	effTopAlt := curve.EffectiveADP(b.altRows)
 
+	// v2's sim inputs, built once per fold. Two player maps, one per price the
+	// sim can rank desirability by: the room-warped effective price (what
+	// ships) and the raw market price (`-room=false`). Every drafted id gets an
+	// entry even when the era board never priced him — position only, adp zero —
+	// because a drafted kicker still fills the k slot when the sim computes that
+	// team's needs, and a roster with holes in it would misprice every need
+	// downstream of them.
+	simWarp := make(map[string]engine.Player, len(board)+len(picks))
+	simRaw := make(map[string]engine.Player, len(board)+len(picks))
+	// offBoard marks the drafted ids the era board never priced. They have to
+	// exist in the player maps (a drafted kicker fills the k slot whatever his
+	// price), but at any vantage BEFORE his pick such a player must not sit in
+	// the sim's pool: live, he does not exist until the pick that registers him
+	// (EnsurePlayer), and which handcuffs get registered is information from
+	// the future. simVantage reads this to keep him out until then.
+	offBoard := map[string]bool{}
+	for _, pl := range board {
+		p := engine.Player{ID: pl.ID, Pos: pl.Pos, ADP: pl.ADP}
+		simRaw[pl.ID] = p
+		p.ADPEff = eff[pl.ID]
+		simWarp[pl.ID] = p
+	}
+	for _, pk := range picks {
+		if _, ok := simWarp[pk.PlayerID]; ok {
+			continue
+		}
+		p := engine.Player{ID: pk.PlayerID, Pos: pk.Metadata.Position}
+		simWarp[pk.PlayerID] = p
+		simRaw[pk.PlayerID] = p
+		offBoard[pk.PlayerID] = true
+	}
+	// Sorted for the vantage replay below; the feed arrives sorted and we sort
+	// anyway, same rule as live — one out-of-order pick would put players on
+	// rosters they hadn't joined yet at the vantage.
+	sorted := append([]sleeper.DraftPick(nil), picks...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].PickNo < sorted[j].PickNo })
+	shape := engine.Roster{Slots: d.RosterSlots(), Bench: d.Settings.SlotsBench}
+	seed := simSeedOf(d.DraftID)
+
 	for seat := 1; seat <= teams; seat++ {
 		// The state is here for its snake math and its PickNo; PSurviveAt reads
 		// nothing else, so the player map stays empty and the board is handed in
@@ -846,6 +892,15 @@ func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, curve adp.Ro
 			s.PickNo = from
 			v := vantages
 			vantages++
+			// The sim runs once per vantage and is read per player below. Both
+			// variants share one seed, so they differ only by the price the
+			// desirability ranks over — the comparison is the price and nothing
+			// else, same construction as the adp column gate.
+			qSim, qSimRaw := zeroSim, zeroSim
+			if withSim {
+				qSim = simVantage(d, sorted, simWarp, offBoard, escape, shape, seat, from, to, seed)
+				qSimRaw = simVantage(d, sorted, simRaw, offBoard, escape, shape, seat, from, to, seed)
+			}
 			for _, pl := range board {
 				at := drafted[pl.ID]
 				if at != 0 && at < from {
@@ -902,11 +957,121 @@ func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, curve adp.Ro
 					// checks before printing anything.
 					adpAlt:    alt,
 					adpAltTop: adpAltTop,
+
+					// v2, read off this vantage's rollouts.
+					qSim:    qSim(pl.ID),
+					qSimRaw: qSimRaw(pl.ID),
 				})
 			}
 		}
 	}
 	return out, vantages
+}
+
+// zeroSim is what a sim-less walk writes: qSim 0 on every row, which no table
+// in those paths reads.
+func zeroSim(string) float64 { return 0 }
+
+// escapeRates measures the sim's off-board escape from a fold's PRIOR drafts
+// only — same causal discipline as the room curve, and 2024 (no priors) gets
+// nil, which the engine reads as no escape. Per rounds-remaining rather than
+// per round, because a 15- and a 16-round draft agree about the endgame and
+// not about round numbers: index 0 is every draft's final round, where the
+// handcuffs and third kickers live.
+//
+// "Off-board" is judged against each prior draft's own era board — the pool a
+// live tool would have had at that clock — so a `-depth` truncation moves
+// these rates with it, which is correct: a shallower board escapes more.
+func escapeRates(allowed []string, boards map[int]*eraBoard) []float64 {
+	var off, tot []int
+	for _, id := range allowed {
+		d, err := sleeper.CachedDraft(id)
+		if err != nil {
+			continue
+		}
+		picks, err := sleeper.CachedPicks(id)
+		if err != nil {
+			continue
+		}
+		year, _ := strconv.Atoi(d.Season)
+		b := boards[year]
+		if b == nil || b.err != nil {
+			continue // no era board for that season: its picks can't be judged
+		}
+		member := make(map[string]bool, len(b.players))
+		for _, pl := range b.players {
+			member[pl.ID] = true
+		}
+		for _, p := range picks {
+			rem := d.Settings.Rounds - p.Round
+			if rem < 0 {
+				continue
+			}
+			for len(tot) <= rem {
+				tot, off = append(tot, 0), append(off, 0)
+			}
+			tot[rem]++
+			if !member[p.PlayerID] {
+				off[rem]++
+			}
+		}
+	}
+	if len(tot) == 0 {
+		return nil
+	}
+	rates := make([]float64, len(tot))
+	for i, n := range tot {
+		if n > 0 {
+			rates[i] = float64(off[i]) / float64(n)
+		}
+	}
+	return rates
+}
+
+// simVantage rebuilds the draft as it stood at pick `from` and returns v2's
+// simulated survival to `to` for any player id. Rosters attribute by OwnerSlot,
+// as live does — a traded pick's player fills the receiving team's slots, and
+// need is a fact about the roster, not about the seat that spent the pick. The
+// window simulates every pick including the vantage seat's own at `from`; see
+// engine.SimBacktest for why that matches the labels and the tilt.
+func simVantage(d *sleeper.Draft, picks []sleeper.DraftPick, players map[string]engine.Player, offBoard map[string]bool, escape []float64, shape engine.Roster, seat, from, to int, seed int64) func(string) float64 {
+	s := engine.New(players, d.Settings.Teams, d.Settings.Rounds, seat)
+	s.SetRoster(shape)
+	s.SimSeed = seed
+	s.OffBoard = escape
+	for _, p := range picks {
+		if p.PickNo >= from {
+			// A player the era board never priced does not exist to the live
+			// pool until the pick that registers him, and at this vantage that
+			// pick hasn't happened. Marking him taken keeps him out of the sim's
+			// pool exactly as not-yet-registered would — it touches no roster
+			// and no label — where leaving him in leaked WHICH handcuffs the
+			// room would later reach for into late thin-board windows.
+			if offBoard[p.PlayerID] {
+				s.Taken[p.PlayerID] = true
+			}
+			continue
+		}
+		s.Taken[p.PlayerID] = true
+		slot := d.OwnerSlot(p)
+		s.Rosters[slot] = append(s.Rosters[slot], p.PlayerID)
+	}
+	// Past picks land on the roster that RECEIVED the player (OwnerSlot, as
+	// live's feed applies them); the rollout ahead attributes each window pick
+	// to the SEAT making it (SlotAt), because a future pick's owner is not in
+	// the draft endpoint. Mixed on purpose: it is exactly what the live sim
+	// sees, so the backtest grades the shipped approximation, not a cleaner one.
+	s.PickNo = from
+	return s.SimBacktest(from, to)
+}
+
+// simSeedOf derives a per-draft base seed from the draft id, so every run of
+// calibrate replays byte-identical rollouts and two folds never share a seed.
+// FNV-1a: boring, stable, and stdlib.
+func simSeedOf(id string) int64 {
+	h := fnv.New64a()
+	h.Write([]byte(id))
+	return int64(h.Sum64())
 }
 
 // eraTag / eraDetail measure the gap the spec assumed instead of asserting it.

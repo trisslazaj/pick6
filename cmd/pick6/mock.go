@@ -35,6 +35,7 @@ func runMock(args []string) error {
 	search := fs.String("search", "", "with -snapshot: open the search overlay on this query")
 	selected := fs.String("selected", "", "with -snapshot: select this query's best match, prompt closed")
 	room := roomFlag(fs)
+	survival := survivalFlag(fs)
 	width := fs.Int("width", 100, "terminal width for snapshot mode")
 	height := fs.Int("height", 40, "terminal height for snapshot mode")
 	if err := fs.Parse(args); err != nil {
@@ -50,6 +51,11 @@ func runMock(args []string) error {
 	}
 	s := engine.New(players, *teams, *rounds, *slot)
 	s.Demand = leagueDemand() // replacement level, from this room's own drafts
+	// The mock's sim seed is the draft seed: same -seed, same scripted picks AND
+	// the same rollout futures, so a demo frame is reproducible to the pixel.
+	if err := applySim(s, *survival, "", *seed); err != nil {
+		return err
+	}
 	pick := scriptedPicker(*seed)
 
 	// Snapshot mode renders a single frame to stdout. Useful for eyeballing the

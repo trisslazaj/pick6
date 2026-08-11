@@ -53,6 +53,16 @@ type pred struct {
 	adpAlt    float64
 	adpAltTop float64
 
+	// v2's opponent sim, run at this row's vantage with EVERY pick in [from, to)
+	// simulated including the seat's own (engine.SimBacktest — the same window
+	// convention the tilt above uses, and the labels agree). qSim ranks
+	// desirability off the room-warped board, which is what ships; qSimRaw off
+	// the raw market price. Neither is ever tilted: a rollout removes exactly
+	// the window's picks by construction, and tilting a balanced budget would
+	// distort it — see docs/engine-v2.md.
+	qSim    float64
+	qSimRaw float64
+
 	// The tilt is not a per-player transform — it is one exponent solved over a
 	// whole vantage's board at once — so a flat list of predictions is not enough
 	// to compute it. vantage says which (draft, seat, round) this row came from;
@@ -125,6 +135,17 @@ func betterPrinted(a, b float64) bool { return math.Round(a*1e4) < math.Round(b*
 // tilt" row. Keeping the base uncorrected is the point — a baseline that quietly
 // adopts each improvement can never show one.
 func modelEngine(p pred) float64 { return p.q }
+
+// modelSim is engine v2: opponent-aware Monte Carlo survival, recorded during
+// the walk through engine.SimBacktest so the graded number is the shipped
+// rollout and not a reimplementation. Untilted by construction — the rollout's
+// removals budget is exact. modelSimRaw is the same sim ranking desirability
+// off raw adp instead of the room-warped price (`-room=false`); on a fold with
+// no causal curve the two are one model printed twice, which is the proof the
+// fold has no curve.
+func modelSim(p pred) float64 { return p.qSim }
+
+func modelSimRaw(p pred) float64 { return p.qSimRaw }
 
 // modelFlatSigma throws away the per-player stdev. If this ties the engine, the
 // stdev plumbing is decoration.
@@ -504,11 +525,19 @@ func report(f *fold, byID map[string]*fold) {
 	// row, printed twice on purpose — the tie is the proof the fold is really flat.
 	line(fmt.Sprintf("3a: room warp + flat %.1f + tilt", engine.SigmaDefault),
 		scoreOf(preds, roomTopFlatTiltFn), "   <- the cross-fold regime")
+	// v2, untilted on purpose: the rollout's removals budget is exact, so these
+	// two rows are the only ones the tilt must never touch. The raw-adp row is
+	// the sim's own `-room=false`; on a fold with no causal curve it ties the
+	// room-priced row exactly, and the tie is the proof.
+	line("v2: opponent sim (room-priced)", scoreOf(preds, modelSim), "   <- v2 default")
+	row("v2: opponent sim (raw adp)", scoreOf(preds, modelSimRaw))
 	row(fmt.Sprintf("baseline: constant %.3f", base.obs), scoreOf(preds, modelConstant(base.obs)))
 	row(fmt.Sprintf("baseline: sigma %.1f flat", engine.SigmaDefault), scoreOf(preds, modelFlatSigma))
 	row(fmt.Sprintf("baseline: sigma %.1f flat + tilt", engine.SigmaDefault), scoreOf(preds, flatTiltFn))
 	row("baseline: unconditional", scoreOf(preds, modelUnconditional))
 	fmt.Println("  the tilt ships, so the rows to compare 4b against are the tilted ones.")
+	fmt.Println("  the v2 rows are untilted by design: a rollout removes exactly the window's")
+	fmt.Println("  picks, so the budget the tilt balances is already balanced.")
 	if f.board.flatSigma {
 		// Said here rather than left for the reader to spot: on this board the
 		// per-player, shrunk, floored and flat rows are literally one model, so
@@ -525,8 +554,8 @@ func report(f *fold, byID map[string]*fold) {
 	// row for row and the question "did each correction move the bad bins toward
 	// the observed rate" is answered by reading across, not by matching tables
 	// whose rows hold different players.
-	reliability("bins by the engine's prediction, so all four models share the rows",
-		preds, modelEngine, []namedModel{plain, tilt, current, shipped})
+	reliability("bins by the engine's prediction, so all five models share the rows",
+		preds, modelEngine, []namedModel{plain, tilt, current, shipped, {"v2 sim", modelSim}})
 	// And then the shipped model graded on its own bins, because the table above
 	// cannot see whether it invented a new region of overconfidence.
 	reliability("bins by the shipped model's own prediction — its calibration, not a comparison",
@@ -543,6 +572,48 @@ func report(f *fold, byID map[string]*fold) {
 	roomGate(preds, current,
 		namedModel{"room warp", roomShrunkTiltFn},
 		namedModel{fmt.Sprintf("top-%d warp", retractedCutoff), roomTopTiltFn})
+	simGate(preds, shipped, f.escape)
+}
+
+// simGate is v2's fold verdict: the opponent sim against the shipped adp
+// model, overall and per position. A REPORT, not a gate — sim ships as the
+// default by decision (docs/engine-v2.md), so nothing here changes what runs;
+// where the sim loses, this is the table that steers tuning (Tau, the pool,
+// Beta, the opponent K/DEF gate), and the numbers land in the spec either way.
+func simGate(preds []pred, shipped namedModel, escape []float64) {
+	sim := namedModel{"v2 sim", modelSim}
+	simRaw := namedModel{"v2 raw", modelSimRaw}
+	sa, sb := scoreOf(preds, shipped.f), scoreOf(preds, sim.f)
+	raw := scoreOf(preds, simRaw.f)
+
+	fmt.Printf("\nv2 gate — opponent sim against the shipped adp model (a report: sim ships either way)\n")
+	// The escape rates the sim ran with, measured from this fold's prior
+	// drafts. Printed most-endgame-first because that is where they live, and
+	// "none" is a real state (2024 has no priors), not a missing feature.
+	if len(escape) == 0 {
+		note("escape", "none", "no prior drafts to measure off-board rates from — every sim pick eats a ranked player")
+	} else {
+		var parts []string
+		for rem := 0; rem < len(escape) && rem < 8; rem++ {
+			parts = append(parts, fmt.Sprintf("%d:%.0f%%", rem, escape[rem]*100))
+		}
+		note("escape", "measured", fmt.Sprintf(
+			"p(pick leaves the ranked pool) by rounds remaining — %s", strings.Join(parts, " ")))
+	}
+	note("brier", verdict(sa.brier, sb.brier), fmt.Sprintf(
+		"%.4f -> %.4f (%+.4f)", sa.brier, sb.brier, sb.brier-sa.brier))
+	note("log-loss", verdict(sa.logLoss, sb.logLoss), fmt.Sprintf(
+		"%.4f -> %.4f (%+.4f)", sa.logLoss, sb.logLoss, sb.logLoss-sa.logLoss))
+	note("raw adp", verdictBoth(sb.brier, raw.brier, sb.logLoss, raw.logLoss), fmt.Sprintf(
+		"brier %.4f · log-loss %.4f · the sim with -room=false; a tie means no causal curve",
+		raw.brier, raw.logLoss))
+	pg := roomPosGate(preds, shipped, sim)
+	note("", "by pos", pg.line())
+	segmentTable("v2 by position", preds, positionSegs(), shipped, sim)
+	segmentTable("v2 by horizon", preds, horizonSegs(), shipped, sim)
+	fmt.Println("  the sim prices rosters the adp curve cannot see, so where it earns anything")
+	fmt.Println("  it should earn it late and positionally — k/def timing, filled-room effects.")
+	fmt.Println("  read the horizon rows before the average.")
 }
 
 // columnGate answers the question having two adp columns exists to answer: does
@@ -819,11 +890,7 @@ func segments(preds []pred, a, b namedModel) {
 	// Horizon first and always: the tilt's entire claim is about how many picks
 	// intervene, so a tilt that helps overall while losing the long horizons has
 	// not done the thing it was built to do.
-	segmentTable("by horizon (picks between my two vantages)", preds, []seg{
-		{"<= 6 picks", func(p pred) bool { return p.horizon() <= 6 }},
-		{"7-12 picks", func(p pred) bool { return p.horizon() >= 7 && p.horizon() <= 12 }},
-		{"13+ picks", func(p pred) bool { return p.horizon() >= 13 }},
-	}, a, b)
+	segmentTable("by horizon (picks between my two vantages)", preds, horizonSegs(), a, b)
 
 	segmentTable("by position", preds, positionSegs(), a, b)
 
@@ -865,6 +932,17 @@ func depthCut(preds []pred, rounds int) string {
 type seg struct {
 	label string
 	keep  func(pred) bool
+}
+
+// horizonSegs is the by-horizon split, shared by the standard segment tables
+// and v2's gate — the sim's whole claim is about what happens across the
+// intervening picks, so it is graded on the same rows the tilt was.
+func horizonSegs() []seg {
+	return []seg{
+		{"<= 6 picks", func(p pred) bool { return p.horizon() <= 6 }},
+		{"7-12 picks", func(p pred) bool { return p.horizon() >= 7 && p.horizon() <= 12 }},
+		{"13+ picks", func(p pred) bool { return p.horizon() >= 13 }},
+	}
 }
 
 // positionSegs is the by-position split, shared by the standard segment tables

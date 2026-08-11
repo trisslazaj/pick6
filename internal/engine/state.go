@@ -102,6 +102,31 @@ type State struct {
 	// test uses — the fallback derives a demand from the league's lineup shape
 	// instead, which is a floor rather than a measurement.
 	Demand map[string]int
+
+	// Survival selects the survival model: SurvivalSim runs the opponent-aware
+	// rollouts of sim.go, anything else (including the zero value) the ADP
+	// logistic + tilt. Sim is the product default and the cmd layer sets it;
+	// the engine's own zero value stays adp so the v1 math keeps its tests.
+	Survival string
+	// SimSeed is the base the per-vantage rollout seed mixes from, so a mock
+	// or a test can replay identical futures. Zero is a fine base; what matters
+	// is that the seed is derived, never wall-clock — a keypress re-render must
+	// not jiggle every percentage on the board.
+	SimSeed int64
+
+	// OffBoard is the sim's escape hatch, indexed by full rounds remaining
+	// AFTER a pick's own round (so index 0 is the final round): the measured
+	// probability that a pick at that depth takes a player the ranked pool
+	// cannot see — a handcuff, a rookie flier, somebody's third kicker. Without
+	// it every simulated pick removes a ranked player, which real drafts don't
+	// do, so the sim eats the board faster than reality and everyone reads more
+	// gone than they are (measured: the whole of v2's first-run log-loss win
+	// was this, supplied by a leak). nil means no escape, which is the engine
+	// tests' regime and the honest answer when no prior drafts exist to
+	// measure one from.
+	OffBoard []float64
+
+	sim *simTable // cached rollouts for this vantage; every mutator nils it
 }
 
 // New builds a state for a snake draft with the natural slot order 1..T.
@@ -215,6 +240,7 @@ func (s *State) Draft(playerID string) {
 		PlayerID:  playerID,
 	})
 	s.PickNo++
+	s.sim = nil
 }
 
 // ApplyRemote records a pick reported by a live feed, trusting the feed's own
@@ -249,6 +275,7 @@ func (s *State) ApplyRemote(r RemotePick) error {
 	if r.PickNo >= s.PickNo {
 		s.PickNo = r.PickNo + 1
 	}
+	s.sim = nil
 	return nil
 }
 
@@ -280,12 +307,14 @@ func (s *State) EnsurePlayer(p Player) {
 		p.Name = "unknown player"
 	}
 	s.Players[p.ID] = p
+	s.sim = nil
 }
 
 // SetRoster replaces the assumed lineup, e.g. with one read from Sleeper.
 func (s *State) SetRoster(r Roster) {
 	if len(r.Slots) > 0 {
 		s.Roster = r
+		s.sim = nil
 	}
 }
 
@@ -305,6 +334,7 @@ func (s *State) Undo() {
 		s.Rosters[owner] = r[:len(r)-1]
 	}
 	s.PickNo = last.PickNo
+	s.sim = nil
 }
 
 // ---- queries ----
@@ -553,6 +583,16 @@ func (s *State) needFrom(pos string, filled []string) float64 {
 	if s.Suppressed(pos) {
 		return 0
 	}
+	return s.needSlots(pos, filled)
+}
+
+// needSlots is the roster-shape half of the need rule — what an open slot at
+// pos is worth given an already-filled lineup — with no K/DEF suppression
+// applied. needFrom wraps it with OUR suppression; the sim's opponentNeed
+// wraps it with the room's looser one. The split is what keeps two different
+// questions (what the tool recommends, what the room does) from sharing a
+// constant by accident.
+func (s *State) needSlots(pos string, filled []string) float64 {
 	for i, want := range s.Roster.Slots {
 		if want == pos && filled[i] == "" {
 			return NeedStarter

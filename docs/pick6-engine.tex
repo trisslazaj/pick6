@@ -2258,6 +2258,160 @@ is a gap between two receivers somewhere else on the board; it cannot draw a rea
 boundary. Tier $0$ is also what keeps cliff logic skipping them, and a red ``last one in
 tier 3'' about kickers is exactly the alarm this tool must never raise.
 %=======================================================================
+\section{The opponent simulation (engine v2)}
+\label{sec:sim}
+%=======================================================================
+
+Everything in \S\ref{sec:survival}--\S\ref{sec:tilt} treats the picks between mine as
+random draws from ``drafters in general''. They are not. They are eleven specific rosters,
+Sleeper publishes every one of them, and if the three teams picking ahead of me all have
+full RB rooms, the RB I want is far safer than any price curve can know. Engine v2 replaces
+the survival number with a Monte Carlo over those actual rosters --- and replaces
+\emph{nothing else}: $\mathbb{E}[M_P]$, urgency, tier-hold, the plan and the banners all
+consume $\tilde q_j$ unchanged, through one chokepoint. It ships as the board's default;
+\code{-survival=adp} keeps v1, tilt and all, as the fallback and the baseline.
+
+\subsection{The pick model}
+
+For an opponent team $t$ picking at overall pick $q$, the probability it takes available
+player $j$ is proportional to
+\[
+  w_t(j) \;=\; e^{-k(j)/\tau} \cdot \mathrm{need}_t(\mathrm{pos}_j)^{\beta(r(q))},
+\]
+where $k(j)$ is $j$'s 0-indexed rank among currently available players by \emph{effective}
+price (the room-warped price of \S\ref{sec:room} when a causal curve exists --- the room's
+appetite belongs in the room's simulation), $\tau = 5$, and only the top $25$ ranks get any
+weight at all. $\mathrm{need}_t$ is the same starter/flex/bench rule of \S\ref{sec:urgency},
+computed over $t$'s actual roster, with one substitution: the K/DEF gate is the
+\emph{opponents'} constant, not ours. The tool refuses to recommend a kicker before the
+last three rounds; this room demonstrably drafts its first one with seven rounds left, and
+a simulation that keeps drafted kickers ``available'' corrupts every number downstream.
+(That constant moved from $6$ to $7$ during review: ``first kicker in round 10'' had been
+read off a 15-round draft, and the room that matters ran 16 rounds and took two kickers at
+remaining $= 7$. The backtest A/B between the two values is a wash; the fact decided.)
+
+$\beta(r) = \mathrm{clamp}((r-3)/4,\,0,\,1.5)$ ramps need in from nothing: rounds 1--3 are
+pure best-available, which is not an assumption --- the 552-pick league profile measured
+$0\%$ QB in round 1, $8\%$ in round 2, $28\%$ in round 3, and the ramp starts exactly where
+the data turns on. If every candidate's need is gated to zero (a late all-K/DEF pool), the
+need term is dropped for that one pick rather than dividing by it.
+
+\subsection{The rollout, and why the tilt stays home}
+
+One recompute plays the window from the current pick to my pick-after-next $500$ times.
+Each rollout deep-copies the rosters of every team that picks in the window (a team at the
+turn picks twice inside one rollout, and a frozen roster would let it draft two RBs at
+identical need weight --- the exact behaviour v2 exists to fix), samples each opponent pick
+from the weights above, and records \emph{when} every player was removed. Recording removal
+times is what lets one rollout batch answer every horizon the engine asks about ---
+NextPick, ActPick, and the lookahead's $q_2$ --- as lookups.
+
+My own picks inside the window remove nobody, live: the question on the board is
+conditional on my choice, and nobody can take a player from me across my own turn ---
+which the sim now gets \emph{exactly} right, returning survival $1$ across back-to-back
+picks by arithmetic rather than by a clamped tilt.
+
+Survival is the Jeffreys-smoothed count
+\[
+  \tilde q_j \;=\; \frac{\#\{\text{rollouts where } j \text{ survives}\} + \tfrac12}{500 + 1},
+\]
+because a player taken in all 500 rollouts is not probability zero, and
+\S\ref{sec:calibration} scores log-loss, where one hard zero that survives in reality
+costs infinity. The rollouts are seeded from the draft id and the pick number: a keypress
+re-render replays byte-identical futures, and every number on a frame is reproducible.
+
+\textbf{The tilt does not apply to sim output, and this is the most important integration
+fact in v2.} The exactly-$N$ tilt of \S\ref{sec:tilt} exists because independent survivals
+do not respect the removals budget. A rollout removes exactly the window's picks by
+construction; the budget the tilt balances is already balanced, and tilting it would
+distort every number. This also retires the thin-board fragility of
+\S\ref{sec:crossfold} for the sim path: there is no budget aimed at players the board
+does not hold, because removals happen to actual players.
+
+\subsection{The off-board escape}
+\label{sec:escape}
+
+The first honest backtest of the sim lost to v1 nearly everywhere, and the loss had one
+mechanism: the sim made \emph{every} window pick remove a ranked player, and real rooms do
+not. Real rooms spend late picks on handcuffs, rookie fliers and third kickers no board
+ranks --- measured against their own era boards, $56\%$ of this room's final-round picks
+and $72\%$ of its second-to-last-round picks leave the ranked pool entirely. Every such
+pick removes nobody I could have wanted, so a sim without an escape eats the board faster
+than reality and reads everyone as more gone than they are.
+
+The fix is one hazard: with the measured probability for the pick's depth (indexed by
+rounds \emph{remaining}, so 15- and 16-round drafts agree about the endgame), a simulated
+pick removes nobody. The rates are measured by \code{fetch} against each cached draft's own
+era board and consumed from disk at draft time; a replay holds the replayed draft and its
+future out of them, by the same two rules the room curve obeys (\S\ref{sec:causal}).
+
+It is worth recording that the escape was discovered by a \emph{leak}. The first scoring
+run left drafted-but-unranked players sitting in the backtest pool from vantage one ---
+players only known to exist because a future pick registered them. They absorbed removals
+exactly the way real off-board picks do, the sim posted a large log-loss win, and the
+adversarial review killed it: the leak was an accidental, future-informed implementation of
+the escape. Those numbers are retracted; the causal escape below is the honest version of
+what they were accidentally measuring.
+
+\subsection{What the referee says}
+
+A backtest vantage simulates every pick in its window \emph{including the vantage seat's
+own} --- the same window convention the tilt's $N$ uses, and the labels agree (a player the
+seat took is scored $y=0$). Both sim variants share one seed, so the room-priced and
+raw-priced rows differ only by the price, the same construction as the ADP column gate.
+One provenance note dates everything: FFC's archive began serving 2025 on 2026-08-11
+(it answered ``no ADP data found'' as late as 2026-07-30), so both 2025 folds now score on
+FFC boards --- 156 names, 718 drafts, real spread --- and the FantasyPros numbers of
+\S\ref{sec:crossfold} are a different board's numbers. The table below is the FFC-priced
+present.
+
+\begin{table}[htbp]
+\centering
+\small
+\begin{tabular}{llrrl}
+\toprule
+fold & model & Brier $\downarrow$ & log-loss $\downarrow$ & verdict \\
+\midrule
+2024   & shipped v1                  & 0.0670 & 0.2250 & \\
+       & v2 sim (no priors)          & 0.0695 & 0.2498 & worse on both \\
+       & v2 sim + escape             & 0.0699 & 0.2511 & no priors: no escape exists \\
+\midrule
+2025-a & shipped v1                  & 0.0711 & 0.3075 & \\
+       & v2 sim, escape-less         & 0.0747 & 0.2651 & split \\
+       & \textbf{v2 sim + escape}    & \textbf{0.0701} & \textbf{0.2495} & \textbf{better on both} \\
+\midrule
+2025-b & shipped v1                  & 0.0774 & 0.3006 & \\
+       & v2 sim, escape-less         & 0.0803 & 0.3201 & worse on both \\
+       & \textbf{v2 sim + escape}    & \textbf{0.0766} & \textbf{0.2775} & \textbf{better on both} \\
+\bottomrule
+\end{tabular}
+\caption{Engine v2 against the shipped v1 row, per fold, on the FFC-priced boards of
+2026-08-11. The 2024 fold has no prior drafts, hence no room curve and no measurable
+escape --- a configuration the live 2026 draft, with three cached priors, is never in. On
+both folds that can test v2 as it would actually run, it beats what shipped on both
+metrics.}
+\label{tab:sim}
+\end{table}
+
+Per position, WR and K improve on both metrics on both causal folds --- the deepest
+position is where roster-aware removal ordering pays --- while RB and TE still give back
+log-loss: the need model drafts tight ends too eagerly and running backs not eagerly
+enough. That, a graded K/DEF appetite to replace the binary gate (the room's \emph{first}
+kicker goes at remaining 7; its \emph{median} kicker goes in the last two rounds, and a
+gate cannot say both), per-manager priors from \code{scout}, and the autodraft floor are
+the v2.1 levers --- every one named, none built, all refereed by the same gate before they
+ship.
+
+\subsection{The deny chip}
+
+One social feature rides the machinery: on my pick only, the seat picking immediately
+after me is scored with the opponent model, and if its hungriest position is down to the
+last man of its best remaining band --- and my own need for him is flex-weight or less ---
+his row wears a \code{deny team $n$} chip. A chip, never the verdict: it cannot move the
+ranking, and the engine refuses to fire it on a player I need at starter weight, because
+that is called a pick. Strategically marginal, socially essential.
+
+%=======================================================================
 \section{Calibration: how we know any of this}
 \label{sec:calibration}
 %=======================================================================
@@ -2972,6 +3126,14 @@ thinly-sampled position where raw spreads are noisiest.
 Every result above rested on one draft night. Two more are now scorable, and this
 subsection is what they say. The headline: \textbf{the model's core --- conditioning and
 the tilt --- replicates; the room warp's cutoff does not.}
+
+\emph{Dated caveat (2026-08-11): the 2025 numbers in this subsection were produced on the
+hand-exported FantasyPros board, which was the only 2025 board that existed when they were
+run. FFC began serving 2025 on 2026-08-11, \code{calibrate} now prefers it, and current
+runs land on different absolute numbers for both 2025 folds --- different board, different
+depth, real spread. The findings here (replication of the tilt, the cutoff's failure, the
+depth control) were about \emph{comparisons within a fold} and survived the board change;
+the absolute figures did not need to. \S\ref{sec:sim} carries the FFC-priced present.}
 
 \subsubsection*{The only honest comparison}
 
@@ -4043,27 +4205,30 @@ honest.
 \section{What is next}
 %=======================================================================
 
-Three things, in the order they should happen.
+Two of the three things this section used to ask for have since happened, and are left
+here with their outcomes because a to-do list that quietly deletes its completed items
+also deletes the record of whether they were worth doing.
 
-\paragraph{Re-gate when the archive grows.} FFC's \code{year=2025} still answers ``No ADP
-data found''. The moment it does not, there is a second scorable season, the room warp's
-one-fold gate becomes two folds, and \S\ref{sec:roomfail} gets an actual answer rather
-than a defensible guess. This is one HTTP request and it is by far the highest-value
-follow-up here.
+\paragraph{Re-gate when the archive grows --- HAPPENED (2026-08-11).} FFC's
+\code{year=2025} came alive: 156 players, 718 drafts, real spread. Both 2025 folds now
+score on FFC boards, per-player sigma runs on all three folds, and the cap of
+\S\ref{sec:roomfail} stayed retracted on the reruns. The unadvertised consequence was a
+regime change: the 2025 boards are \emph{thinner than their drafts} (156 names against
+180--192 picks), which promoted the tilt's thin-board fragility from a diagnostic to the
+live scoring regime --- and became one of the two measured arguments for the sim.
 
-\paragraph{Opponent-aware survival (milestone 6).} Everything in
-\S\ref{sec:survival}--\S\ref{sec:tilt} treats the picks between mine as random draws
-from ``drafters in general''. Sleeper hands us the actual rosters. A Monte Carlo that
-simulates the specific eleven managers --- their unfilled slots, their measured
-tendencies, their autodraft rates --- replaces the survival function and nothing else:
-$\mathbb{E}[M_P]$, urgency, tier-hold and the banners all consume it unchanged.
-Table~\ref{tab:murphy} says exactly why this is the right next move: the remaining
-headroom is in \emph{resolution}, and no scalar correction can supply resolution.
+\paragraph{Opponent-aware survival (milestone 6) --- SHIPPED (2026-08-11).} \S\ref{sec:sim}.
+The prediction above held in an unexpected way: the headroom was indeed resolution, but
+most of what the rollouts initially bought was eaten by a bias no roster can see --- every
+simulated pick removing a ranked player when real rooms spend half their endgame picks
+off-board. With the causal escape of \S\ref{sec:escape}, v2 beats what shipped on both
+metrics on both folds that can test it as it runs live, and it is the board's default.
 
 \paragraph{Multi-pick lookahead (milestone 7).} \S\ref{sec:plan}'s honest simplification
 --- pricing the first leg at today's best available --- goes away once a rollout is
 simulating the draft forward anyway. Search over \emph{my} picks inside it, not just
-over opponents'.
+over opponents'. The rollouts now exist; this is the next real move, alongside the
+v2.1 levers named at the end of \S\ref{sec:sim}.
 
 Two things that are deliberately \emph{not} next: an ADP over/under-performance model
 (the blocker is labels --- it needs several seasons of historical ADP joined to actual

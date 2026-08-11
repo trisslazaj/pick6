@@ -551,7 +551,7 @@ func scoreCurve(f *fold, pool []string, drafts map[string]adp.RoomDraft) (top, f
 	for _, id := range pool {
 		sub[id] = drafts[id]
 	}
-	preds, _ := walk(f.draft, f.feed, f.board, adp.RoomCurveOf(sub))
+	preds, _ := walk(f.draft, f.feed, f.board, adp.RoomCurveOf(sub), nil, false)
 	for i := range preds {
 		preds[i].idx = i // the tilt hands answers back through this index
 	}
