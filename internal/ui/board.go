@@ -852,7 +852,19 @@ func (b Board) choiceRow(w int, c engine.PickChoice, accent, onClock bool) strin
 	noteAt := -1
 	if onClock {
 		clauses = append(clauses, styledClause{price, priceStyle})
-		noteAt = 1
+		// v2's spite chip: the seat after me needs this exact man and he is the
+		// last of his band. A chip, never the verdict — engine.Deny cannot fire
+		// on a player I need at starter weight, and the verdict's own man never
+		// carries it (his row isn't in this list on the clock; if the value pick
+		// and the deny coincide, "take him" is already the advice). It rides
+		// BEFORE the tier note: clauses drop from the right, the note is on
+		// every row, and a once-a-draft chip must not be the first thing a
+		// narrow pane sheds — especially as the note it displaces ("1 in tier
+		// 2") is half-implied by the chip anyway.
+		if dp, them, ok := s.Deny(); ok && dp.ID == p.ID {
+			clauses = append(clauses, styledClause{fmt.Sprintf("deny team %d", them), ChipNote})
+		}
+		noteAt = len(clauses)
 		clauses = append(clauses, styledClause{short, noteStyle})
 	} else {
 		noteAt = 0

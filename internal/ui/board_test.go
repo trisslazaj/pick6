@@ -1251,3 +1251,39 @@ func TestNeedLineCountsWhatItCannotFit(t *testing.T) {
 		}
 	}
 }
+
+// The deny chip: on the clock, the seat after me needs the last man of a band
+// and his row wears the chip. The engine's Deny tests own the conditions; this
+// pins that the chip actually reaches a rendered frame.
+func TestDenyChipRenders(t *testing.T) {
+	players, add := newBoard()
+	add("lastte", "TE", 380, 55, 4, 2)
+	add("deepte", "TE", 100, 90, 6, 4)
+	add("rb1", "RB", 500, 50, 4, 2)
+	add("wr1", "WR", 490, 52, 4, 2)
+	add("wr2", "WR", 450, 56, 4, 2)
+	add("qb1", "QB", 470, 60, 5, 2)
+	// My te slot is filled; slot 4, picking right after me at 52, has everything
+	// but te.
+	players["myte"] = engine.Player{ID: "myte", Name: "fake myte", Pos: "TE", Value: 400, Tier: 1}
+	for i, pos := range []string{"RB", "RB", "WR", "WR", "QB"} {
+		id := fmt.Sprintf("s4p%d", i)
+		players[id] = engine.Player{ID: id, Name: "fake " + id, Pos: pos, Value: 300}
+	}
+	s := engine.New(players, 12, 15, 3)
+	s.PickNo = 51 // my round-5 pick; pick 52 belongs to slot 4
+	s.Taken["myte"] = true
+	s.Rosters[3] = []string{"myte"}
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("s4p%d", i)
+		s.Taken[id] = true
+		s.Rosters[4] = append(s.Rosters[4], id)
+	}
+	if _, them, ok := s.Deny(); !ok || them != 4 {
+		t.Fatalf("fixture broken: deny not firing against slot 4 (ok=%v them=%d)", ok, them)
+	}
+	b := Board{State: s, Width: 100, Height: 40}
+	if out := b.View(); !strings.Contains(out, "deny team 4") {
+		t.Fatal("rendered frame is missing the deny chip")
+	}
+}

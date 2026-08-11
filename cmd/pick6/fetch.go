@@ -212,6 +212,9 @@ func runFetch(args []string) error {
 	printInjuryFlags(players, flagged)
 	printTierDisagreements(players)
 	printRoomCurve(players)
+	// The sim's off-board escape, measured here because it needs the era boards
+	// (network) and consumed at draft time from disk. See escape.go.
+	writeEscape(ix, *format)
 	return nil
 }
 

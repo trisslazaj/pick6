@@ -23,8 +23,11 @@ real thing — [`docs/demo.tape`](docs/demo.tape), `vhs docs/demo.tape` to regen
 
 ## what it does
 
-- **Survival odds on every player** — the chance he's still there at your next pick, from
-  measured draft data, corrected for the picks actually between you and your turn.
+- **Survival odds on every player** — the chance he's still there at your next pick, by
+  simulating the picks between you and your turn 500 times against your opponents' *actual
+  rosters*: their open slots, your room's measured appetites, and the measured share of real
+  picks that go to players no board ranks. (`-survival=adp` falls back to the pure
+  price-curve model.)
 - **Tiers that alarm** — amber when a tier is probably gone before you act, red when the man on
   screen is the last of it. Tiers come from your rankings file; where it runs out, they're
   derived from the value curve.
@@ -140,8 +143,9 @@ before:
 ### for the curious
 
 `pick6 scout` profiles each manager's tendencies from your league's cached drafts; `pick6
-calibrate` backtests the survival model against real completed drafts and grades every model
-choice. Neither is needed to draft.
+calibrate` backtests both survival models against real completed drafts and grades every model
+choice — the simulation ships because it won that backtest on every draft that could test it
+fairly. Neither command is needed to draft.
 
 ## keys
 
@@ -175,10 +179,12 @@ Philadelphia Eagles,DEF,PHI,,,target
 
 ## the math
 
-Everything on screen is a probability with a paper trail — survival curves per player, an
-exactly-N correction, expected-best-later urgency, probabilistic tier holds — and every
-constant was chosen by backtesting against real completed drafts. The whole derivation, the
-calibration methodology, and the ideas that measured worse and were removed live in
+Everything on screen is a probability with a paper trail — an opponent-aware Monte Carlo
+(rosters, room appetites, and a measured escape rate for picks that leave the ranked board),
+survival curves per player, an exactly-N correction, expected-best-later urgency,
+probabilistic tier holds — and every constant was chosen by backtesting against real completed
+drafts. The whole derivation, the calibration methodology, and the ideas that measured worse
+and were removed (including the leak that briefly flattered the simulation) live in
 [**the engine paper**](docs/pick6-engine.pdf) (also attached to every
 [release](https://github.com/trisslazaj/pick6/releases/latest)).
 

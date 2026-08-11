@@ -26,6 +26,7 @@ func runLive(args []string) error {
 	search := fs.String("search", "", "with -replay: open the search overlay on this query")
 	selected := fs.String("selected", "", "with -replay: select this query's best match, prompt closed")
 	room := roomFlag(fs)
+	survival := survivalFlag(fs)
 	width := fs.Int("width", 92, "board width for replay mode")
 	height := fs.Int("height", 40, "board height for replay mode")
 	// Go's flag package stops parsing at the first positional argument, so
@@ -71,6 +72,11 @@ func runLive(args []string) error {
 	// flex slots, which the default shape does not.
 	if slots := draft.RosterSlots(); len(slots) > 0 {
 		s.SetRoster(engine.Roster{Slots: slots, Bench: draft.Settings.SlotsBench})
+	}
+	// The draft id is the hold-out for the escape rates exactly as it is for the
+	// room curve, and it seeds the rollouts so a re-render never jiggles.
+	if err := applySim(s, *survival, draftID, simSeedOf(draftID)); err != nil {
+		return err
 	}
 
 	fmt.Printf("draft %s — %d teams, %d rounds, %s\n",
