@@ -177,12 +177,11 @@ func (s *State) BestLater(pos string) (Player, bool) {
 	if len(avail) == 0 {
 		return Player{}, false
 	}
-	at := s.ActPick()
-	c := s.survivalTilt(at, s.opponentPicksBefore(at))
+	f := s.survivalAt(s.ActPick())
 
 	best, bestWeight, acc := avail[0], -1.0, 1.0
 	for _, p := range avail {
-		q := math.Pow(s.PSurviveAt(p, at), c)
+		q := f(p)
 		if w := acc * q; w > bestWeight {
 			best, bestWeight = p, w
 		}

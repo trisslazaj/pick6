@@ -103,11 +103,36 @@ func (s *State) survivalTilt(at, n int) float64 {
 	return (lo + hi) / 2
 }
 
+// survivalAt is THE survival chokepoint: it returns the p~ every consumer
+// prices with at horizon `at` — the simulated survival when the state runs sim
+// mode, the tilted logistic otherwise. PSurviveTilted, ebest, BestLater and
+// TierHold all go through it, so the two models can never leak onto one frame
+// together.
+//
+// at <= PickNo short-circuits to exactly 1 for everyone in both modes: no
+// picks intervene, and the my-own-pick exactness chain (EBest == v(bestNow),
+// urgency exactly 0) is arithmetic, not sampling. The v1 path returns the same
+// 1 by construction (softplus difference of equal exponents, tilt skipped at
+// the horizon); the short-circuit keeps the sim path just as exact.
+func (s *State) survivalAt(at int) func(Player) float64 {
+	if at <= s.PickNo {
+		return func(Player) float64 { return 1 }
+	}
+	if s.Survival == SurvivalSim {
+		t := s.simFor()
+		return func(p Player) float64 { return t.pAt(p.ID, at) }
+	}
+	c := s.survivalTilt(at, s.opponentPicksBefore(at))
+	return func(p Player) float64 { return math.Pow(s.PSurviveAt(p, at), c) }
+}
+
 // PSurviveTilted is the survival probability the board shows: PSurvive
 // corrected so the model expects exactly as many removals as the draft actually
 // makes. One truth — an untilted probability must never reach the screen, or
 // two panes quote different odds on the same player and the reader has no way
-// to tell which one the ordering used.
+// to tell which one the ordering used. (Under sim mode the same name serves
+// the simulated number — the "tilted" in the name is historical; it means "the
+// corrected survival the board is allowed to show".)
 //
 // It prices to ActPick, not NextPick, and the difference is only visible on the
 // clock. There NextPick is the pick being made, no picks intervene, and every
@@ -122,8 +147,7 @@ func (s *State) survivalTilt(at, n int) float64 {
 // exactly 0 on the clock, which is what hands the group sort to the vor tie-break.
 // Repointing it is a modelling change and needs its own gate, not a patch.
 func (s *State) PSurviveTilted(p Player) float64 {
-	at := s.ActPick()
-	return math.Pow(s.PSurviveAt(p, at), s.survivalTilt(at, s.opponentPicksBefore(at)))
+	return s.survivalAt(s.ActPick())(p)
 }
 
 // EBest is the expected value of the best player still available at a position
@@ -152,7 +176,7 @@ func (s *State) ebest(pos string, at int, exclude string) float64 {
 	if len(avail) == 0 {
 		return 0
 	}
-	c := s.survivalTilt(at, s.opponentPicksBefore(at))
+	f := s.survivalAt(at)
 	values := make([]float64, 0, len(avail))
 	surv := make([]float64, 0, len(avail))
 	for _, p := range avail {
@@ -160,7 +184,7 @@ func (s *State) ebest(pos string, at int, exclude string) float64 {
 			continue
 		}
 		values = append(values, float64(p.Value))
-		surv = append(surv, math.Pow(s.PSurviveAt(p, at), c))
+		surv = append(surv, f(p))
 	}
 	return expectedBest(values, surv)
 }

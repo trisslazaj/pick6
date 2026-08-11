@@ -121,7 +121,34 @@ const (
 	KDefLastRounds = 3
 	// OpponentKDefLastRounds is looser because this league takes its first kicker
 	// in round 10. Used by engine v2's opponent model only.
-	OpponentKDefLastRounds = 6
+	//
+	// 7, not 6, and the difference is the draft's LENGTH: "first kicker in round
+	// 10" was read off a 15-round draft (remaining = 6), but the user's own room
+	// — draft 1261824503076360192, the shape of the 2026 league — ran 16 rounds
+	// and took two kickers in round 10 (picks 114 and 118), where remaining is
+	// 7. At 6 the sim zeroes kicker need on picks the room actually spends on
+	// kickers, which is exactly the corruption this constant exists to prevent.
+	// Too loose by a round is the cheaper error: an early-round kicker never
+	// cracks the candidate pool's top ranks anyway.
+	OpponentKDefLastRounds = 7
+
+	// Engine v2 (opponent-aware sim, sim.go). Tau is the ADP desirability decay
+	// in ranks: an opponent is e times likelier to take the k-th best available
+	// than the (k+Tau)-th. CandidatePool bounds who they'd consider at all —
+	// nobody is taking the 60th-best player. Rollouts is how many futures one
+	// recompute samples; at 500 the standard error on a 90% survival is ~1.3%,
+	// under the board's own rounding.
+	Tau           = 5.0
+	CandidatePool = 25
+	Rollouts      = 500
+)
+
+// Survival mode names for State.Survival. The zero value means adp: the
+// engine's own tests and any caller that never sets the field get v1, and the
+// PRODUCT default of sim is set where flags live (cmd), not here.
+const (
+	SurvivalADP = "adp"
+	SurvivalSim = "sim"
 )
 
 // DefaultRoster is the league shape we assume when Sleeper metadata is absent.

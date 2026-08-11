@@ -1,9 +1,6 @@
 package engine
 
-import (
-	"math"
-	"sort"
-)
+import "sort"
 
 // CliffLevel describes how close a tier is to emptying.
 type CliffLevel int
@@ -65,14 +62,13 @@ func (s *State) TierHold(pos string) (float64, bool) {
 	if !ok {
 		return 0, false
 	}
-	at := s.ActPick()
-	c := s.survivalTilt(at, s.opponentPicksBefore(at))
+	f := s.survivalAt(s.ActPick())
 	allGone := 1.0
 	for id, p := range s.Players {
 		if s.Taken[id] || p.Pos != pos || p.Tier != tier {
 			continue
 		}
-		allGone *= 1 - math.Pow(s.PSurviveAt(p, at), c)
+		allGone *= 1 - f(p)
 	}
 	return 1 - allGone, true
 }
