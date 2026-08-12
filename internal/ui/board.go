@@ -953,9 +953,44 @@ func (b Board) planCopy() string {
 	if !ok {
 		return ""
 	}
+	if plan.Second == "" {
+		// The rollouts found no legal second leg at all: the board past my next
+		// pick holds nothing this lineup is allowed to want. Rare — it needs an
+		// endgame where the only open slots are k and def while our own
+		// suppression still forbids them — and naming a blank position is worse
+		// than naming none.
+		return fmt.Sprintf("plan  %s at %s", strings.ToLower(plan.First), b.pickLabel(plan.FirstPick))
+	}
 	return fmt.Sprintf("plan  %s at %s → %s at %s",
 		strings.ToLower(plan.First), b.pickLabel(plan.FirstPick),
 		strings.ToLower(plan.Second), b.pickLabel(plan.SecondPick))
+}
+
+// planOdds is the conditioned lookahead's outcome claim (milestone 7): how
+// often leg two actually lands the band it is planning on, across the futures
+// the rollouts played. "lands tier-2 rb 78%."
+//
+// It is an OUTCOME claim, not a loss forecast — which is why it earns a place
+// on the frame where CostOfPassing did not. "you stand to lose 990 of te value"
+// is a number in board units about a thing that has not happened; "the tier-2
+// backs are there when you come back, 78% of the time" is the plan's own
+// premise, stated as odds a drafter can disagree with.
+//
+// The claim is "that tier OR BETTER", because landing a better one is strictly
+// good news and a clause that excluded it would understate the plan.
+//
+// "" under the v1 formula, which has no futures to count and must not be made
+// to look like it does — and "" on an untiered second leg where the honest
+// short form is the position alone.
+func planOdds(plan engine.Plan) string {
+	if plan.SecondOdds <= 0 || plan.Second == "" {
+		return ""
+	}
+	pos := strings.ToLower(plan.Second)
+	if plan.SecondTier == 0 {
+		return fmt.Sprintf("lands a %s %.0f%%", pos, 100*plan.SecondOdds)
+	}
+	return fmt.Sprintf("lands tier-%d %s %.0f%%", plan.SecondTier, pos, 100*plan.SecondOdds)
 }
 
 // planLine is that copy as the left pane's first row, or "" in the last round.
@@ -967,15 +1002,24 @@ func (b Board) planCopy() string {
 // evidence for it. The group order, the tiers and the survivals below are what
 // you actually read; this is the one-line summary you're free to ignore.
 //
-// The line has no short form to fall back to because it never needs one: its
-// widest possible copy is 33 cells ("plan  def at 15.12 → def at 15.12") and the
-// tightest this pane ever gets is 43, at 80 columns with the widest sidebar.
+// The plan clause itself has no short form to fall back to because it never
+// needs one: its widest possible copy is 33 cells ("plan  def at 15.12 → def at
+// 15.12") and the tightest this pane ever gets is 43, at 80 columns with the
+// widest sidebar. The odds clause riding behind it does not fit there, and
+// drops whole — joinClauses' rule, and the right priority: the plan is the
+// recommendation, the odds are how much to trust it.
 func (b Board) planLine(w int) string {
 	line := b.planCopy()
 	if line == "" {
 		return ""
 	}
-	return "  " + Dim.Render(line) + "\n"
+	clauses := []styledClause{{line, Dim}}
+	if plan, ok := b.State.BestPlan(); ok {
+		if odds := planOdds(plan); odds != "" {
+			clauses = append(clauses, styledClause{odds, Dim})
+		}
+	}
+	return "  " + joinClauses(clauses, w-2) + "\n"
 }
 
 // endgameLine says out loud what the engine has already done to the board: at

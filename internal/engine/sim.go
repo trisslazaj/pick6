@@ -178,142 +178,201 @@ func (s *State) SimBacktest(from, to int) func(id string) float64 {
 	return func(id string) float64 { return t.pAt(id, to) }
 }
 
-// rollout is the shared core: play `picks` (overall pick numbers, ascending,
-// all inside [start, far)) Rollouts times from the current available set and
-// tally when each player came off the board.
-func (s *State) rollout(start int, picks []int, far int, seed int64) *simTable {
-	t := &simTable{pickNo: start, far: far, removals: map[string][]uint16{}, oppPicks: picks}
-	if len(t.oppPicks) == 0 {
-		return t
-	}
+// simCand is one undrafted player as a rollout sees him.
+type simCand struct {
+	id     string
+	pos    string
+	posIdx int
+}
 
-	// The board, best effective price first — the order desirability ranks
-	// over. Sorted once; each rollout walks it skipping its own dead.
-	type simCand struct {
-		id     string
-		pos    string
-		posIdx int
-	}
-	var pool []simCand
+// simCore is everything the two kinds of rollout share: the price-sorted board,
+// the per-rollout alive mask, and one opponent pick sampled off them.
+//
+// The survival table below and the conditioned lookahead in lookahead.go differ
+// in exactly one thing — what happens on MY picks, skipped there and
+// policy-driven here — so the opponent model, the off-board escape and the
+// roster copies live in one place and cannot drift apart. A lookahead that
+// simulated opponents even slightly differently from the survival column would
+// put two models on one frame, which is the bug survivalAt exists to prevent.
+type simCore struct {
+	s     *State
+	pool  []simCand
+	index map[string]int // player id -> pool index, for the lookahead's decisions
+	alive []bool
+	top   []int
+	w     [CandidatePool]float64
+	rng   *rand.Rand
+}
+
+// newSimCore builds the pool once: the board, best effective price first, which
+// is the order desirability ranks over. Each rollout walks it skipping its own
+// dead.
+func (s *State) newSimCore(seed int64) *simCore {
+	c := &simCore{s: s, index: map[string]int{}, rng: rand.New(rand.NewSource(seed))}
 	price := map[string]float64{}
 	for id, p := range s.Players {
 		if s.Taken[id] {
 			continue
 		}
-		pool = append(pool, simCand{id: id, pos: p.Pos, posIdx: simPosIdx(p.Pos)})
+		c.pool = append(c.pool, simCand{id: id, pos: p.Pos, posIdx: simPosIdx(p.Pos)})
 		price[id] = simPrice(p)
 	}
-	sort.Slice(pool, func(i, j int) bool {
-		if price[pool[i].id] != price[pool[j].id] {
-			return price[pool[i].id] < price[pool[j].id]
+	sort.Slice(c.pool, func(i, j int) bool {
+		if price[c.pool[i].id] != price[c.pool[j].id] {
+			return price[c.pool[i].id] < price[c.pool[j].id]
 		}
-		return pool[i].id < pool[j].id // map order must not reach the sample
+		return c.pool[i].id < c.pool[j].id // map order must not reach the sample
 	})
+	for i, cand := range c.pool {
+		c.index[cand.id] = i
+	}
+	c.alive = make([]bool, len(c.pool))
+	c.top = make([]int, 0, CandidatePool)
+	return c
+}
 
-	// Only the slots that pick in the window mutate; copy exactly those, fresh
-	// per rollout. The copy is not optional — a team at the turn picks twice
-	// inside one rollout, and a frozen roster would let it draft two RBs at
-	// identical need weight, which is exactly the behaviour v2 exists to fix.
+// reset puts the whole board back on the table for the next rollout.
+func (c *simCore) reset() {
+	for i := range c.alive {
+		c.alive[i] = true
+	}
+}
+
+// reseed restarts the random stream. This is the common-random-numbers hook:
+// the lookahead evaluates every candidate against the SAME seed, so two
+// candidates' scores differ where their choices force the opponents' hands and
+// nowhere else. See conditionedLegs.
+func (c *simCore) reseed(seed int64) { c.rng = rand.New(rand.NewSource(seed)) }
+
+// copyRosters copies exactly the seats that pick inside a window, fresh per
+// rollout. The copy is not optional — a team at the turn picks twice inside one
+// rollout, and a frozen roster would let it draft two RBs at identical need
+// weight, which is exactly the behaviour v2 exists to fix.
+func (s *State) copyRosters(slots map[int]bool) map[int][]string {
+	out := make(map[int][]string, len(slots))
+	for slot := range slots {
+		out[slot] = append([]string(nil), s.Rosters[slot]...)
+	}
+	return out
+}
+
+// oppPick plays the pick at overall pick q for whoever is on the clock there:
+// sample a player by ADP desirability times that seat's own computed need,
+// remove him, and append him to that seat's roster copy.
+//
+// Three outcomes, and the caller has to tell them apart. took is the normal
+// one. exhausted means the board holds nobody we know, and the caller must
+// STOP the rollout rather than carry on: the escape draw happens before the
+// emptiness check, so continuing would consume draws the original loop never
+// consumed and shift every later rollout's random stream. Neither means the
+// off-board escape fired — that pick spent itself on somebody the ranked pool
+// cannot see and removed nobody from it. The picking team's roster is left
+// as-is (we don't know the phantom's position), which slightly overstates their
+// remaining need: accepted, and small next to pretending the pick ate a ranked
+// player. The rng draw only happens at a nonzero rate, so a nil OffBoard
+// replays byte-identical rollouts to a build without the feature.
+func (c *simCore) oppPick(q int, rosters map[int][]string) (idx int, took, exhausted bool) {
+	s := c.s
+	if r := s.offBoardRate(q); r > 0 && c.rng.Float64() < r {
+		return 0, false, false
+	}
+	slot := s.SlotAt(q)
+	c.top = c.top[:0]
+	for i := 0; i < len(c.pool) && len(c.top) < CandidatePool; i++ {
+		if c.alive[i] {
+			c.top = append(c.top, i)
+		}
+	}
+	if len(c.top) == 0 {
+		return 0, false, true
+	}
+	filled, _ := s.fillSlots(rosters[slot])
+	round := s.Round(q)
+	beta := betaAt(round)
+	// Need is a fact about a position, not a candidate, and pow of the three
+	// discrete need weights memoizes the same way — so both are computed once
+	// per pick, not once per candidate.
+	powFlex, powBench := 1.0, 1.0
+	if beta > 0 {
+		powFlex = math.Pow(NeedFlex, beta)
+		powBench = math.Pow(NeedBench, beta)
+	}
+	var needPow [len(simPositions) + 1]float64
+	needPow[len(simPositions)] = powBench // an unknown position prices like a bench pick
+	for pi, pos := range simPositions {
+		switch need := s.opponentNeed(pos, filled, round); need {
+		case 0:
+			needPow[pi] = 0
+		case NeedStarter:
+			needPow[pi] = 1
+		case NeedFlex:
+			needPow[pi] = powFlex
+		case NeedBench:
+			needPow[pi] = powBench
+		default:
+			needPow[pi] = math.Pow(need, beta) // unreachable today
+		}
+	}
+	total := 0.0
+	for k, i := range c.top {
+		wk := simDesire[k]
+		if beta > 0 {
+			wk *= needPow[c.pool[i].posIdx]
+		}
+		c.w[k] = wk
+		total += wk
+	}
+	if total == 0 {
+		// Zero-weight guard: late in a draft the whole candidate pool can be
+		// K/DEF a team's gate still zeroes. Ignore need for this one pick and
+		// draft by ADP alone — never skip the pick, never divide by zero.
+		for k := range c.top {
+			c.w[k] = simDesire[k]
+			total += simDesire[k]
+		}
+	}
+	r := c.rng.Float64() * total
+	chosen := c.top[len(c.top)-1] // float roundoff lands on the last man
+	for k, i := range c.top {
+		r -= c.w[k]
+		if r < 0 {
+			chosen = i
+			break
+		}
+	}
+	c.alive[chosen] = false
+	rosters[slot] = append(rosters[slot], c.pool[chosen].id)
+	return chosen, true, false
+}
+
+// rollout is the survival table's driver: play `picks` (overall pick numbers,
+// ascending, all inside [start, far)) Rollouts times from the current available
+// set and tally when each player came off the board.
+func (s *State) rollout(start int, picks []int, far int, seed int64) *simTable {
+	t := &simTable{pickNo: start, far: far, removals: map[string][]uint16{}, oppPicks: picks}
+	if len(t.oppPicks) == 0 {
+		return t
+	}
+	core := s.newSimCore(seed)
 	windowSlots := map[int]bool{}
 	for _, q := range t.oppPicks {
 		windowSlots[s.SlotAt(q)] = true
 	}
-
-	rng := rand.New(rand.NewSource(seed))
-	alive := make([]bool, len(pool))
-	top := make([]int, 0, CandidatePool)
-	var w [CandidatePool]float64
 	for m := 0; m < Rollouts; m++ {
-		for i := range alive {
-			alive[i] = true
-		}
-		rosters := make(map[int][]string, len(windowSlots))
-		for slot := range windowSlots {
-			rosters[slot] = append([]string(nil), s.Rosters[slot]...)
-		}
+		core.reset()
+		rosters := s.copyRosters(windowSlots)
 		for _, q := range t.oppPicks {
-			// The off-board escape: with the measured probability for this
-			// depth, the pick spends itself on somebody the ranked pool cannot
-			// see and removes nobody from it. The picking team's roster is
-			// left as-is — we don't know the phantom's position — which
-			// slightly overstates their remaining need; accepted, and small
-			// next to pretending the pick ate a ranked player. The rng draw
-			// only happens at a nonzero rate, so a nil OffBoard replays
-			// byte-identical rollouts to a build without this feature.
-			if r := s.offBoardRate(q); r > 0 && rng.Float64() < r {
-				continue
-			}
-			slot := s.SlotAt(q)
-			top = top[:0]
-			for i := 0; i < len(pool) && len(top) < CandidatePool; i++ {
-				if alive[i] {
-					top = append(top, i)
-				}
-			}
-			if len(top) == 0 {
+			idx, took, exhausted := core.oppPick(q, rosters)
+			if exhausted {
 				break // board exhausted; the picks left take nobody we know
 			}
-			filled, _ := s.fillSlots(rosters[slot])
-			round := s.Round(q)
-			beta := betaAt(round)
-			// Need is a fact about a position, not a candidate, and pow of the
-			// three discrete need weights memoizes the same way — so both are
-			// computed once per pick, not once per candidate.
-			powFlex, powBench := 1.0, 1.0
-			if beta > 0 {
-				powFlex = math.Pow(NeedFlex, beta)
-				powBench = math.Pow(NeedBench, beta)
+			if !took {
+				continue
 			}
-			var needPow [len(simPositions) + 1]float64
-			needPow[len(simPositions)] = powBench // an unknown position prices like a bench pick
-			for pi, pos := range simPositions {
-				switch need := s.opponentNeed(pos, filled, round); need {
-				case 0:
-					needPow[pi] = 0
-				case NeedStarter:
-					needPow[pi] = 1
-				case NeedFlex:
-					needPow[pi] = powFlex
-				case NeedBench:
-					needPow[pi] = powBench
-				default:
-					needPow[pi] = math.Pow(need, beta) // unreachable today
-				}
-			}
-			total := 0.0
-			for k, i := range top {
-				wk := simDesire[k]
-				if beta > 0 {
-					wk *= needPow[pool[i].posIdx]
-				}
-				w[k] = wk
-				total += wk
-			}
-			if total == 0 {
-				// Zero-weight guard: late in a draft the whole candidate pool
-				// can be K/DEF a team's gate still zeroes. Ignore need for
-				// this one pick and draft by ADP alone — never skip the pick,
-				// never divide by zero.
-				for k := range top {
-					w[k] = simDesire[k]
-					total += simDesire[k]
-				}
-			}
-			r := rng.Float64() * total
-			chosen := top[len(top)-1] // float roundoff lands on the last man
-			for k, i := range top {
-				r -= w[k]
-				if r < 0 {
-					chosen = i
-					break
-				}
-			}
-			alive[chosen] = false
-			rosters[slot] = append(rosters[slot], pool[chosen].id)
-			row := t.removals[pool[chosen].id]
+			row := t.removals[core.pool[idx].id]
 			if row == nil {
 				row = make([]uint16, far-start)
-				t.removals[pool[chosen].id] = row
+				t.removals[core.pool[idx].id] = row
 			}
 			row[q-start]++
 		}
