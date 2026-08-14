@@ -256,3 +256,68 @@ commits, per the working style.
   pass rides last. `-survival=adp` remains the draft-night rip cord for everything.
 - CLAUDE.md's milestone list: this entry is 8; the global-store and Claude-grades
   ideas renumber to 9 and 10.
+
+---
+
+## postscript: what actually shipped (2026-08-14)
+
+Built in full, graded, and **switched off**. `-scorer pair` (milestone 7's) remains the
+default; `-scorer roster` turns the objective above on, and brings the three display
+features with it. The order of this file's own build was inverted — the scorer landed
+before the referee rather than after — which cost nothing in the end, because the referee
+printed every baseline before it scored the contender and the contender lost.
+
+**The gate, as specified, is not met.** Over 120 paired seeds of `pick6 regret`:
+
+```
+fold     priors            m7 U         m8 U    m8 - m7       se   linear m8 - m7
+2024     reported        808459       850348     +41889     2155    +140
+2025-a   causal          978267       978449       +181     1516     +11
+2025-b   causal          929417       928688       -729        0      -1
+```
+
+(80 paired seeds at the shipped `PlanRollouts = 500`, after the adversarial review fixed
+four bugs in the referee itself. 2025-a is a tie inside its own error bar and 2025-b is a
+0.08% loss with no error bar at all — the honest word for the pair is *indistinguishable*.
+2024 is a large win and does not gate: it has no priors, so its sim policies run in a
+configuration a live clock is never in.)
+
+Four things worth carrying forward:
+
+1. **The strongest hypothesis for why it does not win**, and it was not attempted: the
+   continuation policy inside the rollouts still picks by `VOR × need` while the score is
+   `U`. A rollout that models my later picks with a different objective from the one being
+   maximised under-estimates every candidate, and not necessarily by the same amount.
+   `ΔU` for adding one player is O(1) given the current assignment (his value if a slot is
+   open, the displacement if he beats a starter, `benchWeight × value` otherwise), so a
+   U-greedy leg policy is cheap. That is the next move.
+
+2. **The harness has three blind spots and they are printed on every run.** Its value
+   curve is `ValueBase·exp(−rank/ValueDecay)` off era adp, which is *position-blind* — no
+   historical value source exists — so it cannot referee any rule about cross-position
+   pricing, which is a large part of what `U` is for. The opponents cannot react. And the
+   `actual` row is unfairly penalised: 7 of the user's real picks across the folds were
+   handcuffs the era board never priced, worth 0 to `U`, while a model policy cannot take
+   an unpriced man at all.
+
+3. **A real bug fell out of the build, independent of the gate**: `U` was paying a quarter
+   of an inflated value for a *backup quarterback*. `BenchWeight` now carries vor's own
+   two-index rule — a bench body is worth it only if his position can reach a lineup
+   through a flex slot — and `legPolicy` prices the same way. Before that fix the board
+   recommended a second QB in a 1QB league, which is the ~930-point subsidy of the VOR
+   section wearing a new hat. The fix is right and it is also what flipped the gate from
+   passing to failing, which is the most interesting thing in this file: the harness's
+   position-blind value curve cannot see why a backup QB is worthless, so a correction
+   that is right about football reads as pure loss to it.
+
+4. **`PlanRollouts` stayed at 500.** The drop to 300 this spec pre-authorised was not
+   taken, because the shipped path is milestone 7's and leaving it at the count it was
+   measured at keeps the default board byte-identical. A promotion should take the drop
+   with it: the roster objective costs 366ms in round 1 at 500 against a ~250ms budget,
+   and ~220ms at 300.
+
+Everything else in this spec was built as written: `RosterValue`, the full-horizon
+estimator, the O(positions) leg policy, `pick6 regret`, the plan skeleton, `your team from
+here`, the consequence clause, the market's dissenting man as a scored candidate, and the
+wheel fixture. `PlanDepth` is retired to a comment. The survival path is untouched and it
+was verified rather than assumed.

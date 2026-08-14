@@ -145,7 +145,10 @@ before:
 `pick6 scout` profiles each manager's tendencies from your league's cached drafts; `pick6
 calibrate` backtests both survival models against real completed drafts and grades every model
 choice — the simulation ships because it won that backtest on every draft that could test it
-fairly. Neither command is needed to draft.
+fairly. `pick6 regret` does the same job for *decisions*, which a survival backtest cannot
+grade: it replays your own completed drafts with your seat played by each policy in turn —
+what you really did, best-available, the formula, each of the two scorers — and prints the
+team each one walked out with. None of the three is needed to draft.
 
 ## keys
 

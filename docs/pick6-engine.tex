@@ -1905,21 +1905,22 @@ inside the conditioned rollouts should differ from the unconditioned row
 a board of ninety. Worst move measured, $0.064$, every sign in the direction removing a
 player predicts.
 
-\subsubsection*{Three picks: built, measured, switched off}
+\subsubsection*{Three picks, and the question that dissolved}
 
-The same machinery extends to $q_3$ and does, behind \code{PlanDepth} $= 2$. The wheel is
-where the effect should be largest and it is: over $54$ scripted frames at seats 1 and
-12, depth three changes the \emph{first} leg on $16$ of them, and every flip moves away
-from running back --- coherent with the wheel's own arithmetic, where two back-to-back
-picks let you double-tap the deep position later and take the scarce one now.
+The same machinery extends to $q_3$, and for one milestone it did, behind
+\code{PlanDepth} $= 2$. The wheel was where the effect should be largest and it was: over
+$54$ scripted frames at seats 1 and 12, depth three changed the \emph{first} leg on $16$
+of them, and every flip moved away from running back --- coherent with the wheel's own
+arithmetic, where two back-to-back picks let you double-tap the deep position later and
+take the scarce one now. Coherent is not right, and this project does not ship a change of
+that size on plausibility; \S\ref{sec:roomfail} is the cautionary tale.
 
-Coherent is not right, and this project does not ship a change of that size on
-plausibility; \S\ref{sec:roomfail} is the cautionary tale. Promotion needs a scenario
-fixture of its own showing a wheel frame where depth two is demonstrably wrong. Two
-confounds to separate first: $\mathrm{mustFill}$ is computed \emph{from} the leg count, so
-depth three carries one more unit of endgame feasibility pressure and some of those $16$
-flips may be that rather than the third leg; and the cost is $115$\,ms per pick event
-against $36$\,ms, past budget, so promotion means dropping the rollout count with it.
+The question was never resolved. It dissolved. \S\ref{sec:roster} replaces the pair score
+with a quantity that has no depth parameter at all --- the value of the roster the draft
+actually ends with --- so ``how many legs'' stops being a knob and becomes ``all of
+them''. Both confounds go with it: $\mathrm{mustFill}$ is no longer an input to the score,
+and the cost question is answered by the horizon shrinking every round rather than by
+choosing where to stop.
 
 \subsubsection*{On screen}
 
@@ -1945,6 +1946,129 @@ to what is arithmetically required ($\mathrm{mustFill} = \operatorname{clamp}(2 
 0, 2)$, with $L$ and $U$ as in \eqref{eq:endgame}), and only then maximises
 \eqref{eq:plan}. Up to the last couple of rounds $\mathrm{mustFill} = 0$ and this is a
 plain argmax on score.
+%=======================================================================
+\section{The finished roster}
+\label{sec:roster}
+%=======================================================================
+
+\subsection{Every constant so far was standing in for one number}
+
+Look at what the pair score is made of. The need steps $1.0 / 0.6 / 0.25$; the replacement
+discount $R(P)$; \code{EndgameSlack}; $\mathrm{mustFill}$; the two-leg horizon. Each was
+introduced separately, for a reason of its own, and each was measured or argued into place.
+But they are all answers to the same question, asked without the means to answer it
+directly: \emph{what does this pick do to the team I walk out with?}
+
+$\mathrm{need}$ guesses what an open slot is worth. $R(P)$ guesses what you could have
+filled it with later. \code{EndgameSlack} guesses what a bench pick costs when the picks
+run out. $\mathrm{mustFill}$ guesses when that becomes binding. The two-leg horizon guesses
+that two picks is far enough to see.
+
+\S\ref{sec:sim} built a simulator that plays a draft forward. \S\ref{sec:plan} pointed it
+at one extra pick. There is no reason to stop there.
+
+\subsection{The objective}
+
+Let $\mathcal{R}$ be a finished roster --- a multiset of players. Assign it to the lineup
+by the same greedy rule the roster pane uses, dedicated slots before flex, taking players
+in value order; write $\sigma(\mathcal{R})$ for the assigned starters and
+$\beta(\mathcal{R})$ for the spill. Then
+
+\begin{equation}
+U(\mathcal{R}) \;=\; \sum_{j \in \sigma(\mathcal{R})} v_j
+\;+\; \sum_{j \in \beta(\mathcal{R})} w(\mathrm{pos}_j)\, v_j ,
+\qquad
+w(P) = \begin{cases} 0.25 & P \text{ can reach a flex slot} \\ 0 & \text{otherwise,}\end{cases}
+\label{eq:U}
+\end{equation}
+
+with an unfilled starting slot contributing nothing.
+
+Three things fall out of \eqref{eq:U} that used to be constants. A flex slot is worth
+exactly the player the assignment puts in it, so $0.6$ is gone. An unfilled slot costs
+exactly the player who would have stood in it, so \code{EndgameSlack} and
+$\mathrm{mustFill}$ are gone from the score --- feasibility stops being a guard bolted on
+from outside and becomes a price. And the later picks \emph{actually fill} the positions
+$R(P)$ was standing in for, so the replacement discount is gone too.
+
+The bench weight $w$ is the one constant \eqref{eq:U} still owns, and it carries the
+two-index rule of \S\ref{sec:vor} rather than a second guess: a bench back converts to
+points all season through flex, byes and injuries, while a second quarterback in a 1QB
+league scores zero by construction. That is not a new claim. It is the same finding that
+ended the $930$-point subsidy early quarterbacks were collecting, applied in the one place
+it had not yet reached.
+
+\subsection{The estimator}
+
+For each candidate $P$, with $b_P$ its best available man:
+
+\begin{equation}
+\mathrm{score}(P) \;=\; \mathbb{E}\!\left[\, U(\mathcal{R}) \;\middle|\; b_P \text{ is
+mine} \,\right],
+\label{eq:rosterscore}
+\end{equation}
+
+estimated by playing the window from my next pick to my \emph{last} one, $M$ times. Each
+future: $b_P$ comes off the board at the start (the conditioning of \S\ref{sec:plan},
+unchanged --- ``will I get him'' is the survival column's question and is answered there);
+opponents draft through the same \code{simCore} the survival table uses; every later pick
+of mine is taken by the engine's own greedy rule over whoever is really left; and the
+roster that results is scored with \eqref{eq:U}.
+
+Two implementation notes, both load-bearing. The leg policy stops sorting the board: within
+a position, $(v - R)^+ \times \mathrm{need}$ is monotone in value, so the argmax
+factorises into a walk down one static list per position with a per-rollout cursor. The
+winner of the six-way compare is the winner of the sort, ties included, and the cost of a
+leg drops from $O(n \log n)$ to $O(1)$ amortised. And common random numbers are not
+optional here: one seed per vantage, shared by every candidate, so two scores differ by the
+difference the choice makes and not by sampling noise. Measured at full horizon, the paired
+variance of a score gap is $13\%$ of the unpaired.
+
+\subsection{What the display can say now}
+
+The score's units changed, and the display followed, because the engine is now holding
+three hundred finished versions of my team and had been discarding all of them but the
+mean. Three claims become sayable that were not:
+
+\begin{itemize}
+\item \emph{The skeleton.} \code{plan te 10.10 $\to$ rb 11.03 $\to$ rb 12.10}. The plan
+runs to the end; the line renders a prefix of it, because a sixteen-leg line is a printout.
+\item \emph{Your team from here.} One row per starting slot open today, read off the top
+choice's own futures: the modal filler when he recurs often enough to name, his band when
+he does not, the pick he arrives at, and the odds. One brain, so it cannot contradict the
+verdict above it.
+\item \emph{Consequences, named in players.} ``Taking rb instead costs you mcbride.'' This
+one exists \emph{because} of the common random numbers: future $m$ of the top choice and
+future $m$ of the runner-up are the same world, so their ending rosters differ by what the
+choice caused and nothing else. Under independent sampling the same diff would be mostly
+noise, and the sentence would be a lie with a name in it.
+\end{itemize}
+
+\subsection{Grading a decision, which \texorpdfstring{\S\ref{sec:backtest}}{the backtest} cannot}
+
+A survival prediction has a label: the draft either took him or it did not. A decision has
+none --- nobody recorded what would have happened if you had taken the receiver. So
+\code{pick6 regret} builds the counterfactual instead. For each cached real draft, my seat
+is played by a policy while the other eleven keep their real recorded picks; when my
+counterfactual takes a man a later real pick names, that manager receives their own next
+surviving real pick, and every substitution is counted. Ending rosters are scored two ways
+and never averaged: $U$ on era-adp-rank values, and the same lineup on a \emph{linear}
+exchange rate, so a win that comes from the value curve's convexity rather than from the
+decisions shows up as a disagreement between the two columns.
+
+The causality rules are \S\ref{sec:causal}'s, and they are a package: a fold's room curve,
+its off-board escape rates \emph{and} its measured positional demand all come from drafts
+that started before it. The 2024 fold has nothing before it and therefore has none of the
+three; its sim policies run in a configuration a live clock is never in, so it is reported
+and not gated on.
+
+Two caveats ride on every run. $U$ is also the quantity the new scorer optimises --- what
+is being tested is whether optimising it against the \emph{simulator} transfers to real
+rooms, and the opponents here are real. And the harness's own value curve is a monotone
+function of era adp rank, because no historical value source exists; ``best available'' is
+therefore very nearly a greedy optimum of the exchange rate itself, and a policy beats it
+only through lineup structure.
+
 %=======================================================================
 \section{Room-warped prices}
 \label{sec:room}
