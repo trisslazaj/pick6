@@ -40,6 +40,7 @@ usage:
   pick6 mock        replay a scripted draft against the real ui
   pick6 live        poll a sleeper draft and render the board
   pick6 calibrate   score the survival model against drafts that already happened
+  pick6 regret      replay my own seat in every cached draft, once per policy
   pick6 scout       profile your leaguemates from every draft they've played
   pick6 board       the same board with no feed: mark picks by hand as they happen
   pick6 version     what build this is
@@ -75,6 +76,11 @@ func main() {
 	case "calibrate":
 		if err := runCalibrate(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "calibrate failed: %v\n", err)
+			os.Exit(1)
+		}
+	case "regret":
+		if err := runRegret(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "regret failed: %v\n", err)
 			os.Exit(1)
 		}
 	case "scout":

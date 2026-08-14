@@ -202,6 +202,38 @@ type simCore struct {
 	top   []int
 	w     [CandidatePool]float64
 	rng   *rand.Rand
+
+	// head is the first pool index that might still be alive. The candidate
+	// pool is the price-ordered board's top CandidatePool survivors, and a
+	// draft eats it from the front, so by the endgame a naive scan walks past
+	// two hundred dead men to find twenty-five live ones — every simulated
+	// pick, every future. alive only ever goes false inside a rollout, so a
+	// forward-only cursor is exact rather than approximate. reset() rewinds it.
+	head int
+
+	// Scratch for the need reads. One simulated pick asks which of a seat's
+	// starting slots are open, which is a fill over a roster of at most
+	// Roster.Slots+Bench men; allocating those three slices per pick was, on a
+	// full-horizon plan, more allocation than everything else put together.
+	fillBuf []string
+	usedBuf []bool
+	posBuf  []string
+}
+
+// fill is assign() over the core's own scratch: the seat's filled lineup, valid
+// until the next call. Nothing keeps the result — need is read off it
+// immediately — so one buffer is enough and reusing it is not a risk anybody has
+// to remember, because there is only one caller shape.
+func (c *simCore) fill(ids []string) []string {
+	if cap(c.usedBuf) < len(ids) {
+		c.usedBuf = make([]bool, len(ids)*2)
+		c.posBuf = make([]string, len(ids)*2)
+	}
+	if len(c.fillBuf) != len(c.s.Roster.Slots) {
+		c.fillBuf = make([]string, len(c.s.Roster.Slots))
+	}
+	c.s.assign(ids, c.fillBuf, c.usedBuf[:len(ids)], c.posBuf[:len(ids)])
+	return c.fillBuf
 }
 
 // newSimCore builds the pool once: the board, best effective price first, which
@@ -236,6 +268,7 @@ func (c *simCore) reset() {
 	for i := range c.alive {
 		c.alive[i] = true
 	}
+	c.head = 0
 }
 
 // reseed restarts the random stream. This is the common-random-numbers hook:
@@ -277,8 +310,11 @@ func (c *simCore) oppPick(q int, rosters map[int][]string) (idx int, took, exhau
 		return 0, false, false
 	}
 	slot := s.SlotAt(q)
+	for c.head < len(c.pool) && !c.alive[c.head] {
+		c.head++
+	}
 	c.top = c.top[:0]
-	for i := 0; i < len(c.pool) && len(c.top) < CandidatePool; i++ {
+	for i := c.head; i < len(c.pool) && len(c.top) < CandidatePool; i++ {
 		if c.alive[i] {
 			c.top = append(c.top, i)
 		}
@@ -286,7 +322,7 @@ func (c *simCore) oppPick(q int, rosters map[int][]string) (idx int, took, exhau
 	if len(c.top) == 0 {
 		return 0, false, true
 	}
-	filled, _ := s.fillSlots(rosters[slot])
+	filled := c.fill(rosters[slot])
 	round := s.Round(q)
 	beta := betaAt(round)
 	// Need is a fact about a position, not a candidate, and pow of the three

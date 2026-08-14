@@ -33,7 +33,7 @@ func runBoard(args []string) error {
 	lineup := fs.String("lineup", "", "starting slots, e.g. \"qb rb rb wr wr te flex flex k def\"")
 	bench := fs.Int("bench", 0, "bench spots; only read with -lineup")
 	room := roomFlag(fs)
-	survival := survivalFlag(fs)
+	survival, scorer := survivalFlag(fs), scorerFlag(fs)
 	snapshot := fs.Bool("snapshot", false, "print one frame and exit (no tui)")
 	search := fs.String("search", "", "with -snapshot: open the search overlay on this query")
 	selected := fs.String("selected", "", "with -snapshot: select this query's best match, prompt closed")
@@ -76,7 +76,7 @@ func runBoard(args []string) error {
 	s := engine.New(players, *teams, *rounds, *slot)
 	s.SetRoster(roster)
 	s.Demand = leagueDemand()
-	if err := applySim(s, *survival, "", 0); err != nil {
+	if err := applyBrain(s, *survival, *scorer, "", 0); err != nil {
 		return err
 	}
 

@@ -47,6 +47,13 @@ const (
 	TierHoldCliff = 0.15
 
 	// Need weights.
+	//
+	// Milestone 8 retired these from the OBJECTIVE and left them everywhere
+	// else. They still price legPolicy's ordering, urgency, SafeToWait, the
+	// opponents' own need model and the whole of adp mode — all of which are
+	// policies and heuristics, which is where a guessed step function belongs.
+	// What they no longer do is stand in for "what is a filled flex slot
+	// worth", which RosterValue now answers by assignment.
 	NeedStarter = 1.0  // an unfilled dedicated starter slot exists for pos
 	NeedFlex    = 0.6  // dedicated slots filled, FLEX open, pos is flex-eligible
 	NeedBench   = 0.25 // otherwise
@@ -83,6 +90,19 @@ const (
 	// chance and the banner meant nothing exactly when the room was watching
 	// closest. A run is a SURPRISE in concentration, not concentration itself.
 	RunSurprise = 2.0
+
+	// MarketGapPicks is how far the market must price a player ahead of his
+	// position's value-best before the board treats the disagreement as real.
+	//
+	// It lived in the ui as display judgement until milestone 8, and moved here
+	// when the market's dissenting man stopped being a note and became a scored
+	// candidate: the same threshold now decides what the rollouts spend futures
+	// on, which makes it engine math. The judgement behind the number is
+	// unchanged — the value column and the adp column disagree constantly by a
+	// pick or two, and contesting every wobble would bury the one that matters
+	// (rashee rice, priced ten picks ahead of the receiver the value curve
+	// preferred).
+	MarketGapPicks = 4
 
 	// Value fallback, when no source gives a value.
 	ValueBase  = 250.0
@@ -165,12 +185,44 @@ const (
 	// some of those 16 flips may be that rather than the third leg; and the
 	// cost is 115ms per pick event against 36ms, past the spec's ~50ms budget,
 	// so promotion means dropping PlanRollouts too.
+	// PlanDepth is RETIRED as of milestone 8 and kept only as documentation of
+	// a question that dissolved. The conditioned rollouts now run to my LAST
+	// pick, because the thing being scored is the finished roster; there is no
+	// depth to choose, no third leg to promote, and no mustFill-versus-horizon
+	// confound to separate. Nothing reads it.
 	PlanDepth = 2
+)
+
+// The two numbers a harness sweeps rather than a reader tunes. Vars, not
+// consts, because `pick6 regret` grades them against real drafts and a test
+// that walked a scripted mock at full resolution would crawl.
+var (
+	// BenchWeight is what a bench body is worth inside U (roster.go), and it is
+	// the ONE constant the milestone-8 objective owns. It inherits NeedBench's
+	// role and its number: a player who is not in the lineup only scores through
+	// byes, injuries and the flex churn, which is the same claim NeedBench was
+	// making about a pick that fills no slot.
+	BenchWeight = 0.25
+
 	// PlanRollouts is its own number rather than Rollouts because the two want
 	// different resolution: the survival column is a percentage a human reads
-	// off the screen, the plan is a ranking. Sub-percent precision is wasted on
-	// a ranking, so this is the first thing to drop (to 300) if the per-pick
-	// cost ever creeps — before optimizing anything.
+	// off the screen, the plan is a ranking.
+	//
+	// It stayed at 500 through milestone 8, which had pre-authorised a drop to
+	// 300 for the full-horizon window. The drop was NOT taken, because the
+	// roster objective did not clear its gate and so does not ship on by
+	// default: leaving the shipped path at the count it was measured at keeps
+	// the board byte-identical to milestone 7's, which is worth more than the
+	// milliseconds.
+	//
+	// Measured on an M2, cold cache, 208-player board (sim_bench_test.go):
+	// the shipped pair score costs 17ms in round 1, 34ms in round 8, 47ms in
+	// round 15. The roster objective costs 366ms / 226ms / 41ms — over the
+	// ~250ms budget at the top of the draft, and monotone downward because the
+	// horizon is what costs. That is affordable where it is: the cache fills
+	// when the PREVIOUS pick lands, against a 2-3 second poll. A promotion
+	// should take the drop to 300 with it (~220ms in round 1) rather than
+	// optimise anything.
 	PlanRollouts = 500
 )
 
@@ -180,6 +232,34 @@ const (
 const (
 	SurvivalADP = "adp"
 	SurvivalSim = "sim"
+)
+
+// Decision-score names for State.Scorer, which only means anything under sim
+// (adp mode has one formula and keeps it wholesale).
+//
+// THE ZERO VALUE IS MILESTONE 7'S PAIR SCORE, and that is a result rather than
+// an ordering accident. Milestone 8 built the finished-roster objective, built
+// the referee that could grade it (`pick6 regret`), and did not clear its own
+// gate: over 120 paired seeds the roster scorer came out -3096 (se 2390) on the
+// 2025-a fold and -729 (deterministic) on 2025-b, the two folds whose room
+// curve and escape rates predate them. Both differences are inside the noise
+// the harness can resolve — the honest verdict is "indistinguishable" and not
+// "worse" — but the gate asks for better on both, and this repo does not ship a
+// decision-shaped change on plausibility. The room warp's cap is the scar.
+//
+// So the roster objective is built, tested, and OFF, exactly as milestone 7's
+// third leg was: `-scorer roster` turns it on, and the display features that
+// only it can support (the plan skeleton past two legs, "your team from here",
+// the consequence clause) come with it. What would promote it is a causal fold
+// on which it wins — or the continuation policy inside the rollouts learning to
+// maximise U rather than vor x need, which is the strongest live hypothesis for
+// why it doesn't. See docs/milestone-8.md.
+//
+// The Survival precedent is followed exactly: the engine's zero value is the
+// conservative brain, and the product default lives where the flags do.
+const (
+	ScorerPair   = "" // milestone 7's two-leg pair score
+	ScorerRoster = "roster"
 )
 
 // DefaultRoster is the league shape we assume when Sleeper metadata is absent.

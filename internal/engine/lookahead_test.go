@@ -25,10 +25,12 @@ func lookaheadState() *State {
 	return s
 }
 
-// planLegs is one candidate's conditioned score on an explicit seed, which is
-// the only way a test can ask for the UNpaired comparison: the shipped path
-// derives one seed from the vantage precisely so it cannot.
-func planLegs(s *State, id string, seed int64) planResult {
+// planLegs is one candidate's conditioned score on an explicit seed, over an
+// explicit window. The seed is the only way a test can ask for the UNpaired
+// comparison — the shipped path derives one seed from the vantage precisely so
+// it cannot — and the window is how a test asks a two-leg question of a
+// full-horizon estimator.
+func planLegs(s *State, id string, seed int64, mine []int) planResult {
 	p := s.Players[id]
 	c := planCand{pos: p.Pos, best: p, need: s.Need(p.Pos)}
 	if c.need > NeedBench {
@@ -36,7 +38,31 @@ func planLegs(s *State, id string, seed int64) planResult {
 	}
 	core := s.newSimCore(seed)
 	core.reseed(seed)
-	return s.planRollout(core, c, s.MyUpcomingPicks(PlanDepth), 0, allPositions(s))
+	pol := s.newPlanPolicy(core, allPositions(s), true)
+	return s.planRollout(core, pol, c, mine, 0)
+}
+
+// sameChoice is struct equality for a PickChoice, which stopped being a `==`
+// the moment the rollouts started reporting a skeleton. The slices are summaries
+// of the same futures the score is a mean of, so "identical" has to include
+// them or a determinism test would pass on a plan that renamed itself.
+func sameChoice(a, b PickChoice) bool {
+	if a.Pos != b.Pos || a.Best != b.Best || a.Score != b.Score || a.Fills != b.Fills ||
+		a.Second != b.Second || a.SecondTier != b.SecondTier || a.SecondOdds != b.SecondOdds ||
+		len(a.Legs) != len(b.Legs) || len(a.Outlook) != len(b.Outlook) {
+		return false
+	}
+	for i := range a.Legs {
+		if a.Legs[i] != b.Legs[i] {
+			return false
+		}
+	}
+	for i := range a.Outlook {
+		if a.Outlook[i] != b.Outlook[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // A re-render must not move the plan. Same state, same seed: bit-identical
@@ -48,14 +74,14 @@ func TestConditionedPlanIsDeterministic(t *testing.T) {
 		t.Fatalf("choices %d vs %d", len(ca), len(cb))
 	}
 	for i := range ca {
-		if ca[i] != cb[i] {
+		if !sameChoice(ca[i], cb[i]) {
 			t.Errorf("choice %d differs across identical states:\n %+v\n %+v", i, ca[i], cb[i])
 		}
 	}
 	// And the second call at the same vantage reads the cache, which must be
 	// the same answer rather than merely a fast one.
 	for i, c := range a.PickChoices() {
-		if c != ca[i] {
+		if !sameChoice(c, ca[i]) {
 			t.Errorf("choice %d moved on the second call: %+v vs %+v", i, c, ca[i])
 		}
 	}
@@ -66,18 +92,24 @@ func TestConditionedPlanIsDeterministic(t *testing.T) {
 // they differ by that plus sampling noise. Measured as the variance of the
 // score gap across seeds — paired has to be visibly smaller, or the board would
 // reorder itself between renders on nothing.
+//
+// Measured at the FULL horizon, which is the regime that ships and the one where
+// the noise has the most room to accumulate: every future now spends a hundred
+// and fifty-odd opponent picks before it is scored, against milestone 7's four.
 func TestConditionedPlanUsesCommonRandomNumbers(t *testing.T) {
 	const trials = 24
 	pairedD := make([]float64, 0, trials)
 	indepD := make([]float64, 0, trials)
 	for k := 0; k < trials; k++ {
 		s := lookaheadState()
+		mine := s.MyUpcomingPicks(s.Rounds)
 		seed := int64(k * 7919)
-		a := planLegs(s, "rb1", seed).Legs
-		pairedD = append(pairedD, a-planLegs(s, "wr1", seed).Legs)
-		indepD = append(indepD, a-planLegs(s, "wr1", seed+104729).Legs)
+		a := planLegs(s, "rb1", seed, mine).Score
+		pairedD = append(pairedD, a-planLegs(s, "wr1", seed, mine).Score)
+		indepD = append(indepD, a-planLegs(s, "wr1", seed+104729, mine).Score)
 	}
 	pv, iv := variance(pairedD), variance(indepD)
+	t.Logf("paired variance %.1f, independent %.1f (%.0f%%)", pv, iv, 100*pv/iv)
 	if pv >= iv {
 		t.Errorf("paired variance %.1f is not below independent %.1f: the seed is not shared", pv, iv)
 	}
@@ -103,20 +135,29 @@ func variance(xs []float64) float64 {
 	return v / float64(len(xs))
 }
 
-// The turn: back-to-back picks, nothing intervenes, and the conditioned rollout
-// degenerates to picking the best pair off the board in front of you. One
-// future, so the odds are an exact 1 and the leg-two value is the argmax of
-// vor x need over everyone but the candidate — arithmetic, not a sample.
-func TestConditionedPlanAtTheTurnIsExact(t *testing.T) {
-	s := newTestState(12, 15, 12)
-	s.PickNo = 12 // picks 12 and 13 are both mine
-	s.Survival = SurvivalSim
+// The FINAL turn: my last two picks are back to back, nothing intervenes
+// anywhere in the window, and the whole estimator degenerates to picking the
+// best pair off the board in front of you. One future, so the odds are an exact
+// 1 and the score is the arithmetic value of the team those two picks finish —
+// a sample of a deterministic thing would be a lie about how sure it is.
+//
+// Milestone 7 could make this claim at any turn, because its window ended two
+// picks out. At full horizon a mid-draft turn has a hundred and fifty opponent
+// picks after it, so the exactness now belongs to the end of the draft alone —
+// which was always what it was about.
+func TestConditionedPlanAtTheFinalTurnIsExact(t *testing.T) {
+	s := newTestState(12, 2, 12)
+	s.PickNo = 12 // picks 12 and 13 are both mine, and 13 is the last of them
+	s.Survival, s.Scorer = SurvivalSim, ScorerRoster
 	addPlayers(s,
 		Player{ID: "rb1", Pos: "RB", ADP: 12, Sigma: 3, Value: 500, Tier: 1},
 		Player{ID: "rb2", Pos: "RB", ADP: 13, Sigma: 3, Value: 480, Tier: 1},
 		Player{ID: "wr1", Pos: "WR", ADP: 14, Sigma: 3, Value: 470, Tier: 2},
 		Player{ID: "wr2", Pos: "WR", ADP: 15, Sigma: 3, Value: 460, Tier: 2},
 	)
+	if mine := s.MyUpcomingPicks(s.Rounds); len(mine) != 2 || mine[1] != 13 {
+		t.Fatalf("fixture: my remaining picks are %v, want [12 13]", mine)
+	}
 	choices := s.PickChoices()
 	if len(choices) == 0 {
 		t.Fatal("no choices at the turn")
@@ -130,28 +171,29 @@ func TestConditionedPlanAtTheTurnIsExact(t *testing.T) {
 	if rb.Pos == "" {
 		t.Fatal("rb is not a choice")
 	}
-	// Taking rb1 leaves rb2 (480, need drops to the second rb slot: still a
-	// starter) against wr1 (470, starter). The greedy leg-two policy takes rb2.
+	// Taking rb1 leaves rb2 (480, the second rb slot: still a starter) against
+	// wr1 (470, starter). The greedy leg-two policy takes rb2, and both men end
+	// up in dedicated slots, so the team is worth their two values.
 	if rb.Second != "RB" {
 		t.Errorf("leg two = %q, want RB: rb2 at 480 beats wr1 at 470 on the board in front of us", rb.Second)
 	}
 	if rb.SecondOdds != 1 {
 		t.Errorf("odds %.4f at the turn, want exactly 1: no opponent picks means one future", rb.SecondOdds)
 	}
-	if want := 500*NeedStarter + 480*NeedStarter; rb.Score != want {
+	if want := 500.0 + 480.0; rb.Score != want {
 		t.Errorf("score %.2f, want %.2f — the turn is arithmetic, not a sample", rb.Score, want)
 	}
 }
 
-// My last pick of the draft: no leg two, so the score is vor x need and the
-// conditioned machinery must not run at all. The v1 pin
-// (TestPickChoicesOnMyLastPick) says the same thing under the formula; this
-// says it under the sim, where the failure mode would be a rollout over an
-// empty window.
+// My last pick of the draft: no leg two, so the score is the team I finish with
+// and the conditioned machinery must not run at all. The v1 pin
+// (TestPickChoicesOnMyLastPick) says the same thing in vor x need; this says it
+// in the units milestone 8 scores, where the failure mode would be a rollout
+// over an empty window.
 func TestConditionedPlanOnMyLastPick(t *testing.T) {
 	s := newTestState(12, 2, 3)
 	s.PickNo = 22 // round 2, slot 3's only remaining pick
-	s.Survival = SurvivalSim
+	s.Survival, s.Scorer = SurvivalSim, ScorerRoster
 	addPlayers(s,
 		Player{ID: "rb1", Pos: "RB", ADP: 22, Sigma: 3, Value: 500, Tier: 1},
 		Player{ID: "wr1", Pos: "WR", ADP: 23, Sigma: 3, Value: 400, Tier: 1},
@@ -166,8 +208,8 @@ func TestConditionedPlanOnMyLastPick(t *testing.T) {
 		if c.SecondOdds != 0 {
 			t.Errorf("%s carries odds %.3f on my last pick", c.Pos, c.SecondOdds)
 		}
-		if want := s.VOR(c.Best) * s.Need(c.Pos); c.Score != want {
-			t.Errorf("%s score %.2f, want vor x need %.2f", c.Pos, c.Score, want)
+		if want := s.RosterValue([]string{c.Best.ID}); c.Score != want {
+			t.Errorf("%s score %.2f, want U(roster + him) %.2f", c.Pos, c.Score, want)
 		}
 	}
 	if _, ok := s.BestPlan(); ok {
@@ -193,14 +235,28 @@ func TestConditionedLegNeverTakesASuppressedPosition(t *testing.T) {
 			t.Errorf("%s: leg two landed a suppressed %s despite the hold", c.Pos, c.Second)
 		}
 	}
-	// Directly, over every candidate rather than only the modal answer: the
-	// policy order itself must not contain them.
+	// Directly, and under the widest possible candidate set: even told every
+	// position is allowed, the policy must refuse a kicker at THIS round — the
+	// suppression is its own rule, not an inherited one. It must also let one
+	// through at a round inside the hold, or a full-horizon rollout would never
+	// fill the two slots the lineup demands.
 	core := s.newSimCore(1)
-	order, _, _ := s.legPolicy(core, s.Rosters[s.MySlot], allPositions(s), false)
-	for _, i := range order {
-		if p := core.pool[i].pos; p == "K" || p == "DEF" {
-			t.Fatalf("legPolicy offered a %s while suppressed", p)
+	core.reset()
+	pol := s.newPlanPolicy(core, allPositions(s), true)
+	for _, pi := range []int{simPosIdx("K"), simPosIdx("DEF")} {
+		if pol.allows(s, pi, s.Round(s.PickNo)) {
+			t.Errorf("the policy offered %s in round %d, inside the hold", simPositions[pi], s.Round(s.PickNo))
 		}
+		if !pol.allows(s, pi, s.Rounds) {
+			t.Errorf("the policy still refused %s in the final round", simPositions[pi])
+		}
+	}
+	idx, _, _, ok := pol.take(s, s.Rosters[s.MySlot], s.Round(s.PickNo), false)
+	if !ok {
+		t.Fatal("the policy took nobody on a full board")
+	}
+	if p := core.pool[idx].pos; p == "K" || p == "DEF" {
+		t.Fatalf("the policy took a %s while suppressed, over a board of valued skill players", p)
 	}
 }
 
@@ -313,70 +369,66 @@ func TestConditionedPlanCacheDiesOnAPick(t *testing.T) {
 		t.Fatal("plan cache survived a pick")
 	}
 	after, _ := s.BestPlan()
-	if before == after {
+	if before.First == after.First && before.Second == after.Second && before.Score == after.Score {
 		t.Errorf("plan unchanged after two picks off the board: %+v", after)
 	}
 }
 
-// The three-leg variant: built, tested, and OFF (PlanDepth = 2). The spec's
-// rule is that it ships only when a real frame shows a decision it changes,
-// and the wheel is where to look — "what survives two of my turns" is the
-// question the sidebar already says is the whole story at slots 1 and 12.
+// The horizon is every pick I have left, which is what milestone 8's score
+// MEANS: a roster is not finished until the last one. So the skeleton runs the
+// length of the draft, the outlook covers every starting slot that is open
+// today, and — the part a two-leg horizon could never do — the futures actually
+// fill the kicker and the defense, because they reach the rounds where the tool
+// is willing to take one.
 //
-// Everything past leg two recomputes its policy inside the rollout, because
-// leg two changed the roster the need is read off. That path is unreachable at
-// the shipped depth, so it is exercised here or it is not exercised at all.
-func TestConditionedPlanAtDepthThree(t *testing.T) {
-	if PlanDepth != 2 {
-		t.Fatalf("PlanDepth is %d: the gate has been opened, and this test's premise "+
-			"(the depth-3 path is otherwise unreachable) no longer holds", PlanDepth)
-	}
+// Under vantage-round suppression this last part fails silently and expensively:
+// no rollout ever takes a K or a DEF, U prices both slots at zero in every
+// future, and the objective is blind to exactly the endgame it exists to price.
+func TestPlanRunsToMyLastPick(t *testing.T) {
 	s := lookaheadState()
-	mine := s.MyUpcomingPicks(3)
-	if len(mine) != 3 {
-		t.Fatalf("MyUpcomingPicks(3) = %v", mine)
+	s.Scorer = ScorerRoster
+	for i := 0; i < 6; i++ {
+		addPlayers(s,
+			Player{ID: fmt.Sprintf("k%d", i+1), Pos: "K", ADP: float64(140 + i), Sigma: 8, Value: 120 - 5*i},
+			Player{ID: fmt.Sprintf("d%d", i+1), Pos: "DEF", ADP: float64(150 + i), Sigma: 8, Value: 110 - 5*i},
+		)
 	}
-	p := s.Players["rb1"]
-	c := planCand{pos: "RB", best: p, need: s.Need("RB"), fills1: 1}
-
-	run := func(depth, mustFill int) planResult {
-		core := s.newSimCore(s.planSeed())
-		core.reseed(s.planSeed())
-		return s.planRollout(core, c, mine[:depth], mustFill, allPositions(s))
+	// Deep enough that a hundred and fifty opponent picks cannot empty it.
+	for i := 0; i < 220; i++ {
+		addPlayers(s, Player{ID: fmt.Sprintf("deep%d", i), Pos: []string{"RB", "WR", "TE", "QB"}[i%4],
+			ADP: float64(40 + i), Sigma: 8, Value: 300 - i, Tier: 5 + i/40})
 	}
-	two, three := run(2, 0), run(3, 0)
-
-	// A third leg can only add value: it is one more pick, scored the same way.
-	if three.Legs <= two.Legs {
-		t.Errorf("depth 3 scored %.1f against depth 2's %.1f: a third pick cannot be worth nothing",
-			three.Legs, two.Legs)
+	choices := s.PickChoices()
+	if len(choices) == 0 {
+		t.Fatal("no choices")
 	}
-	// ...and it must not move leg two's own claim, which is about a horizon the
-	// third leg sits entirely past. Not bit-identical, and deliberately not
-	// asserted as such: a longer window spends more draws per rollout, so
-	// rollout m+1 starts the depth-3 run from a different point in the random
-	// stream. What has to hold is that the answer is the same answer — same
-	// band, inside sampling noise on the odds.
-	if three.Second != two.Second || three.SecondTier != two.SecondTier {
-		t.Errorf("leg two moved from tier-%d %s to tier-%d %s when a third leg was added",
-			two.SecondTier, two.Second, three.SecondTier, three.Second)
+	top := choices[0]
+	if want := s.MyPicksLeft(); len(top.Legs) != want {
+		t.Errorf("plan has %d legs, want %d — one per pick I have left", len(top.Legs), want)
 	}
-	if d := three.SecondOdds - two.SecondOdds; d > 0.05 || d < -0.05 {
-		t.Errorf("leg two's odds moved %+.3f with a third leg (%.3f → %.3f): that is past sampling noise",
-			d, two.SecondOdds, three.SecondOdds)
+	if want := len(s.UnfilledStarters(s.MySlot)); len(top.Outlook) != want {
+		t.Errorf("outlook covers %d slots, want %d open starters", len(top.Outlook), want)
 	}
-	// Determinism holds at depth three too.
-	if again := run(3, 0); again != three {
-		t.Errorf("depth 3 is not deterministic: %+v vs %+v", three, again)
+	if len(top.Legs) > 0 && top.Legs[0].Pick != s.NextPick() {
+		t.Errorf("leg one picks at %d, want %d", top.Legs[0].Pick, s.NextPick())
 	}
-	// And the feasibility ladder reaches the third leg: with every one of my
-	// three legs required to close a starting slot, the policy must be forced
-	// at each of them rather than only at the second.
-	if !mustFillAt(3, 3, 3, 2) {
-		t.Error("mustFillAt did not force the third leg with two of three already filled")
+	// Every leg after the first must name somebody: the board is far deeper
+	// than the draft, so a nameless leg means the policy starved.
+	for i, leg := range top.Legs[1:] {
+		if leg.Pos == "" {
+			t.Errorf("leg %d (pick %d) named nobody on a 250-man board", i+2, leg.Pick)
+		}
 	}
-	if mustFillAt(3, 3, 1, 1) {
-		t.Error("mustFillAt forced the third leg when the requirement was already met")
+	// ...and the lineup finishes. k and def are the ones only a full horizon
+	// can reach, so they are the ones worth asserting.
+	for _, o := range top.Outlook {
+		if o.Filled < 0.9 {
+			t.Errorf("the %s slot ends unfilled in %.0f%% of futures", o.Slot, 100*(1-o.Filled))
+		}
+	}
+	if top.Fills != len(top.Outlook) {
+		t.Errorf("Fills = %d against %d open slots: a finished lineup should saturate it",
+			top.Fills, len(top.Outlook))
 	}
 }
 

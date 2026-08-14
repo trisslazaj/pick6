@@ -98,7 +98,33 @@ const (
 	// adp column disagree constantly by a pick or two, and a row for every
 	// wobble buries the one that matters — rashee rice priced 10 picks ahead
 	// of the receiver the value curve prefers.
-	marketGapPicks = 4
+	marketGapPicks = engine.MarketGapPicks
+
+	// planLegsMax is how many legs of the plan the line will ever name. The
+	// rollouts play every pick I have left — sixteen of them in round one — and
+	// a sixteen-leg line is a printout, not a plan. Four is where a human stops
+	// treating it as advice: the next two picks are a decision, the two after
+	// that are shape, and everything past them is the draft telling you what it
+	// intends to do to you.
+	planLegsMax = 4
+
+	// outlookRows caps the "your team from here" block. Round one opens with
+	// nine or ten unfilled starting slots and a ten-row block is the roster
+	// pane again, badly, on the wrong side of the divider. Five is the shape of
+	// the decision: the slots you are actually choosing between over the next
+	// few picks.
+	outlookRows = 5
+
+	// planNameShare is how often a man has to land in a slot before the board
+	// will say his name. Below it the row speaks in bands instead, because a
+	// name is a much stronger claim than a tier and it has to be earned.
+	planNameShare = 0.35
+
+	// outlookFilled is the share of futures a slot has to end filled in before
+	// it gets a filler at all. Under it the honest row is that the slot is
+	// still open when the draft ends, which is a fact about the plan and not a
+	// missing value.
+	outlookFilled = 0.5
 )
 
 // sidebarWidth gives the sidebar a share of any width beyond the old 92-column
@@ -541,20 +567,22 @@ func (b Board) bestAvailable(w int, choices []engine.PickChoice) string {
 		sb.WriteString(b.endgameLine(w))
 		if rows := b.choiceRows(w, choices, true); rows != "" {
 			sb.WriteString("\n  " + Dim.Render(fitCaption(w-4,
-				"if not him — ranked by what the pick is worth", "if not him")) + "\n")
+				"if not him — ranked by the team each leads to", "if not him")) + "\n")
 			sb.WriteString(rows)
 		}
+		sb.WriteString(b.teamAhead(w, choices[0]))
 		return sb.String()
 	}
 
 	sb.WriteString(b.planLine(w))
 	sb.WriteString(b.endgameLine(w))
-	caption := "who'll likely be there — ranked by what taking each is worth"
+	caption := "who'll likely be there — ranked by the team each leads to"
 	if imDone || s.Done() {
 		caption = "still on the board"
 	}
 	sb.WriteString("\n  " + Dim.Render(fitCaption(w-4, caption, "who'll likely be there")) + "\n")
 	sb.WriteString(b.choiceRows(w, choices, false))
+	sb.WriteString(b.teamAhead(w, choices[0]))
 	return sb.String()
 }
 
@@ -632,13 +660,53 @@ func (b Board) verdictBlock(w int, top engine.PickChoice) string {
 	if cl := b.slotClause(p.Pos); cl != "" {
 		l3 = append(l3, styledClause{cl, Dim})
 	}
-	if mb, ok := b.marketPick(p.Pos); ok && mb.ID != p.ID {
-		l3 = append(l3, styledClause{"market prefers " + lastName(strings.ToLower(mb.Name)), Accent})
+	// The other opinion, when the two curves disagree about who the best man at
+	// this position is. Under sim the futures have already RANKED the two, so
+	// the clause names whichever one lost — and when the market's man won the
+	// verdict, saying so is the more useful half of the disagreement.
+	if top.Alt.ID != "" {
+		who := "market prefers "
+		if !top.AltIsMarket {
+			who = "value curve prefers "
+		}
+		l3 = append(l3, styledClause{who + lastName(strings.ToLower(top.Alt.Name)), Accent})
 	}
 	if len(l3) > 0 {
 		sb.WriteString(edge + joinClauses(l3, w-4) + "\n")
 	}
+	if cq := b.consequence(); cq != "" {
+		sb.WriteString(edge + Dim.Render(trunc(cq, w-4)) + "\n")
+	}
 	return sb.String()
+}
+
+// consequence is what the runner-up costs, named in a player: "taking rb
+// instead costs you mcbride".
+//
+// It is the one clause on the frame that only exists because of common random
+// numbers. The top choice and the runner-up were scored on the SAME futures, so
+// their ending rosters differ by what the choice caused and nothing else —
+// diff them and the difference has a name in it. Under independent sampling the
+// same diff would be mostly noise, and the sentence would be a lie with a name
+// in it, which is worse than no sentence.
+//
+// Three ways it says nothing, and all three drop the clause whole rather than
+// hedging: the plan was priced by the v1 formula (no futures to diff), nothing
+// recurs often enough to name, and the man who does recur is too rarely the
+// difference to be worth a row. A consequence line that says nothing must not
+// print — it is the widest single clause on the block and it earns its row by
+// naming somebody.
+func (b Board) consequence() string {
+	cq, ok := b.State.Consequence()
+	if !ok || cq.Share < planNameShare {
+		return ""
+	}
+	p := b.State.Players[cq.PlayerID]
+	if p.Name == "" {
+		return ""
+	}
+	return fmt.Sprintf("taking %s instead costs you %s",
+		strings.ToLower(cq.Runner), lastName(strings.ToLower(p.Name)))
 }
 
 // styledClause is one clause of a sentence assembled to fit a width.
@@ -756,39 +824,6 @@ func (b Board) slotClause(pos string) string {
 	}
 }
 
-// marketPick is the market's own choice at a position: the cheapest available
-// player by adp, when the market prices him at least marketGapPicks ahead of
-// the value curve's choice. ok is false when the two curves agree, which is
-// most positions on most frames.
-//
-// This is the rice case, and it is the board refusing to silently take a side:
-// fantasycalc ranked rashee rice wr16 while the market priced him as the best
-// receiver left on the board, and the value-ordered pane buried him seven rows
-// deep — invisible — while championing a man the market priced eleven picks
-// later. Where its two sources disagree, the board shows both and says which
-// is which.
-func (b Board) marketPick(pos string) (engine.Player, bool) {
-	s := b.State
-	valueBest, ok := s.BestNow(pos)
-	if !ok {
-		return engine.Player{}, false
-	}
-	best, found := engine.Player{}, false
-	for _, p := range s.Available(pos) {
-		if p.ADP <= 0 {
-			continue
-		}
-		if !found || p.ADP < best.ADP {
-			best, found = p, true
-		}
-	}
-	if !found || best.ID == valueBest.ID || valueBest.ADP <= 0 ||
-		best.ADP+marketGapPicks > valueBest.ADP {
-		return engine.Player{}, false
-	}
-	return best, true
-}
-
 // choiceRows renders the ranking itself, one row per position: the man, his
 // survival to the pick I next act at, and the clauses that say what taking or
 // leaving him means. onClock also skips the top choice, which the verdict
@@ -893,12 +928,23 @@ func (b Board) choiceRow(w int, c engine.PickChoice, accent, onClock bool) strin
 		joinClauses(clauses, tail))
 }
 
-// marketRow is the market's dissenting candidate as a row of his own, or "".
+// marketRow is the losing half of a value-versus-market disagreement, as a row
+// of its own directly under the position's, or "".
+//
+// Since milestone 8 both men are scored candidates under sim and the winner
+// takes the position's row, so this can be either of them — the market's pick
+// when the value curve won, the value curve's when the market's man did. The
+// label says which, because "market's pick" under a row the market also picked
+// would be the frame agreeing with itself in two voices.
 func (b Board) marketRow(w int, c engine.PickChoice) string {
 	s := b.State
-	mb, ok := b.marketPick(c.Pos)
-	if !ok {
+	mb := c.Alt
+	if mb.ID == "" {
 		return ""
+	}
+	label := "market's pick"
+	if !c.AltIsMarket {
+		label = "value's pick"
 	}
 	style := Pos(c.Pos, false)
 	nameW := rowNameWidth(w)
@@ -910,7 +956,7 @@ func (b Board) marketRow(w int, c engine.PickChoice) string {
 	// narrow widths, where a falling market pick is the whole story.
 	price, priceStyle := b.priceClause(mb, false)
 	clauses := []styledClause{
-		{"market's pick", Accent},
+		{label, Accent},
 		{price, priceStyle},
 	}
 	return fmt.Sprintf("  %s %s %s %s\n", tag, name, surv,
@@ -932,38 +978,70 @@ func rowNameWidth(w int) int {
 	return nameW
 }
 
-// planCopy is the two-pick lookahead in words: which position to take with my
-// next pick, and which to expect with the one after it. Both legs are named by
-// their pick numbers and never by "now" — the plan is computed as-if standing at
-// my next pick but drawn on every frame, and on eleven frames out of twelve that
-// pick belongs to somebody else.
+// planCopy is the lookahead in words: which position to take with my next pick,
+// and which to expect at each pick after it. Every leg is named by its pick
+// number and never by "now" — the plan is computed as-if standing at my next
+// pick but drawn on every frame, and on eleven frames out of twelve that pick
+// belongs to somebody else.
 //
-// The pair's score is deliberately NOT rendered. It ranks pairs; it does not
-// forecast what you will get, because its first leg is priced at the value of
-// today's best available even when my next pick is eighteen picks away and he
-// will plainly be gone by then. Printed as "(e 12318)" it read as an expectation
-// while sitting three rows above the same man's survival column reading 0% — one
-// line of the board contradicting the evidence directly under it, on 27 of 166
-// plan frames of the scripted mock. The pair is the product; the number was
-// noise wearing a label it could not honour.
+// Milestone 8 grew it from a pair into a SKELETON, because the score behind it
+// grew from a pair into a finished roster: the rollouts now play every pick I
+// have left, so the plan they summarise really does run to the end. What is
+// rendered is a prefix of it — a plan longer than four legs is a printout, and
+// the legs past the second are context rather than a claim.
+//
+// The pair's score is deliberately NOT rendered, and milestone 8 did not change
+// that even though the number is now a whole team's value. It ranks choices; it
+// does not forecast what you will get, because its first leg is priced at the
+// value of today's best available even when my next pick is eighteen picks away
+// and he will plainly be gone by then. Printed as "(e 12318)" it read as an
+// expectation while sitting three rows above the same man's survival column
+// reading 0% — one line of the board contradicting the evidence directly under
+// it, on 27 of 166 plan frames of the scripted mock.
 //
 // "" when there is no second pick to plan for.
-func (b Board) planCopy() string {
+func (b Board) planCopy() string { return b.planSkeleton(planLegsMax*40) }
+
+// planSkeleton is that copy inside a width budget: leg one and leg two always,
+// then as many later legs as the budget has room for.
+//
+// The drop order deviates from the milestone's own sketch, deliberately and in
+// one direction. The sketch had every leg outrank the odds clause; at a
+// full-horizon skeleton that rule means the legs always fill the line and the
+// odds never render at any terminal width, which would silently delete a claim
+// milestone 7 shipped. So the rule is: leg two outranks the odds, and the odds
+// outrank every leg after it. Leg two is the actionable claim and the odds are
+// about leg two — a third position four picks out is the least load-bearing
+// thing on the row.
+func (b Board) planSkeleton(budget int) string {
 	plan, ok := b.State.BestPlan()
 	if !ok {
 		return ""
 	}
+	first := fmt.Sprintf("plan  %s %s", strings.ToLower(plan.First), b.pickLabel(plan.FirstPick))
 	if plan.Second == "" {
 		// The rollouts found no legal second leg at all: the board past my next
 		// pick holds nothing this lineup is allowed to want. Rare — it needs an
 		// endgame where the only open slots are k and def while our own
 		// suppression still forbids them — and naming a blank position is worse
 		// than naming none.
-		return fmt.Sprintf("plan  %s at %s", strings.ToLower(plan.First), b.pickLabel(plan.FirstPick))
+		return first
 	}
-	return fmt.Sprintf("plan  %s at %s → %s at %s",
-		strings.ToLower(plan.First), b.pickLabel(plan.FirstPick),
-		strings.ToLower(plan.Second), b.pickLabel(plan.SecondPick))
+	line := first + fmt.Sprintf(" → %s %s", strings.ToLower(plan.Second), b.pickLabel(plan.SecondPick))
+	// Legs past the second exist only under the conditioned rollouts; the v1
+	// formula plans a pair and must not be dressed up as planning more.
+	for i := 2; i < len(plan.Legs) && i < planLegsMax; i++ {
+		leg := plan.Legs[i]
+		if leg.Pos == "" {
+			break
+		}
+		next := line + fmt.Sprintf(" → %s %s", strings.ToLower(leg.Pos), b.pickLabel(leg.Pick))
+		if lipgloss.Width(next) > budget {
+			break
+		}
+		line = next
+	}
+	return line
 }
 
 // planOdds is the conditioned lookahead's outcome claim (milestone 7): how
@@ -1009,17 +1087,123 @@ func planOdds(plan engine.Plan) string {
 // drops whole — joinClauses' rule, and the right priority: the plan is the
 // recommendation, the odds are how much to trust it.
 func (b Board) planLine(w int) string {
-	line := b.planCopy()
+	plan, ok := b.State.BestPlan()
+	if !ok {
+		return ""
+	}
+	odds := planOdds(plan)
+	// The skeleton's own budget is what is left after the odds clause has been
+	// paid for, which is what makes the later legs give ground to it rather
+	// than the other way round. joinClauses still gets the true width, so when
+	// even leg two plus the odds will not fit, the odds drop as they always did.
+	budget := w - 2
+	if odds != "" {
+		budget -= 3 + lipgloss.Width(odds)
+	}
+	line := b.planSkeleton(budget)
 	if line == "" {
 		return ""
 	}
 	clauses := []styledClause{{line, Dim}}
-	if plan, ok := b.State.BestPlan(); ok {
-		if odds := planOdds(plan); odds != "" {
-			clauses = append(clauses, styledClause{odds, Dim})
-		}
+	if odds != "" {
+		clauses = append(clauses, styledClause{odds, Dim})
 	}
 	return "  " + joinClauses(clauses, w-2) + "\n"
+}
+
+// teamAhead is the "your team from here" block: one row per starting slot that
+// is open today, read off the TOP CHOICE'S OWN FUTURES.
+//
+// It exists because milestone 8's score changed units. The board used to rank on
+// vor × need — a number in board units about a pick — and the only honest thing
+// to show was the ranking. It now ranks on the mean value of a FINISHED ROSTER,
+// which means the engine is holding three hundred versions of my team and has
+// been throwing all of them away except the mean. This block is the display in
+// the score's own native units, not decoration: what the recommendation actually
+// expects your team to become.
+//
+// One brain, deliberately: every row comes out of choices[0]'s rollouts, the
+// same futures Score is the mean of, so the block cannot contradict the verdict
+// standing above it. A version of this built off a second sample would be two
+// models on one frame, which is the bug survivalAt exists to prevent.
+//
+// It sits at the BOTTOM of the pane and that is its height policy: the frame's
+// clamp drops rows from the bottom of the body, so under height pressure this
+// block gives ground row by row and then disappears entirely before a single
+// field row does. Nothing extra had to be written for that.
+func (b Board) teamAhead(w int, top engine.PickChoice) string {
+	if len(top.Outlook) == 0 {
+		return ""
+	}
+	nameW := rowNameWidth(w) - 1
+	var rows []string
+	for _, o := range top.Outlook {
+		if len(rows) >= outlookRows {
+			break
+		}
+		rows = append(rows, b.outlookRow(w, nameW, o))
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	return "\n  " + Dim.Render(fitCaption(w-4,
+		"your team from here — where the top choice's futures end up", "your team from here")) +
+		"\n" + strings.Join(rows, "")
+}
+
+// outlookRow is one open starting slot as the futures fill it.
+//
+// The naming rule is the milestone's: name the man when he recurs in at least
+// planNameShare of futures, and speak in tiers below that. A name is a much
+// stronger claim than a band and it has to be earned — "warren at te" when he
+// lands there one future in six is a sentence the board cannot support, while
+// "a tier-3 te" is true of the same distribution.
+//
+// The percentage always matches the claim beside it: a named man carries HIS
+// share, a band carries the inclusive tier odds. Printing the tier odds next to
+// a name would be quoting a number about a group as though it were about him.
+func (b Board) outlookRow(w, nameW int, o engine.SlotOutlook) string {
+	s := b.State
+	slot := Dim.Render(fmt.Sprintf("%-4s", strings.ToLower(o.Slot)))
+	tail := w - (2 + 5 + nameW + 1 + 4 + 1)
+
+	if o.PlayerID == "" || o.Filled < outlookFilled {
+		// The slot ends empty in most futures, which is the one thing this block
+		// says that the roster pane opposite cannot: that pane shows a hole, this
+		// one says the hole is still there at the end of the draft.
+		return fmt.Sprintf("  %s %s\n", slot,
+			Cliff.Render(trunc("still open at the end", nameW+11)))
+	}
+
+	p := s.Players[o.PlayerID]
+	style := Pos(p.Pos, s.Suppressed(p.Pos))
+	var cell string
+	pct := o.Odds
+	named := o.Share >= planNameShare
+	if named {
+		cell = b.nameCell(p, style, nameW)
+		pct = o.Share
+	} else {
+		label := "a " + strings.ToLower(p.Pos)
+		if o.Tier > 0 {
+			label = fmt.Sprintf("a tier-%d %s", o.Tier, strings.ToLower(p.Pos))
+		}
+		cell = style.Render(fmt.Sprintf("%-*s", nameW, trunc(label, nameW)))
+	}
+
+	var clauses []styledClause
+	if o.Pick > 0 {
+		clauses = append(clauses, styledClause{"at " + b.pickLabel(o.Pick), Dim})
+	}
+	// The second mode, on named rows only. Under a band the runner-up is
+	// already inside the claim — "a tier-3 te or better" covers him — so naming
+	// him there would be arguing with the row above it.
+	if named && o.ElseID != "" {
+		clauses = append(clauses,
+			styledClause{"else " + lastName(strings.ToLower(s.Players[o.ElseID].Name)), Dim})
+	}
+	return fmt.Sprintf("  %s %s %s %s\n", slot, cell,
+		Dim.Render(fmt.Sprintf("%3.0f%%", 100*pct)), joinClauses(clauses, tail))
 }
 
 // endgameLine says out loud what the engine has already done to the board: at

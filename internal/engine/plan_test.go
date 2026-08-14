@@ -427,7 +427,9 @@ func TestBestPlanNeedsASecondPick(t *testing.T) {
 		if ok != c.wantOK {
 			t.Errorf("BestPlan at pick %d = %+v ok=%v, want ok=%v", c.pickNo, plan, ok, c.wantOK)
 		}
-		if !ok && plan != (Plan{}) {
+		if !ok && (plan.First != "" || plan.Second != "" || plan.FirstPick != 0 ||
+			plan.SecondPick != 0 || plan.Score != 0 || plan.SecondTier != 0 ||
+			plan.SecondOdds != 0 || plan.Legs != nil) {
 			t.Errorf("BestPlan at pick %d returned %+v with ok=false, want the zero plan", c.pickNo, plan)
 		}
 	}

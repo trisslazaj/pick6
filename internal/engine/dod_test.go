@@ -125,46 +125,59 @@ func TestConditionedPlanFlipsTheGreedyOne(t *testing.T) {
 // board the survival model carries most of the flip: greedy's own formula
 // computed on top of SIM survivals already prefers the receiver.
 //
-// What the lookahead adds on its own is separable and is measured here: leg two
-// under the rollouts is the best man across ALL positions in each future, while
-// the formula takes the best of the per-position expectations. E[max] >= max E,
-// always, and the gap is the value of having more than one way for a future to
-// go well. It is real, it is smaller than the survival model's contribution on
-// this board, and saying so is cheaper than discovering it later.
-func TestConditionedLegBeatsTheMaxOfMarginals(t *testing.T) {
+// What the lookahead adds on its own is separable and is measured here. The
+// formula commits to a leg-two POSITION before the board is dealt: it takes the
+// best of the per-position expectations, and then that is the position you get,
+// whatever the futures do. The rollouts choose in each future, so leg two is the
+// best man across all positions in the world that actually happened. E[max]
+// against max E, and the gap is the value of having more than one way for a
+// future to go well.
+//
+// Milestone 8 re-expresses it rather than dropping it: the score is a roster
+// value now, so there is no leg-two term to subtract out of it. Instead both
+// arms are run as rollouts over the SAME two-pick window and the same seed, one
+// free to choose and one nailed to the formula's position, and the finished
+// teams are compared. Same claim, measured in the units the objective ships in.
+func TestConditionedLegBeatsCommittingToOnePosition(t *testing.T) {
 	s := dodBoard()
 	s.Survival = SurvivalSim
 	q2 := s.FollowingPick()
+	mine := s.MyUpcomingPicks(2)
 
 	for _, pos := range []string{"RB", "WR"} {
 		bn, ok := s.BestNow(pos)
 		if !ok {
 			t.Fatalf("%s: no best available", pos)
 		}
-		// The formula's second leg, on the same sim survivals the rollouts see.
-		marginal := 0.0
+		// The position the v1 formula would have committed leg two to, computed
+		// on the same sim survivals the rollouts see.
+		commit, marginal := "", -1.0
 		for _, q := range planPositions {
 			leg2 := s.ebest(q, q2, bn.ID) - s.Replacement(q)
 			if leg2 < 0 {
 				leg2 = 0
 			}
 			if v := leg2 * s.NeedAfter(q, bn.ID); v > marginal {
-				marginal = v
+				commit, marginal = q, v
 			}
 		}
-		var conditioned float64
-		for _, c := range s.PickChoices() {
-			if c.Pos == pos {
-				conditioned = c.Score - s.VOR(bn)*s.Need(pos)
-			}
+		c := planCand{pos: pos, best: bn, need: s.Need(pos)}
+		if c.need > NeedBench {
+			c.fills1 = 1
 		}
-		if conditioned < marginal {
-			t.Errorf("%s: conditioned leg two %.1f is below the max of marginals %.1f — "+
+		run := func(allowed map[string]bool) float64 {
+			core := s.newSimCore(s.planSeed())
+			core.reseed(s.planSeed())
+			return s.planRollout(core, s.newPlanPolicy(core, allowed, true), c, mine, 0).Score
+		}
+		free := run(allPositions(s))
+		nailed := run(map[string]bool{commit: true})
+		if free < nailed {
+			t.Errorf("%s: choosing in the future finished at %.1f against %.1f for committing to %s — "+
 				"E[max] cannot be under max E unless the two are pricing different boards",
-				pos, conditioned, marginal)
+				pos, free, nailed, commit)
 		}
-		t.Logf("%s: conditioned leg two %.1f vs max-of-marginals %.1f (+%.1f)",
-			pos, conditioned, marginal, conditioned-marginal)
+		t.Logf("%s: free leg two %.1f vs committed-to-%s %.1f (+%.1f)", pos, free, commit, nailed, free-nailed)
 	}
 }
 
@@ -186,7 +199,10 @@ func TestConditioningDoesNotLeak(t *testing.T) {
 	c := planCand{pos: "RB", best: bn, need: s.Need("RB"), fills1: 1}
 	core := s.newSimCore(s.planSeed())
 	core.reseed(s.planSeed())
-	_ = s.planRollout(core, c, s.MyUpcomingPicks(2), 0, allPositions(s))
+	// Deliberately a two-leg window even though the shipped horizon is the whole
+	// draft: the leak this checks is about what removing my leg-one man does to
+	// the survival column, and the survival column's own window is two picks.
+	_ = s.planRollout(core, s.newPlanPolicy(core, allPositions(s), true), c, s.MyUpcomingPicks(2), 0)
 
 	// Per-player: the unconditioned sim row against the conditioned one, over
 	// the men who can actually be affected. Conditioned survival is read from a
@@ -247,4 +263,106 @@ func abs(x float64) float64 {
 		return -x
 	}
 	return x
+}
+
+// The wheel, which is where milestone 7 left its open question and milestone 8
+// dissolves it.
+//
+// The retired depth-3 experiment flipped the FIRST leg on 16 of 54 wheel frames
+// and every flip moved away from running back — coherent with the arithmetic
+// (two back-to-back picks let you double-tap the deep position later and take
+// the scarce one now) and unshippable, because "coherent" is not "right" and a
+// two-leg score had no way to tell them apart. A full horizon has one: it plays
+// the drought.
+//
+// Slot 12 on the clock at pick 12, so picks 12 and 13 are both mine and then
+// nothing until 36. The backs are deep and priced late — the same band is still
+// there after the drought. The tight ends are two men the market is taking right
+// now, and behind them a cliff. A human reading that board takes the tight end
+// with one of the two picks he is holding, because the backs keep and the tight
+// ends do not.
+//
+// The pair score cannot see it: at the turn nothing intervenes, so it ranks the
+// two best men by vor x need and the backs carry more value. The roster score
+// plays the twenty-two picks that follow, watches the tight ends disappear into
+// them, and takes the man it cannot get back.
+func wheelBoard() *State {
+	s := newTestState(12, 15, 12)
+	s.PickNo = 12 // picks 12 and 13 are mine; the next is 36
+
+	// Two tight ends the market is taking now, then the cliff.
+	addPlayers(s,
+		Player{ID: "teA", Pos: "TE", ADP: 12, Sigma: 2, Value: 800, Tier: 1},
+		Player{ID: "teB", Pos: "TE", ADP: 14, Sigma: 2, Value: 780, Tier: 1},
+	)
+	for i := 0; i < 8; i++ {
+		addPlayers(s, Player{ID: fmt.Sprintf("tec%d", i), Pos: "TE",
+			ADP: float64(90 + 4*i), Sigma: 8, Value: 200 - 5*i, Tier: 6})
+	}
+	// A deep band of backs the market prices well past the drought — far enough
+	// past that twenty-four opponent picks do not reach them — and worth
+	// slightly MORE than the tight ends, which is what makes the greedy answer
+	// wrong rather than merely different.
+	for i := 0; i < 14; i++ {
+		addPlayers(s, Player{ID: fmt.Sprintf("rb%d", i), Pos: "RB",
+			ADP: float64(92 + 2*i), Sigma: 8, Value: 850 - 5*i, Tier: 2 + i/5})
+	}
+	// Filler so the opponents draft a real board rather than two positions.
+	for i := 0; i < 20; i++ {
+		addPlayers(s,
+			Player{ID: fmt.Sprintf("wr%d", i), Pos: "WR", ADP: float64(15 + 3*i), Sigma: 8, Value: 700 - 10*i, Tier: 3 + i/6},
+			Player{ID: fmt.Sprintf("qb%d", i), Pos: "QB", ADP: float64(20 + 4*i), Sigma: 8, Value: 600 - 10*i, Tier: 3 + i/6},
+		)
+	}
+	for i := 0; i < 6; i++ {
+		addPlayers(s,
+			Player{ID: fmt.Sprintf("k%d", i), Pos: "K", ADP: float64(160 + i), Sigma: 8, Value: 120 - 5*i},
+			Player{ID: fmt.Sprintf("df%d", i), Pos: "DEF", ADP: float64(150 + i), Sigma: 8, Value: 130 - 5*i},
+		)
+	}
+	return s
+}
+
+func TestWheelTakesTheManTheDroughtWillEat(t *testing.T) {
+	greedy := wheelBoard()
+	greedy.Survival, greedy.Scorer = SurvivalSim, ScorerPair
+	g := topChoice(t, greedy, "pair")
+	if g.Pos != "RB" {
+		t.Fatalf("the pair score picked %s: the fixture no longer sets up the disagreement "+
+			"(it needs the backs to carry more raw value than the tight ends)", g.Pos)
+	}
+
+	full := wheelBoard()
+	full.Survival, full.Scorer = SurvivalSim, ScorerRoster
+	c := topChoice(t, full, "roster")
+	if c.Pos != "TE" {
+		t.Errorf("the roster score picked %s at the wheel, want TE: it did not price the drought", c.Pos)
+	}
+
+	// And it is RIGHT, which is a claim about the board rather than about the
+	// ranking. Two facts carry it, both measurable at the horizon that matters:
+	// the tight ends do not survive the drought, and the backs do.
+	q := full.MyUpcomingPicks(3)
+	if len(q) < 3 {
+		t.Fatalf("fixture: my picks are %v, want at least three", q)
+	}
+	after := full.SimBacktest(full.PickNo, q[2])
+	if p := after("teA"); p > 0.2 {
+		t.Errorf("the tight end survives to %d at %.0f%%: he was supposed to be unrecoverable", q[2], 100*p)
+	}
+	if p := after("rb0"); p < 0.5 {
+		t.Errorf("the back survives to %d at only %.0f%%: the band was supposed to keep", q[2], 100*p)
+	}
+	// ...and the plan says so out loud rather than only ranking that way: the
+	// te slot ends up filled by the man it took now.
+	var slot SlotOutlook
+	for _, o := range c.Outlook {
+		if o.Slot == "TE" {
+			slot = o
+		}
+	}
+	if slot.PlayerID != "teA" {
+		t.Errorf("the te slot ends up holding %q, want teA — the plan is not the pick it made",
+			slot.PlayerID)
+	}
 }

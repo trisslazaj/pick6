@@ -552,7 +552,7 @@ func TestRunBannerDoesNotShoutAtATierThatHolds(t *testing.T) {
 // across the sweep is a truncation or a wrap — either of which reads as a
 // rendering fault rather than as a tight fit.
 func TestPlanLineNamesBothLegsByPick(t *testing.T) {
-	const legs = "plan  wr at 1.02 → rb at 2.03"
+	const legs = "plan  wr 1.02 → rb 2.03"
 	for _, w := range []int{80, 92, 104, 140} {
 		view := ansi.ReplaceAllString(
 			Board{State: lookaheadState(), Width: w, Height: 40}.View(), "")
