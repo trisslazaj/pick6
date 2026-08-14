@@ -76,6 +76,7 @@ func runRegret(args []string) error {
 	if err != nil {
 		return err
 	}
+	shipped := engine.PlanRollouts
 	if *rollouts > 0 {
 		engine.PlanRollouts = *rollouts
 	}
@@ -106,7 +107,7 @@ func runRegret(args []string) error {
 		"starters at value + %.2f x bench, unfilled slot 0 · value = %g x %g^(-rank/%g) off era adp",
 		engine.BenchWeight, float64(regretValueScale), math.E, engine.ValueDecay))
 	if *rollouts > 0 {
-		note("rollouts", "set", fmt.Sprintf("%d futures per candidate (default 300)", *rollouts))
+		note("rollouts", "set", fmt.Sprintf("%d futures per candidate, overriding the shipped %d", *rollouts, shipped))
 	}
 
 	boards := map[int]*eraBoard{}
@@ -491,6 +492,12 @@ func (f *regretFold) run(trials int, verbose bool) []policyResult {
 			subs += r.subs
 			last = r
 		}
+		if last.desync != nil {
+			// Surfaced, never swallowed: our snake math disagreeing with the
+			// feed makes every roster in the row underneath it suspect, and a
+			// silently short roster would read as a bad policy.
+			note("replay", "desync", p.name+" · "+last.desync.Error())
+		}
 		out = append(out, policyResult{
 			name: p.name, blurb: p.blurb, fold: f.label,
 			u: mean(us), linear: mean(lins), us: us, linears: lins,
@@ -509,6 +516,7 @@ type replayResult struct {
 	subs      int
 	roster    []string
 	starters  []string
+	desync    error
 }
 
 // replay is the counterfactual itself.
@@ -555,12 +563,21 @@ func (f *regretFold) replay(p policy, seed int64) replayResult {
 	for n := 1; n <= teams*rounds; n++ {
 		slot := s.SlotAt(n)
 		if slot == f.seat {
-			real := ""
-			if pk, ok := at[n]; ok {
-				real = pk.PlayerID
-				register(s, pk)
+			// The real pick is NOT registered before the policy chooses. A
+			// handcuff the era board never priced exists only because I
+			// reached for him, and which handcuffs a room reaches for is
+			// information from the future — putting him on the board first
+			// would let a model policy draft a man it could not have known
+			// about. He is registered below, only if the policy that names him
+			// is the one replaying what I actually did. Found by review.
+			real, pk := "", sleeper.DraftPick{}
+			if got, ok := at[n]; ok {
+				real, pk = got.PlayerID, got
 			}
 			id := p.pick(s, f, real)
+			if id == real && real != "" {
+				register(s, pk)
+			}
 			if id == "" || s.Taken[id] {
 				id = bestAvailableID(s, f)
 			}
@@ -592,12 +609,27 @@ func (f *regretFold) replay(p policy, seed int64) replayResult {
 			res.subs++
 		}
 		register(s, pk)
-		s.Draft(pk.PlayerID)
+		// Attributed by the RECEIVING roster and not by the seat that picks:
+		// 26 of the 552 cached picks were traded, and a pick somebody traded
+		// for belongs on their team. ApplyRemote is the path that carries both
+		// numbers and cross-checks the snake on the way through; a substituted
+		// pick keeps the real slot and pick number and changes only the player.
+		if err := s.ApplyRemote(engine.RemotePick{
+			PickNo: n, Round: s.Round(n), Slot: slot,
+			OwnerSlot: d.OwnerSlot(pk), PlayerID: pk.PlayerID,
+		}); err != nil {
+			// A desync means our snake math and the feed disagree, which makes
+			// every roster below suspect. Nothing here can recover from it, and
+			// 552 real picks replay with zero mismatches, so it is a fact worth
+			// surfacing rather than a case worth handling.
+			res.desync = err
+			return res
+		}
 	}
 
 	filled, bench := s.RosterLineup(s.Rosters[f.seat])
 	res.u = s.RosterValue(s.Rosters[f.seat])
-	res.linear = f.linearValue(filled, bench)
+	res.linear = f.linearValue(s, filled, bench)
 	res.starters = filled
 	return res
 }
@@ -618,7 +650,7 @@ func register(s *engine.State, pk sleeper.DraftPick) {
 // assignment cannot move between the two — a monotone transform of rank leaves
 // the value ordering alone — so the ONLY thing that differs is what a rank is
 // worth, which is exactly the confound this check is for.
-func (f *regretFold) linearValue(filled, bench []string) float64 {
+func (f *regretFold) linearValue(s *engine.State, filled, bench []string) float64 {
 	total := 0.0
 	for _, id := range filled {
 		if id != "" {
@@ -626,7 +658,11 @@ func (f *regretFold) linearValue(filled, bench []string) float64 {
 		}
 	}
 	for _, id := range bench {
-		total += engine.BenchWeight * f.linear[id]
+		// The SAME bench rule U applies, not a flat BenchWeight. This check
+		// exists to vary one thing — the exchange rate — and a second
+		// difference in it would make a disagreement between the two columns
+		// unreadable. Found by review, which is exactly what it was for.
+		total += s.BenchWeightFor(f.players[id].Pos) * f.linear[id]
 	}
 	return total
 }
@@ -764,7 +800,12 @@ func regretGate(folds []*regretFold, results map[string][]policyResult) {
 			causalFolds++
 			if d > 0 {
 				causalWins++
-				if d > 2*se {
+				// A one-seed run has no standard error to speak of, and a zero
+				// printed where an error bar belongs must not be read as
+				// certainty. A genuinely deterministic policy pair — both sides
+				// identical across every seed — is the other case, and it earns
+				// the word.
+				if len(du) > 1 && d > 2*se {
 					decisive++
 				}
 			}
