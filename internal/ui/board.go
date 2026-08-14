@@ -567,7 +567,7 @@ func (b Board) bestAvailable(w int, choices []engine.PickChoice) string {
 		sb.WriteString(b.endgameLine(w))
 		if rows := b.choiceRows(w, choices, true); rows != "" {
 			sb.WriteString("\n  " + Dim.Render(fitCaption(w-4,
-				"if not him — ranked by the team each leads to", "if not him")) + "\n")
+				"if not him — ranked by "+b.rankedBy("what the pick is worth"), "if not him")) + "\n")
 			sb.WriteString(rows)
 		}
 		sb.WriteString(b.teamAhead(w, choices[0]))
@@ -576,7 +576,7 @@ func (b Board) bestAvailable(w int, choices []engine.PickChoice) string {
 
 	sb.WriteString(b.planLine(w))
 	sb.WriteString(b.endgameLine(w))
-	caption := "who'll likely be there — ranked by the team each leads to"
+	caption := "who'll likely be there — ranked by " + b.rankedBy("what taking each is worth")
 	if imDone || s.Done() {
 		caption = "still on the board"
 	}
@@ -584,6 +584,24 @@ func (b Board) bestAvailable(w int, choices []engine.PickChoice) string {
 	sb.WriteString(b.choiceRows(w, choices, false))
 	sb.WriteString(b.teamAhead(w, choices[0]))
 	return sb.String()
+}
+
+// rankedBy names the key the rows are ordered on, because milestone 8 made that
+// two different claims and a caption that named the wrong one would be the
+// frame lying about its own arithmetic. Under the shipped pair score the rows
+// are ranked by what the PICK is worth; under -scorer roster they are ranked by
+// the finished TEAM each one leads to, which is a different sentence and a
+// different promise.
+//
+// It asks the SCORER and not the horizon, unlike the two blocks below it: at the
+// endgame a two-pick window happens to be the whole horizon, so the futures
+// finish a roster and the blocks reading them are honest — while the ranking
+// they sit under is still the pair score.
+func (b Board) rankedBy(pair string) string {
+	if b.State.ScoresTheTeam() {
+		return "the team each leads to"
+	}
+	return pair
 }
 
 // fitCaption is the long-form-then-short rule every caption follows: dropping
@@ -697,6 +715,9 @@ func (b Board) verdictBlock(w int, top engine.PickChoice) string {
 // print — it is the widest single clause on the block and it earns its row by
 // naming somebody.
 func (b Board) consequence() string {
+	if choices := b.State.PickChoices(); len(choices) == 0 || !b.fullHorizon(choices[0]) {
+		return ""
+	}
 	cq, ok := b.State.Consequence()
 	if !ok || cq.Share < planNameShare {
 		return ""
@@ -1000,7 +1021,13 @@ func rowNameWidth(w int) int {
 // it, on 27 of 166 plan frames of the scripted mock.
 //
 // "" when there is no second pick to plan for.
-func (b Board) planCopy() string { return b.planSkeleton(planLegsMax*40) }
+//
+// Two legs and no more: its one caller is the data tab's urgency strip, which is
+// width-starved by design and budgets for the string it is handed. A skeleton
+// there would be silently dropped WHOLE by planTail rather than shortened, which
+// is what happened before this cap existed — the strip simply stopped carrying a
+// plan under the roster scorer. Found by review.
+func (b Board) planCopy() string { return b.planSkeleton(1<<30, 2) }
 
 // planSkeleton is that copy inside a width budget: leg one and leg two always,
 // then as many later legs as the budget has room for.
@@ -1013,7 +1040,7 @@ func (b Board) planCopy() string { return b.planSkeleton(planLegsMax*40) }
 // outrank every leg after it. Leg two is the actionable claim and the odds are
 // about leg two — a third position four picks out is the least load-bearing
 // thing on the row.
-func (b Board) planSkeleton(budget int) string {
+func (b Board) planSkeleton(budget, maxLegs int) string {
 	plan, ok := b.State.BestPlan()
 	if !ok {
 		return ""
@@ -1030,7 +1057,7 @@ func (b Board) planSkeleton(budget int) string {
 	line := first + fmt.Sprintf(" → %s %s", strings.ToLower(plan.Second), b.pickLabel(plan.SecondPick))
 	// Legs past the second exist only under the conditioned rollouts; the v1
 	// formula plans a pair and must not be dressed up as planning more.
-	for i := 2; i < len(plan.Legs) && i < planLegsMax; i++ {
+	for i := 2; i < len(plan.Legs) && i < maxLegs; i++ {
 		leg := plan.Legs[i]
 		if leg.Pos == "" {
 			break
@@ -1100,7 +1127,7 @@ func (b Board) planLine(w int) string {
 	if odds != "" {
 		budget -= 3 + lipgloss.Width(odds)
 	}
-	line := b.planSkeleton(budget)
+	line := b.planSkeleton(budget, planLegsMax)
 	if line == "" {
 		return ""
 	}
@@ -1132,7 +1159,7 @@ func (b Board) planLine(w int) string {
 // block gives ground row by row and then disappears entirely before a single
 // field row does. Nothing extra had to be written for that.
 func (b Board) teamAhead(w int, top engine.PickChoice) string {
-	if len(top.Outlook) == 0 {
+	if len(top.Outlook) == 0 || !b.fullHorizon(top) {
 		return ""
 	}
 	nameW := rowNameWidth(w) - 1
@@ -1140,6 +1167,17 @@ func (b Board) teamAhead(w int, top engine.PickChoice) string {
 	for _, o := range top.Outlook {
 		if len(rows) >= outlookRows {
 			break
+		}
+		// A slot whose modal filler is a man I ALREADY have is not news: it
+		// closed by reassignment, not by a pick. Which of two same-position
+		// slots is "the open one" is arbitrary anyway — adding a second back
+		// puts the better of the two in the first rb slot and the other in the
+		// second — so the row would name a player the roster pane is already
+		// showing, two columns to the right, and say nothing about the future.
+		// The man who actually arrives gets his own row on whichever slot he
+		// lands in.
+		if o.Pick == 0 && o.PlayerID != "" {
+			continue
 		}
 		rows = append(rows, b.outlookRow(w, nameW, o))
 	}
@@ -1204,6 +1242,25 @@ func (b Board) outlookRow(w, nameW int, o engine.SlotOutlook) string {
 	}
 	return fmt.Sprintf("  %s %s %s %s\n", slot, cell,
 		Dim.Render(fmt.Sprintf("%3.0f%%", 100*pct)), joinClauses(clauses, tail))
+}
+
+// fullHorizon reports whether the plan behind a choice was played to my LAST
+// pick, which is the milestone-8 objective's window and nobody else's.
+//
+// Two blocks depend on it and neither may render without it. "Your team from
+// here" reads a finished lineup out of the futures, and a two-pick window
+// finishes nothing — every slot past the second leg would read "still open at
+// the end", which is a fact about the window and not about the draft. The
+// consequence clause is the same story: diffing two rosters that are two picks
+// long names whoever leg two happened to differ on, which is a coin toss with a
+// player's name attached.
+//
+// So under the shipped pair score both blocks are simply absent, and the frame
+// is the milestone-7 frame. Late in a draft, where my remaining picks ARE two,
+// the pair window is the full horizon and both blocks come back — correctly,
+// because there the two questions have the same answer.
+func (b Board) fullHorizon(top engine.PickChoice) bool {
+	return len(top.Legs) >= b.State.MyPicksLeft()
 }
 
 // endgameLine says out loud what the engine has already done to the board: at
