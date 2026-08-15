@@ -321,3 +321,38 @@ estimator, the O(positions) leg policy, `pick6 regret`, the plan skeleton, `your
 here`, the consequence clause, the market's dissenting man as a scored candidate, and the
 wheel fixture. `PlanDepth` is retired to a comment. The survival path is untouched and it
 was verified rather than assumed.
+
+## the human's verdict (2026-08-14, same day)
+
+Shown the roster scorer's recommendations on the 2026 board, the user rejected it: reaching
+for a quarterback and a tight end early is "objectively bad" and he does not want the
+scorer. **That outranks the gate.** A decision score has no labels; the harness has three
+blind spots it prints on every run; a drafter who has played this league for years reading
+the output is a better instrument than either.
+
+The mechanism is concrete, and it is the starter side of the same mistake the bench weight
+fixed. `U` sums STARTER values, and the value curve is not replacement-normalised across
+positions — which is the entire reason `vor.go` exists. Measured at 3.06 of the scripted
+mock:
+
+```
+              value    vor   replacement
+josh allen     6216   5135          1081
+malik nabers   5724   5675            49
+breece hall    5183   5183             0
+tyler warren   3421   3200           221
+```
+
+vor ranks nabers over allen by 540. `U` ranks allen over nabers by 473 — i.e. `U`'s order
+is the RAW-VALUE order, and the simulation that is supposed to recover the difference
+through "what would I get at this position later" recovers only about half of it.
+
+So the promotion bar is now three things, not one: fix the starter-side pricing (the leg
+policy maximising ΔU instead of vor × need is the same fix approached from the other end),
+win a causal fold, and change the user's mind. Absent all three this is a documented
+negative result that happens to still compile — which is what the `Negative results`
+section of the paper is for, and where it will go if it is ever removed from the tree.
+
+The board a human actually drafts with is unaffected and that was measured, not argued:
+across 280 scripted frames (7 seeds x 5 slots x 8 vantages) the verdict, the ranked rows,
+the banner and the plan's positions are identical to 2ee2408.
