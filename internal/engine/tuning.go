@@ -49,7 +49,7 @@ const (
 	// Need weights.
 	//
 	// Milestone 8 retired these from the OBJECTIVE and left them everywhere
-	// else. They still price legPolicy's ordering, urgency, SafeToWait, the
+	// else. They still price planPolicy's ordering, urgency, SafeToWait, the
 	// opponents' own need model and the whole of adp mode — all of which are
 	// policies and heuristics, which is where a guessed step function belongs.
 	// What they no longer do is stand in for "what is a filled flex slot
@@ -240,20 +240,27 @@ const (
 // THE ZERO VALUE IS MILESTONE 7'S PAIR SCORE, and that is a result rather than
 // an ordering accident. Milestone 8 built the finished-roster objective, built
 // the referee that could grade it (`pick6 regret`), and did not clear its own
-// gate: over 120 paired seeds the roster scorer came out -3096 (se 2390) on the
+// gate: over 80 paired seeds the roster scorer came out +181 (se 1516) on the
 // 2025-a fold and -729 (deterministic) on 2025-b, the two folds whose room
-// curve and escape rates predate them. Both differences are inside the noise
-// the harness can resolve — the honest verdict is "indistinguishable" and not
-// "worse" — but the gate asks for better on both, and this repo does not ship a
-// decision-shaped change on plausibility. The room warp's cap is the scar.
+// curve and escape rates predate them — a tie inside its own error bar and a
+// 0.08% loss. The honest verdict is "indistinguishable", not "worse", but the
+// gate asks for better on both and this repo does not ship a decision-shaped
+// change on plausibility. The room warp's cap is the scar.
+//
+// Then the drafter read its recommendations and rejected them outright: it
+// reaches for a quarterback and a tight end early, because U's STARTER sum is
+// raw value with no cross-position normalisation — the exact bias vor.go exists
+// to remove, reintroduced on the starters after benchWeight removed it from the
+// bench. That outranks the gate, and it should.
 //
 // So the roster objective is built, tested, and OFF, exactly as milestone 7's
 // third leg was: `-scorer roster` turns it on, and the display features that
 // only it can support (the plan skeleton past two legs, "your team from here",
-// the consequence clause) come with it. What would promote it is a causal fold
-// on which it wins — or the continuation policy inside the rollouts learning to
-// maximise U rather than vor x need, which is the strongest live hypothesis for
-// why it doesn't. See docs/milestone-8.md.
+// the consequence clause) come with it. Promotion now needs three things and
+// not one: the starter-side pricing fixed (the continuation policy inside the
+// rollouts maximising ΔU rather than vor x need is the same fix from the other
+// end), a causal fold it wins, and the drafter's agreement. See
+// docs/milestone-8.md.
 //
 // The Survival precedent is followed exactly: the engine's zero value is the
 // conservative brain, and the product default lives where the flags do.

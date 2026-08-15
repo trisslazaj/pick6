@@ -833,10 +833,11 @@ func walk(d *sleeper.Draft, picks []sleeper.DraftPick, b *eraBoard, curve adp.Ro
 	// only reason it is still computed is that the loser has to stay on the table
 	// next to the winner. adp.EffectiveADP's doc names this as its one caller.
 	eff := curve.EffectiveADP(rows)
-	// The same warp restricted to the top of each position — the variant the board
-	// ships, through the same adp.EffectiveADPTopK call `loadBoard` makes, so the
-	// graded model and the priced one cannot drift apart. retractedCutoff carries
-	// the cutoff sweep and how thin one fold of evidence is.
+	// The same warp restricted to the top of each position — the RETRACTED
+	// variant, kept on the table next to the winner because a loser that stops
+	// being computed stops being checkable. `loadBoard` applies EffectiveADP,
+	// uncapped, which is what the row above grades. retractedCutoff carries the
+	// cutoff sweep and how thin the one fold that chose it turned out to be.
 	effTop := curve.EffectiveADPTopK(rows, retractedCutoff)
 	// And the same again over the alternate adp column, when the source has one.
 	// Ranked on its own prices, because rank within a position is what adp_room

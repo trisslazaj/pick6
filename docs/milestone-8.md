@@ -62,7 +62,8 @@ what the team probably becomes, and what each choice costs **named in players**.
 
 ### the objective
 
-`engine.RosterValue(ids)` — pure, table-tested:
+`(*State).RosterValue(ids)` — it reads the state's players and lineup shape, so it cannot
+be a free function; pure in the sense that it mutates nothing, and table-tested:
 
 1. Assign players to starting slots greedily by value, dedicated slots first, then
    flex — `fillSlots` semantics exactly, including two-flex lineups and superflex.
@@ -267,7 +268,9 @@ features with it. The order of this file's own build was inverted — the scorer
 before the referee rather than after — which cost nothing in the end, because the referee
 printed every baseline before it scored the contender and the contender lost.
 
-**The gate, as specified, is not met.** Over 120 paired seeds of `pick6 regret`:
+**The gate, as specified, is not met.** Over 80 paired seeds of `pick6 regret`, at the
+shipped `PlanRollouts = 500` and after the adversarial review fixed four bugs in the
+referee itself:
 
 ```
 fold     priors            m7 U         m8 U    m8 - m7       se   linear m8 - m7
@@ -303,7 +306,8 @@ Four things worth carrying forward:
 3. **A real bug fell out of the build, independent of the gate**: `U` was paying a quarter
    of an inflated value for a *backup quarterback*. `BenchWeight` now carries vor's own
    two-index rule — a bench body is worth it only if his position can reach a lineup
-   through a flex slot — and `legPolicy` prices the same way. Before that fix the board
+   through a flex slot — and `planPolicy` (this spec's `legPolicy`, renamed) prices the
+   same way. Before that fix the board
    recommended a second QB in a 1QB league, which is the ~930-point subsidy of the VOR
    section wearing a new hat. The fix is right and it is also what flipped the gate from
    passing to failing, which is the most interesting thing in this file: the harness's
@@ -316,11 +320,24 @@ Four things worth carrying forward:
    with it: the roster objective costs 366ms in round 1 at 500 against a ~250ms budget,
    and ~220ms at 300.
 
-Everything else in this spec was built as written: `RosterValue`, the full-horizon
-estimator, the O(positions) leg policy, `pick6 regret`, the plan skeleton, `your team from
-here`, the consequence clause, the market's dissenting man as a scored candidate, and the
-wheel fixture. `PlanDepth` is retired to a comment. The survival path is untouched and it
-was verified rather than assumed.
+Everything else in this spec was built as written — `RosterValue`, the full-horizon
+estimator, the O(positions) leg policy (renamed `planPolicy`), `pick6 regret`, the plan
+skeleton, `your team from here`, the consequence clause, the market's dissenting man as a
+scored candidate, and the wheel fixture — with three deliberate departures worth naming:
+
+1. The `Second`/`SecondTier`/`SecondOdds` trio was **kept** alongside `Legs` rather than
+   replaced by it, because adp mode has no futures to summarise and nothing else to say.
+2. `best-available-by-value` was **dropped** as a regret policy. On an era board value is a
+   monotone function of adp rank, so it is the same policy as best-available-by-adp, and
+   printing it twice would be printing one number twice. `fill-the-lineup` took its place
+   as a genuinely different baseline.
+3. The plan line's drop order **inverts** the spec's: leg two outranks the odds clause, and
+   the odds outrank every leg after it. The spec's order meant the legs always filled the
+   line and the odds never rendered at any terminal width, silently deleting a claim
+   milestone 7 shipped.
+
+`PlanDepth` is retired to a comment. The survival path is untouched and it was verified
+rather than assumed.
 
 ## the human's verdict (2026-08-14, same day)
 

@@ -199,10 +199,12 @@ func applySim(s *engine.State, survival, replaying string, seed int64) error {
 }
 
 // applyBrain is applySim plus the decision score, which milestone 8 made a
-// second switch. The default is the finished-roster objective; `-scorer pair`
-// puts the ranking back on milestone 7's two-leg pair score without touching
-// the survival column, which is the smaller step back than turning the whole
-// sim off and the reason the old scorer is still in the tree.
+// second switch. The default is milestone 7's two-leg pair score; `-scorer
+// roster` opts in to the finished-roster objective, which was built, graded
+// against `pick6 regret` and did not clear its gate — and which the drafter
+// then looked at and rejected outright. It stays in the tree as a documented
+// negative result and as the smaller step back than turning the whole sim off,
+// and it stays OFF.
 func applyBrain(s *engine.State, survival, scorer, replaying string, seed int64) error {
 	switch scorer {
 	case "pair", "":

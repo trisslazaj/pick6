@@ -24,13 +24,12 @@ type Player struct {
 	// ADPEff is ADP as THIS room prices it: the national number blended with
 	// where the k-th player at his position actually goes in this league's own
 	// completed drafts (adp.RoomCurve). It is populated by default on mock and
-	// live, but only for the top adp.RoomWarpTopK players at each position —
-	// past there the room's curve measured worse than the market, so everyone
-	// deeper keeps a zero here on purpose.
+	// live, at every depth the curve reaches — the top-k cap this comment used
+	// to describe won one fold, lost both causal ones, and was retracted along
+	// with the constant that named it.
 	//
-	// 0 therefore means "no warp for this man": he is outside the top of his
-	// position, the curve never reached his rank, no draft is cached, or
-	// `-room=false`. Every one of those is the same instruction — price him off
+	// 0 therefore means "no warp for this man": the curve never reached his
+	// rank, no draft is cached, or `-room=false`. Every one of those is the same instruction — price him off
 	// raw ADP — which is what price() does.
 	//
 	// Exactly two things read it, PSurviveAt and Falling, and that is the whole
@@ -108,10 +107,11 @@ type State struct {
 	// logistic + tilt. Sim is the product default and the cmd layer sets it;
 	// the engine's own zero value stays adp so the v1 math keeps its tests.
 	Survival string
-	// Scorer selects the decision score under sim: the zero value is
-	// milestone 8's finished-roster objective, ScorerPair is milestone 7's
-	// two-leg pair score. It does nothing under adp, which has one formula.
-	// See the constants for why the old one is still here.
+	// Scorer selects the decision score under sim: the ZERO VALUE is
+	// ScorerPair, milestone 7's two-leg pair score, and ScorerRoster is
+	// milestone 8's finished-roster objective. It does nothing under adp, which
+	// has one formula and keeps it wholesale. See the constants for why the new
+	// one is off.
 	Scorer string
 	// SimSeed is the base the per-vantage rollout seed mixes from, so a mock
 	// or a test can replay identical futures. Zero is a fine base; what matters

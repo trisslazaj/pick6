@@ -1144,7 +1144,7 @@ func (b Board) planLine(w int) string {
 // It exists because milestone 8's score changed units. The board used to rank on
 // vor × need — a number in board units about a pick — and the only honest thing
 // to show was the ranking. It now ranks on the mean value of a FINISHED ROSTER,
-// which means the engine is holding three hundred versions of my team and has
+// which means the engine is holding five hundred versions of my team and has
 // been throwing all of them away except the mean. This block is the display in
 // the score's own native units, not decoration: what the recommendation actually
 // expects your team to become.
