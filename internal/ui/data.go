@@ -41,8 +41,11 @@ func (b *Board) HandleKey(key string) bool {
 		return true
 	}
 	if key == "tab" {
-		b.Tab = 1 - b.Tab
+		b.Tab = (b.Tab + 1) % 3
 		return true
+	}
+	if b.Tab == 2 {
+		return b.notesKey(key)
 	}
 	if b.Tab != 1 {
 		return false

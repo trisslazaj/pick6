@@ -29,16 +29,19 @@ shot() {
 mkdir -p docs/shots
 
 # the clock: verdict block, plan line, the field ranked under it
-shot board-clock.svg 1 pick6 mock -slot 3 -seed 5 -snapshot 26
+shot board-clock.svg 2 pick6 mock -slot 3 -seed 5 -snapshot 26
 
 # off the clock: cliff banner firing, a falling first-rounder, an avoid chip
-shot board-forecast.svg 1 pick6 mock -slot 3 -seed 5 -snapshot 10
+shot board-forecast.svg 2 pick6 mock -slot 3 -seed 5 -snapshot 10
 
 # the data tab: every number the engine holds, opinions riding the names
-shot data-tab.svg 1 pick6 mock -slot 3 -seed 5 -snapshot 40 -data
+shot data-tab.svg 2 pick6 mock -slot 3 -seed 5 -snapshot 40 -data
 
 # kicker o'clock: k/def unsuppressed, the file's endgame calls on screen
-shot endgame.svg 1 pick6 mock -slot 3 -seed 5 -snapshot 158 -data
+shot endgame.svg 2 pick6 mock -slot 3 -seed 5 -snapshot 158 -data
+
+# the notes tab: your own files beside the draft map, names struck as they go
+shot notes-tab.svg 2 pick6 mock -slot 12 -seed 5 -snapshot 100 -tab notes -notes docs/notes-example
 
 # the tier board, straight from the cache
 shot tiers.svg 0 pick6 tiers -pos wr -depth 15

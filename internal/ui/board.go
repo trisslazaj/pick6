@@ -44,11 +44,15 @@ type Board struct {
 	Now time.Time
 
 	// Tab 0 is the board; tab 1 is the data table — every player, every
-	// number, nothing abstracted away. State for the latter lives here so
-	// both the mock and live models share it.
+	// number, nothing abstracted away; tab 2 is the notes. State for them
+	// lives here so both the mock and live models share it.
 	Tab        int
 	DataScroll int
 	DataFilter string // "" = all positions
+
+	// Notes is tab 2: your own markdown, rendered beside a map of the draft.
+	// See notes.go. Nothing on it reaches the engine.
+	Notes Notes
 
 	// Search is the `/` overlay and Selected is the player it produced, held
 	// here rather than in the models for the same reason the data tab's scroll
@@ -153,9 +157,12 @@ func (b Board) View() string {
 	choices := b.State.PickChoices()
 
 	var body string
-	if b.Tab == 1 {
+	switch b.Tab {
+	case 1:
 		body = b.dataPane(content)
-	} else {
+	case 2:
+		body = b.notesPane(content)
+	default:
 		sw := sidebarWidth(content)
 		leftW := content - sw - 3
 		left := b.bestAvailable(leftW, choices)
@@ -1638,8 +1645,11 @@ func (b Board) footerKeys() []string {
 	if b.Search.Open {
 		return []string{"↑/↓ pick", "enter select", "esc cancel"}
 	}
-	if b.Tab == 1 {
-		return []string{"tab board", "j/k scroll", "p filter", "/ search", "q quit"}
+	switch b.Tab {
+	case 1:
+		return []string{"tab notes", "j/k scroll", "p filter", "/ search", "q quit"}
+	case 2:
+		return []string{"tab board", "←→ file", "j/k scroll", "e edit", "/ search", "q quit"}
 	}
 	switch b.Mode {
 	case ModeManual:

@@ -29,6 +29,7 @@ func runMock(args []string) error {
 	auto := fs.Bool("auto", true, "auto-advance picks")
 	snapshot := fs.Int("snapshot", -1, "advance N picks, print one frame, exit (no tui)")
 	data := fs.Bool("data", false, "render the data tab instead of the board in snapshot mode")
+	tab, notes := tabFlag(fs), notesFlag(fs)
 	// The same pair board and live -replay carry. This is the command CLAUDE.md
 	// points at for readme screenshots, so it is the one that most needs to be
 	// able to frame the overlay.
@@ -70,10 +71,8 @@ func runMock(args []string) error {
 			s.Draft(id)
 		}
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Fresh: loadFreshness()}
-		if *data {
-			b.Tab = 1
-		}
+			Fresh: loadFreshness(), Notes: ui.Notes{Dir: notesDir(*notes)}}
+		pickTab(&b, *tab, *data)
 		if *search != "" {
 			b.Search = ui.Search{Open: true, Query: *search}
 		}
@@ -85,7 +84,7 @@ func runMock(args []string) error {
 	}
 
 	p := tea.NewProgram(
-		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness()),
+		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness()).WithNotes(notesDir(*notes)),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()

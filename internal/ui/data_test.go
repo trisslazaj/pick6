@@ -18,8 +18,9 @@ func TestTabTogglesDataView(t *testing.T) {
 		t.Error("tab should switch to the data view")
 	}
 	m = send(m, key("tab"))
+	m = send(m, key("tab"))
 	if !strings.Contains(m.View(), "your roster") {
-		t.Error("tab again should switch back to the board")
+		t.Error("tab twice more (through notes) should return to the board")
 	}
 }
 

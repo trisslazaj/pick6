@@ -140,6 +140,20 @@ before:
 
 <img src="docs/shots/endgame.svg" alt="kicker o'clock">
 
+### the notes tab
+
+`tab` again is your own notes, next to the board, so draft night is two screens (this and
+sleeper) and not three. It is a folder of markdown files — `<config dir>/pick6/notes/`, or
+`-notes <dir>` — rendered with player names in their position colours and **struck through
+as they get taken**, beside a map of the draft so far. `global.md` sits on top of everything;
+`slot-N.md` opens itself when you draw seat N; anything else you flip between with `←`/`→`.
+`e` opens the current file in `$EDITOR`. Nothing on it feeds the engine — the notes are your
+side of the argument, and the board is the other.
+
+<img src="docs/shots/notes-tab.svg" alt="the notes tab">
+
+An example folder lives in [`docs/notes-example`](docs/notes-example).
+
 ### for the curious
 
 `pick6 scout` profiles each manager's tendencies from your league's cached drafts; `pick6
@@ -156,8 +170,9 @@ team each one walked out with. None of the three is needed to draft.
 |-----|------|
 | `/` | search players — taken ones stay in the results with the pick that took them |
 | `x` / `u` | mark taken / undo (board mode) |
-| `tab` | flip board ↔ data table |
+| `tab` | cycle board → data table → notes |
 | `j` `k` / `p` | scroll / position filter (data tab) |
+| `←` `→` / `e` | switch file / open it in `$EDITOR` (notes tab) |
 | `space` / `a` | step / autoplay (mock mode) |
 | `q` | quit |
 
