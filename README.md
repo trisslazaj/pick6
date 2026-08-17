@@ -143,7 +143,7 @@ before:
 ### the notes tab
 
 `tab` again is your own notes, next to the board, so draft night is two screens (this and
-sleeper) and not three. It is a folder of markdown files — `<config dir>/pick6/notes/`, or
+sleeper) and not three. It is a folder of markdown files — `~/.config/pick6/notes/`, or
 `-notes <dir>` — rendered with player names in their position colours and **struck through
 as they get taken**, beside a map of the draft so far. `global.md` sits on top of everything;
 `slot-N.md` opens itself when you draw seat N; anything else you flip between with `←`/`→`.
