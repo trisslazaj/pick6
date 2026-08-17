@@ -127,10 +127,11 @@ pick6 tiers -pos wr -depth 15
 
 <img src="docs/shots/tiers.svg" alt="the wr tier board">
 
-Under the ranking, the pane fills with the board behind it: what the room is about to do
-(`expect 10 wr · 7 rb · 4 qb`, and the men likeliest gone before you pick — the simulation's
-rollouts read as picks instead of percentages), every position's tiers as a row of dots with
-the taken ones filled in, and the best three left at each position with their odds.
+Between picks each ranked row is the position's depth — its best three by value, each with
+his odds of still being there when you pick — and under the ranking the pane fills with the
+board behind it: what the room is about to do (`expect 10 wr · 7 rb · 4 qb`, and the men
+likeliest gone before you pick — the simulation's rollouts read as picks instead of
+percentages), and every position's tiers as a row of dots with the taken ones filled in.
 
 ### the data tab
 

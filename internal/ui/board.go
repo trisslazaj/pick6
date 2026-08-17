@@ -584,11 +584,11 @@ func (b Board) bestAvailable(w int, choices []engine.PickChoice) string {
 
 	sb.WriteString(b.planLine(w))
 	sb.WriteString(b.endgameLine(w))
-	caption := "who'll likely be there — ranked by " + b.rankedBy("what taking each is worth")
+	caption := "what's left, best three by value — ranked by " + b.rankedBy("what taking each is worth")
 	if imDone || s.Done() {
 		caption = "still on the board"
 	}
-	sb.WriteString("\n  " + Dim.Render(fitCaption(w-4, caption, "who'll likely be there")) + "\n")
+	sb.WriteString("\n  " + Dim.Render(fitCaption(w-4, caption, "what's left")) + "\n")
 	sb.WriteString(b.choiceRows(w, choices, false))
 	sb.WriteString(b.teamAhead(w, choices[0]))
 	sb.WriteString(b.fieldBlocks(w, rowCount(sb.String())))
@@ -874,12 +874,132 @@ func (b Board) choiceRows(w int, choices []engine.PickChoice, onClock bool) stri
 			}
 			continue
 		}
-		sb.WriteString(b.choiceRow(w, c, i == 0 && !onClock, onClock))
+		if onClock {
+			sb.WriteString(b.choiceRow(w, c, false, true))
+		} else {
+			sb.WriteString(b.depthRow(w, c, i == 0))
+		}
 		if row := b.marketRow(w, c); row != "" {
 			sb.WriteString(row)
 		}
 	}
 	return sb.String()
+}
+
+// depthN is how many men an off-clock row names per position. Three is the
+// question being asked between picks — "if the first is gone, who is the
+// settle-for, and is he safe" — and the fourth is the data tab's job.
+const depthN = 3
+
+// depthRow is one row of the off-clock ranking: the position, then its best
+// three by value with each man's odds of reaching my pick, then the tier's
+// state. It replaced a row that named only the position's current best man,
+// which off the clock is usually a man who will NOT be there — a 9% caleb
+// williams under the caption "who'll likely be there" was the frame lying
+// about its own label. The ranking still orders the rows (the accent still
+// marks the top choice); the content is the depth, because the depth is what
+// you can act on when your turn comes.
+//
+// Priority under width pressure, dropping from the right: the long tier note
+// goes first, then the third man, then the second, then the safe tag — the
+// first man and the short note survive everything.
+func (b Board) depthRow(w int, c engine.PickChoice, accent bool) string {
+	s := b.State
+	style := Pos(c.Pos, false)
+	edge := "  "
+	if accent {
+		edge = style.Render("▏") + " "
+	}
+	tag := style.Bold(true).Render(fmt.Sprintf("%-3s", strings.ToLower(c.Pos)))
+	prefix := edge + tag + " "
+
+	var men []string
+	for i, p := range s.Available(c.Pos) {
+		if i >= depthN {
+			break
+		}
+		cs := b.alarmChips(p)
+		if p.Sentiment == "avoid" {
+			cs = append(cs, chip{"avoid", ChipNote})
+		}
+		chips, _, _ := renderChips(cs, 20)
+		men = append(men, style.Render(strings.ToLower(p.Name))+chips+" "+
+			b.survStyle(p).Render(pct(s.PSurviveTilted(p))))
+	}
+	if len(men) == 0 {
+		return ""
+	}
+
+	long, short, noteStyle := b.stateNote(c.Pos)
+	var extras []styledClause
+	if s.SafeToWait(c.Pos) {
+		extras = append(extras, styledClause{"safe", Wait})
+	}
+	if best := s.Available(c.Pos)[0]; s.Falling(best) {
+		price, priceStyle := b.priceClause(best, false)
+		extras = append(extras, styledClause{price, priceStyle})
+	}
+	// Priority under width, in order: the first man; the short note when it is
+	// an alarm ("last one in tier 3" outranks everybody's second man); the
+	// second man; the short note with the safe/falling tags; the third man;
+	// the long note. Nothing is ever truncated — a clause that does not fit
+	// whole is dropped whole, same law as every other row.
+	sepS := Dim.Render(" · ")
+	sepW := lipgloss.Width(sepS)
+	alarm := false
+	if level, _, _ := s.Cliff(c.Pos); level != engine.CliffNone {
+		alarm = true
+	}
+	tailNeed := lipgloss.Width(short) + 3*len(extras) + sumWidth(extras)
+	line := prefix + men[0]
+	fits := func(m string, keep int) bool {
+		return lipgloss.Width(line)+sepW+lipgloss.Width(m)+keep <= w
+	}
+	reserve := 0
+	if alarm {
+		reserve = 3 + lipgloss.Width(short)
+	}
+	if len(men) > 1 && fits(men[1], reserve) {
+		line += sepS + men[1]
+	}
+	if len(men) > 2 {
+		rem := w - lipgloss.Width(line) - 3
+		switch {
+		case fits(men[2], 3+tailNeed):
+			line += sepS + men[2] // the tail still fits after him
+		case rem < tailNeed && !alarm && fits(men[2], 0):
+			line += sepS + men[2] // the tail was not fitting anyway
+		}
+	}
+	rem := w - lipgloss.Width(line) - 3
+	var clauses []styledClause
+	switch {
+	case rem >= lipgloss.Width(long)+3*len(extras)+sumWidth(extras):
+		clauses = append(clauses, styledClause{long, noteStyle})
+	case rem >= lipgloss.Width(short):
+		clauses = append(clauses, styledClause{short, noteStyle})
+	}
+	clauses = append(clauses, extras...)
+	// Drop whole clauses from the right until the tail fits; never truncate.
+	for len(clauses) > 0 && sumWidth(clauses)+3*(len(clauses)-1) > rem {
+		clauses = clauses[:len(clauses)-1]
+	}
+	if len(clauses) > 0 {
+		var parts []string
+		for _, c := range clauses {
+			parts = append(parts, c.st.Render(c.text))
+		}
+		line += "   " + strings.Join(parts, Dim.Render(" · "))
+	}
+	return line + "\n"
+}
+
+func sumWidth(cs []styledClause) int {
+	n := 0
+	for _, c := range cs {
+		n += lipgloss.Width(c.text)
+	}
+	return n
 }
 
 // choiceRow is one row of the ranking. Column budget: edge(2) tag(4)

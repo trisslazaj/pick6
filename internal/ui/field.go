@@ -12,7 +12,7 @@ import (
 
 // The blocks under the recommendation. The choice rows are the decision; these
 // are the board behind it — what the room is about to do, how deep each tier
-// still runs, who is left at every position — and they exist because the left
+// still runs — and they exist because the left
 // pane used to stop after five rows and leave two-thirds of the terminal blank
 // at every size.
 //
@@ -25,7 +25,7 @@ import (
 func (b Board) fieldBlocks(w, used int) string {
 	budget := b.bodyRows()
 	var sb strings.Builder
-	for _, block := range []func(int) string{b.roomBlock, b.tierLadder, b.whatsLeft} {
+	for _, block := range []func(int) string{b.roomBlock, b.tierLadder} {
 		out := block(w)
 		if out == "" {
 			continue
@@ -258,54 +258,4 @@ func (b Board) ladderRow(pos string, w int) string {
 		row += Dim.Render(fmt.Sprintf(" +%d", rest))
 	}
 	return row
-}
-
-// ---- what's left ----
-
-// whatsLeft is the top of each position by value with its survival to my next
-// chance to act — the second and third man behind the one the choice row
-// names, so "is there a te worth waiting for" is answered without the data
-// tab. K and DEF join once the engine stops suppressing them.
-func (b Board) whatsLeft(w int) string {
-	s := b.State
-	var rows []string
-	for _, pos := range []string{"QB", "RB", "WR", "TE", "K", "DEF"} {
-		// Same membership as the ranking above: k/def while suppressed, and any
-		// position the endgame guard has zeroed, are not things I can take, so
-		// their depth is not something to list. The tier ladder keeps them —
-		// it is a fact about the board, this is a fact about my options.
-		if s.Suppressed(pos) || s.Need(pos) == 0 {
-			continue
-		}
-		avail := s.Available(pos)
-		if len(avail) == 0 {
-			continue
-		}
-		var cells []string
-		for i, p := range avail {
-			if i >= 3 {
-				break
-			}
-			cells = append(cells, FG.Render(strings.ToLower(p.Name))+" "+
-				b.survStyle(p).Render(pct(s.PSurviveTilted(p))))
-		}
-		row := "  " + Pos(pos, false).Render(fmt.Sprintf("%-3s", strings.ToLower(pos))) + " "
-		// Names drop from the right rather than truncating mid-name.
-		for len(cells) > 0 {
-			line := row + strings.Join(cells, Dim.Render(" · "))
-			if lipgloss.Width(line) <= w-2 {
-				row = line
-				break
-			}
-			cells = cells[:len(cells)-1]
-		}
-		if len(cells) == 0 {
-			continue
-		}
-		rows = append(rows, row)
-	}
-	if len(rows) == 0 {
-		return ""
-	}
-	return sectionHead("what's left — best three by value", w-2) + "\n" + strings.Join(rows, "\n") + "\n"
 }
