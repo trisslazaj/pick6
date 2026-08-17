@@ -484,3 +484,32 @@ func TestCliffSpeaksTheBestRemainingTierUnderFileValueInversion(t *testing.T) {
 		t.Errorf("agreeing orders: cliff speaks tier %d, want bestNow's 2", tier)
 	}
 }
+
+// expectedInWindow sorts the priced board by adp and keeps the first RunWindow
+// of it. Two men priced identically at the cutoff therefore straddle it, and
+// with a bare adp comparator which one got counted came down to Go's map order
+// — the run gate flickering between renders on nothing. The id tiebreak
+// Available() uses settles it: the lower id is inside the window, always.
+func TestExpectedInWindowIsStableAcrossTiedAdp(t *testing.T) {
+	s := newTestState(12, 15, 4)
+	s.Players = map[string]Player{}
+	// Five receivers fill the window's first five slots outright.
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("wr%d", i)
+		s.Players[id] = Player{ID: id, Name: id, Pos: "WR", ADP: float64(i + 1)}
+	}
+	// Two men tied on adp for the sixth and last slot in the window.
+	s.Players["aaa-qb"] = Player{ID: "aaa-qb", Name: "aaa-qb", Pos: "QB", ADP: 6}
+	s.Players["zzz-te"] = Player{ID: "zzz-te", Name: "zzz-te", Pos: "TE", ADP: 6}
+	// And one man priced past the window, who must never be counted.
+	s.Players["late-k"] = Player{ID: "late-k", Name: "late-k", Pos: "K", ADP: 7}
+
+	want := map[string]float64{"WR": 5, "QB": 1, "TE": 0, "K": 0}
+	for i := 0; i < 50; i++ {
+		for pos, w := range want {
+			if got := s.expectedInWindow(pos); got != w {
+				t.Fatalf("run %d: expectedInWindow(%q) = %v, want %v", i, pos, got, w)
+			}
+		}
+	}
+}

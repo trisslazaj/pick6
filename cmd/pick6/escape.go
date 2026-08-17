@@ -189,20 +189,17 @@ func escapeSummary(rates []float64) string {
 	return "p(pick leaves the ranked pool) by rounds remaining — " + strings.Join(parts, " ")
 }
 
-// applySim is the one place a draft-time command turns the sim on, so the
-// default cannot drift between mock, board and live: survival mode from the
-// shared -survival flag, the escape rates from disk, and the seed. Prints what
-// it did — the sim is the board's default brain, and which brain is running
-// with which escape is a fact the terminal should state once.
-func applySim(s *engine.State, survival, replaying string, seed int64) error {
-	return applyBrain(s, survival, engine.ScorerPair, replaying, seed)
-}
-
-// applyBrain is applySim plus the decision score, which milestone 8 made a
-// second switch. The default is milestone 7's two-leg pair score; `-scorer
-// roster` opts in to the finished-roster objective, which was built, graded
-// against `pick6 regret` and did not clear its gate — and which the drafter
-// then looked at and rejected outright. It stays in the tree as a documented
+// applyBrain is the one place a draft-time command (mock/board/live) turns the
+// sim on, so the default cannot drift between them: survival mode from the
+// shared -survival flag, the escape rates from disk, the seed, and the decision
+// score from the shared -scorer flag. Prints what it did — the sim is the
+// board's default brain, and which brain is running with which escape is a
+// fact the terminal should state once.
+//
+// The scorer default is milestone 7's two-leg pair score; `-scorer roster`
+// opts in to the finished-roster objective, which was built, graded against
+// `pick6 regret` and did not clear its gate — and which the drafter then
+// looked at and rejected outright. It stays in the tree as a documented
 // negative result and as the smaller step back than turning the whole sim off,
 // and it stays OFF.
 func applyBrain(s *engine.State, survival, scorer, replaying string, seed int64) error {

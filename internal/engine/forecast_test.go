@@ -58,3 +58,67 @@ func TestRoomForecastIsSimOnly(t *testing.T) {
 		t.Errorf("on the clock the window starts after my pick, got %d", fc[0].PickNo)
 	}
 }
+
+// The forecast reads the rollout table, which is a map, and the modal player
+// and modal position were both picked with a bare '>' as it ranged. Two men
+// removed at a pick equally often then swapped places between renders, and
+// "likely gone" named a different man each time. Ties resolve the way
+// lookahead.go's modalID and modalPos resolve them: id order for players,
+// planPositions order for positions.
+func TestRoomForecastBreaksTiesTheSameWayEveryTime(t *testing.T) {
+	cases := []struct {
+		name      string
+		pos       map[string]string // id -> position
+		wantID    string
+		wantPos   string
+		wantShare float64
+	}{
+		{
+			name:      "two men tied, lower id wins",
+			pos:       map[string]string{"aaa": "WR", "zzz": "WR"},
+			wantID:    "aaa",
+			wantPos:   "WR",
+			wantShare: 1,
+		},
+		{
+			name:      "two positions tied, planPositions order wins",
+			pos:       map[string]string{"aaa": "WR", "zzz": "RB"},
+			wantID:    "aaa",
+			wantPos:   "RB",
+			wantShare: 0.5,
+		},
+	}
+	for _, c := range cases {
+		s := newTestState(12, 15, 3)
+		s.Survival = SurvivalSim
+		s.Players = map[string]Player{}
+		for id, pos := range c.pos {
+			s.Players[id] = Player{ID: id, Name: id, Pos: pos}
+		}
+		// Hand-built table: pick 1 removed each of them in exactly half the
+		// rollouts. simFor keeps it, since its vantage matches ours.
+		half := uint16(Rollouts / 2)
+		s.sim = &simTable{
+			pickNo:   1,
+			far:      3,
+			removals: map[string][]uint16{"aaa": {half}, "zzz": {half}},
+			oppPicks: []int{1, 2},
+		}
+		for i := 0; i < 50; i++ {
+			fc := s.RoomForecast()
+			if len(fc) == 0 {
+				t.Fatalf("%s: empty forecast", c.name)
+			}
+			f := fc[0]
+			if f.PlayerID != c.wantID {
+				t.Fatalf("%s run %d: modal player %q, want %q", c.name, i, f.PlayerID, c.wantID)
+			}
+			if f.Pos != c.wantPos {
+				t.Fatalf("%s run %d: modal pos %q, want %q", c.name, i, f.Pos, c.wantPos)
+			}
+			if math.Abs(f.Share-c.wantShare) > 1e-9 {
+				t.Fatalf("%s run %d: share %.4f, want %.4f", c.name, i, f.Share, c.wantShare)
+			}
+		}
+	}
+}

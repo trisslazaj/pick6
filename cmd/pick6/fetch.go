@@ -71,7 +71,7 @@ func runFetch(args []string) error {
 	}
 
 	// 5. merge ---------------------------------------------------------------
-	players, unmatched := adp.Merge(ix, primary, crosschecks, cw)
+	players, primaryUnmatched := adp.Merge(ix, primary, crosschecks, cw)
 
 	// 5b. reprice off the market that actually drafts this league --------------
 	// FFC stays the primary because it is the only feed that publishes a spread,
@@ -80,7 +80,8 @@ func runFetch(args []string) error {
 	// scored against both real 2025 drafts, sleeper's own column beat the
 	// cross-platform consensus by an order of magnitude more than any model
 	// change in this repo. `-adp ffc` puts the board back on ffc's own price.
-	if err := repriceFromSleeper(players, ix, *adpSrc, *fpPath, *year, *verbose); err != nil {
+	priceFile, err := repriceFromSleeper(players, ix, *adpSrc, *fpPath, *year, *verbose)
+	if err != nil {
 		return err
 	}
 
@@ -103,12 +104,16 @@ func runFetch(args []string) error {
 
 	// 6. user rankings override ----------------------------------------------
 	tierOrigin := "value gaps (no rankings file)"
+	var rankUnmatched []string
+	rankRows, rankOffBoard := 0, 0
 	if *rankFile != "" {
 		rf, err := rankings.LoadCSV(*rankFile)
 		if err != nil {
 			return fmt.Errorf("rankings: %w", err)
 		}
-		res, rankUnmatched := adp.ApplyRankings(players, ix, rf)
+		var res adp.RankingsResult
+		res, rankUnmatched = adp.ApplyRankings(players, ix, rf)
+		rankRows, rankOffBoard = len(rf.Rows), res.OffBoard
 
 		what := []string{}
 		if rf.HasPoints {
@@ -139,7 +144,6 @@ func runFetch(args []string) error {
 		case rf.HasTier:
 			tierOrigin = "value gaps (file's tiers were mostly singletons, unusable for cliffs)"
 		}
-		unmatched = append(unmatched, rankUnmatched...)
 	}
 
 	valued, tiered := 0, map[string]int{}
@@ -153,17 +157,34 @@ func runFetch(args []string) error {
 	}
 
 	fmt.Println()
-	matched := len(primary.Entries) - len(unmatched)
+	matched := len(primary.Entries) - len(primaryUnmatched)
 	fmt.Printf("merged %d players — %d/%d matched to sleeper (%.1f%%), %d with a value\n",
 		len(players), matched, len(primary.Entries),
 		100*float64(matched)/float64(len(primary.Entries)), valued)
 	fmt.Printf("tiers from %s: %s\n", tierOrigin, posSummary(tiered))
 
-	if len(unmatched) > 0 {
-		fmt.Printf("%d unmatched\n", len(unmatched))
+	if rankRows > 0 {
+		rankMatched := rankRows - len(rankUnmatched)
+		fmt.Printf("rankings: %d/%d rows matched to sleeper (%.1f%%), %d off-board\n",
+			rankMatched, rankRows, 100*float64(rankMatched)/float64(rankRows), rankOffBoard)
+	}
+
+	if len(primaryUnmatched) > 0 {
+		fmt.Printf("%d unmatched (ffc)\n", len(primaryUnmatched))
 		if *verbose {
-			sort.Strings(unmatched)
-			for _, n := range unmatched {
+			sort.Strings(primaryUnmatched)
+			for _, n := range primaryUnmatched {
+				fmt.Printf("  %s\n", strings.ToLower(n))
+			}
+		} else {
+			fmt.Println("  run with -v to list them")
+		}
+	}
+	if len(rankUnmatched) > 0 {
+		fmt.Printf("%d unmatched (rankings)\n", len(rankUnmatched))
+		if *verbose {
+			sort.Strings(rankUnmatched)
+			for _, n := range rankUnmatched {
 				fmt.Printf("  %s\n", strings.ToLower(n))
 			}
 		} else {
@@ -197,18 +218,21 @@ func runFetch(args []string) error {
 		TiersFile:    absPath(*rankFile),
 		TiersMod:     adp.ModTime(*rankFile),
 		SleeperMod:   adp.ModTime(filepath.Join(dir, sleeper.PlayersCache)),
+		PriceFile:    absPath(priceFile),
+		PriceMod:     adp.ModTime(priceFile),
 	}
 	if err := adp.WriteMeta(dir, meta); err != nil {
 		return err
 	}
 	fmt.Printf("wrote %s\n", strings.ToLower(filepath.Join(dir, adp.MetaName)))
 
-	if err := writeMappingStub(dir, unmatched); err != nil {
+	allUnmatched := append(append([]string{}, primaryUnmatched...), rankUnmatched...)
+	if err := writeMappingStub(dir, allUnmatched); err != nil {
 		return err
 	}
 	printPreview(players)
 	printKDefValues(players)
-	printReplacement(players)
+	printReplacement(players, *teams)
 	printInjuryFlags(players, flagged)
 	printTierDisagreements(players)
 	printRoomCurve(players)
@@ -575,25 +599,27 @@ func trunc(s string, n int) string {
 	return s[:n-1] + "…"
 }
 
-// repriceFromSleeper overlays sleeper's own adp onto the merged board.
+// repriceFromSleeper overlays sleeper's own adp onto the merged board and
+// returns the csv path the price ordering actually came from ("" when the
+// board stayed on ffc's price, for any reason — meta.go's PriceFile follows).
 //
 // The export is the same FantasyPros file `pick6 calibrate` scores against, and
 // it lives in the cache dir rather than the repo because it is FantasyPros'
 // data, not ours. A missing file is not an error: the board simply keeps ffc's
 // price and says so, which is exactly what `-adp ffc` asks for on purpose.
-func repriceFromSleeper(players map[string]*adp.Player, ix *rankings.Index, src, path string, year int, verbose bool) error {
+func repriceFromSleeper(players map[string]*adp.Player, ix *rankings.Index, src, path string, year int, verbose bool) (string, error) {
 	col, err := adp.ParseFPColumn(src)
 	if err != nil {
 		if src == "ffc" {
 			note("adp", "ffc", "board priced on ffc's own adp — sleeper's column not used")
-			return nil
+			return "", nil
 		}
-		return fmt.Errorf("-adp: %w (use sleeper or ffc)", err)
+		return "", fmt.Errorf("-adp: %w (use sleeper or ffc)", err)
 	}
 	if path == "" {
 		dir, err := cache.Dir()
 		if err != nil {
-			return err
+			return "", err
 		}
 		path = filepath.Join(dir, fmt.Sprintf("fantasypros_adp_%d.csv", year))
 	}
@@ -601,12 +627,12 @@ func repriceFromSleeper(players map[string]*adp.Player, ix *rankings.Index, src,
 	if err != nil {
 		note("adp", "ffc", fmt.Sprintf("no %d fantasypros export at %s — board stays on ffc's price",
 			year, strings.ToLower(path)))
-		return nil
+		return "", nil
 	}
 	board, ok := f.Boards[col]
 	if !ok {
 		note("adp", "ffc", fmt.Sprintf("export has no %s column — board stays on ffc's price", col))
-		return nil
+		return "", nil
 	}
 
 	r := adp.OverlayADP(players, board, ix)
@@ -621,6 +647,8 @@ func repriceFromSleeper(players map[string]*adp.Player, ix *rankings.Index, src,
 		detail += fmt.Sprintf(" · %d with no stdev run on the default sigma", r.NoSpread)
 	}
 	note("adp", "sleeper", detail)
+	note("price", "sleeper", fmt.Sprintf("order from %s — exported %dd ago",
+		strings.ToLower(filepath.Base(path)), int(time.Since(adp.ModTime(path)).Hours()/24)))
 	if n := len(r.Unmatched); n > 0 {
 		if verbose {
 			for _, u := range r.Unmatched {
@@ -630,7 +658,7 @@ func repriceFromSleeper(players map[string]*adp.Player, ix *rankings.Index, src,
 			note("", "", fmt.Sprintf("%d export rows are too deep for this board", n))
 		}
 	}
-	return nil
+	return path, nil
 }
 
 // absPath is the flag's path made absolute, so the data tab can find the file

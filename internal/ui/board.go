@@ -100,14 +100,6 @@ const (
 	MinTickerN  = 4
 	MaxTickerN  = 10
 
-	// marketGapPicks is how far the market must price a player ahead of the
-	// position's value-best before the board surfaces the disagreement as its
-	// own row. Display judgement, not engine math: the value column and the
-	// adp column disagree constantly by a pick or two, and a row for every
-	// wobble buries the one that matters — rashee rice priced 10 picks ahead
-	// of the receiver the value curve prefers.
-	marketGapPicks = engine.MarketGapPicks
-
 	// planLegsMax is how many legs of the plan the line will ever name. The
 	// rollouts play every pick I have left — sixteen of them in round one — and
 	// a sixteen-leg line is a printout, not a plan. Four is where a human stops
@@ -846,9 +838,21 @@ func (b Board) slotClause(pos string) string {
 			open++
 		}
 	}
+	// "both" is a claim about the lineup, not about the count: it is only true
+	// when the position has exactly two dedicated slots and both of them are
+	// open. A 3-WR roster (or FPL's five defenders) has more than two, and
+	// "both wr slots open" over three of them is simply a lie.
+	dedicated := 0
+	for _, slot := range b.State.Roster.Slots {
+		if slot == pos {
+			dedicated++
+		}
+	}
 	switch {
-	case open >= 2:
+	case open == 2 && dedicated == 2:
 		return fmt.Sprintf("both %s slots open", strings.ToLower(pos))
+	case open >= 2:
+		return fmt.Sprintf("%d %s slots open", open, strings.ToLower(pos))
 	case open == 1:
 		return fmt.Sprintf("fills your %s slot", strings.ToLower(pos))
 	case b.State.Need(pos) >= engine.NeedFlex:
@@ -1579,7 +1583,7 @@ func (b Board) insight(w int) string {
 				continue
 			}
 			labels[i] = strings.ToLower(n)
-			parts[i] = Pos(n, s.Need(n) == 0).Render(labels[i])
+			parts[i] = Pos(n, s.Suppressed(n)).Render(labels[i])
 		}
 		// "fx" is not always enough: ten unfilled slots overrun a 34-cell sidebar
 		// even abbreviated, and the line wrapped, which put a lone "def" on its

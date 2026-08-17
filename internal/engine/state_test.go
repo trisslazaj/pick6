@@ -297,3 +297,36 @@ func TestMyUpcomingPicks(t *testing.T) {
 		t.Errorf("at the end of the draft got %v, want at most 1", got)
 	}
 }
+
+// ApplyRemote indexes Order off the feed's pick number, so a pick number
+// outside the draft used to index outside the slice: IndexInRound(0) is 0 and
+// SlotAt(0) asks for Order[-1]. A feed with one bad row should say so, not take
+// the board down with it. (A panic fails this test by itself.)
+func TestApplyRemoteRejectsPicksOutsideTheDraft(t *testing.T) {
+	last := 12 * 15
+	cases := []struct {
+		name    string
+		pick    RemotePick
+		wantErr bool
+		applied bool
+	}{
+		{"pick zero", RemotePick{PickNo: 0, Round: 1, Slot: 1, PlayerID: "a"}, true, false},
+		{"negative pick", RemotePick{PickNo: -3, Round: 1, Slot: 1, PlayerID: "b"}, true, false},
+		{"past the last pick", RemotePick{PickNo: last + 1, Round: 16, Slot: 1, PlayerID: "c"}, true, false},
+		{"the last pick itself", RemotePick{PickNo: last, Round: 15, Slot: 12, PlayerID: "d"}, false, true},
+		{"a normal pick", RemotePick{PickNo: 1, Round: 1, Slot: 1, PlayerID: "e"}, false, true},
+	}
+	for _, c := range cases {
+		s := newTestState(12, 15, 3)
+		err := s.ApplyRemote(c.pick)
+		if (err != nil) != c.wantErr {
+			t.Errorf("%s: ApplyRemote err = %v, wantErr %v", c.name, err, c.wantErr)
+		}
+		if got := s.Taken[c.pick.PlayerID]; got != c.applied {
+			t.Errorf("%s: taken = %v, want %v", c.name, got, c.applied)
+		}
+		if !c.applied && len(s.Picks) != 0 {
+			t.Errorf("%s: %d picks recorded, want none", c.name, len(s.Picks))
+		}
+	}
+}

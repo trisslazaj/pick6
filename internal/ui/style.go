@@ -63,13 +63,19 @@ var posColor = map[string]string{
 // attention even at full strength; Sleeper's kicker is a vivid violet, so on
 // this palette the faint is the ONLY thing keeping round-2 kickers quiet. Do not
 // drop it as decoration.
+//
+// Which positions are suppressed is the caller's question, not this one's —
+// ask engine.State.Suppressed and pass the answer. This used to re-check
+// K/DEF here, which was a belt on top of the one caller that asked with
+// Need == 0; a sport whose suppressed set is empty (or somebody else's) has
+// every right to un-faint everything.
 func Pos(pos string, suppressed bool) lipgloss.Style {
 	c, ok := posColor[pos]
 	if !ok {
 		c = ColFG
 	}
 	s := lipgloss.NewStyle().Foreground(lipgloss.Color(c))
-	if suppressed && (pos == "K" || pos == "DEF") {
+	if suppressed {
 		s = s.Faint(true)
 	}
 	return s

@@ -110,11 +110,28 @@ is observed (the Sleeper lesson: measure, then bypass).
    — nobody has measured an FPL sigma. The sim is the brain.
 2. **Value = `ValueBase * exp(-draft_rank / ValueDecay)`** — the existing convex fallback,
    consistent across the pool, never mixed with points.
-3. **The hard quota is modelled by `Bench: 0` plus one engine rule:** a roster with no
-   bench has no bench weight — `needSlots` returns 0 where it would return `NeedBench`,
-   because a sixth defender is an *illegal pick*, not a bench pick. This one line fixes
-   need, the lookahead's second leg, the sim's opponents and the deny chip at once. NFL
-   never sees it (every NFL roster has a bench).
+3. **The hard quota is modelled by an explicit `Roster.Quota bool` (not by `Bench == 0`)
+   plus the same engine rule** — corrected 2026-08-17: `Bench == 0` is not an FPL-only
+   condition. `board -bench` defaults to 0 (`cmd/pick6/board.go:34`), so a plain NFL
+   `board -lineup "qb rb rb wr wr te flex k def" -rounds 15` run with no `-bench` flag is
+   a legal, currently-shippable Bench-0 roster, and reading the quota rule off `Bench == 0`
+   would silently zero bench need for that user too. Give `Roster.Quota` its own bit, set
+   by the FPL default roster (decision 2's board.go site), and have `needSlots` key off
+   `Quota` rather than `Bench`. Fold in: `-bench` should default to
+   `DefaultRoster.Bench` (6) when `-lineup` is given and `-bench` itself is omitted, so an
+   NFL user who names a lineup without also remembering `-bench 6` doesn't fall into the
+   same Bench-0 state by accident. **A Bench-0 roster whose rounds equal its slots — FPL's
+   15/15, or the NFL `-lineup` case above with `-rounds` omitted (rounds then default to
+   len(slots)+bench) — is `R == U` from pick 1** (my remaining picks always equal my
+   unfilled starters when there is no bench; with an explicit `-rounds` larger than the
+   lineup, R > U and the guard behaves as today), so `MustFillStarters` (`state.go:700`)
+   reads true every pick of the whole draft,
+   `EndgameSlack` can never fire (there is no "one spare pick" state to reach), and the
+   ui's `every remaining pick must fill a starter` line (`board.go:1424-1427`) would render
+   on every single frame instead of only the endgame. Gate that line — and treat
+   `MustFillStarters` as alert-worthy at all — on the roster actually having a bench
+   (`Roster.Bench > 0`), not on the arithmetic alone; a benchless roster is a normal state
+   for it, not an emergency one.
 4. **No suppression in FPL.** The K/DEF hold becomes a configurable set (default `{K,DEF}`
    with the existing gates — NFL bit-identical); the FPL roster sets it empty. Same for
    the opponents' gate inside the sim.
@@ -133,9 +150,36 @@ is observed (the Sleeper lesson: measure, then bypass).
 8. **Colors**: GKP takes violet (K's hue, unemployed in FPL), DEF keeps slate, MID takes
    mint, FWD takes rose. The NFL palette's match-the-platform principle would want the
    FPL app's own hues eyeballed against rendered frames; do that only if these grate.
-9. **Tiers**: the generic rankings CSV loader already works — an FPL tier sheet with
-   `name,position,team,tier` lights up the cliff machinery. Without one, tiers derive
-   from the value curve. Position strings in the CSV must be GKP/DEF/MID/FWD.
+9. **Tiers**: the generic rankings CSV loader is CLOSE to working, not already working —
+   corrected 2026-08-17. Decision 6's DEF string collision is caught by `room.go` alone;
+   two more sites test `pos == "DEF"` as a bare string and don't know FPL has its own
+   defenders:
+   - `internal/adp/aggregate.go` — `isKDef` (:418) is `pos == "K" || pos == "DEF"`.
+     `AssignTiers` (:435-441) zeroes the tier of every player `isKDef` matches, and
+     `AnchorKDefValues` rewrites every such player's value onto the borrowed skill-player
+     curve (decision 6 already says FPL's 188 defenders must skip this — they're real,
+     valued, drafted players, not a K/DEF anchor case). `ApplyRankings` (:597-635) calls
+     both **unconditionally** after applying a file's tiers (:630, :634), so an FPL tier
+     sheet's DEF rows are set by the loop and wiped by the next two statements in the same
+     function call — a fpl tier CSV would load, appear to work, and then silently lose
+     every defender's tier and value.
+   - `internal/rankings/match.go` — `NewIndex` (~:112-117) routes every `pos == "DEF"`
+     player into `byTeam`/`byDefName` only, never `byKey`, with no first-writer guard (the
+     comment at :119 documents the guard for `byKey`; `byTeam`/`byDefName` have none) —
+     last DEF writer for a team code wins. `LookupExact` (:158-167) then routes every
+     `pos == "DEF"` lookup through those two maps and never `byKey`. Fine for the one NFL
+     defense per team; under FPL's 188 real defenders (~9-10 per PL team) this collapses
+     them to ~20 team-keyed entries and drops the rest.
+
+   Fix: generalize the same way decision 5 generalizes positions — a "team defense" flag
+   is a sport/quota switch like `Suppressed`, not an NFL constant, so key `isKDef` /
+   `NewIndex` / `LookupExact` off it (empty for FPL, `{K,DEF}` for NFL) rather than the
+   literal string. If that's more surgery than f1/f2 want to take on, the alternative is a
+   non-Sleeper `rankings.Index` constructor (or a direct FPL-CSV join by name+pos, skipping
+   `Index` entirely) — either is acceptable, but the current bare-string path is not: an
+   FPL tier sheet with `name,position,team,tier` does NOT light up the cliff machinery as
+   written today. Position strings in the CSV must be GKP/DEF/MID/FWD regardless of which
+   fix is taken.
 10. **Status mapping at fetch**: `i` → out, `s` → sus, `d` → dbt (reusing the existing
     chip vocabulary in ui/chips.go untouched); **`u` (left the league) is filtered out of
     the pool entirely** — an undraftable player is not a player.
@@ -149,6 +193,10 @@ is observed (the Sleeper lesson: measure, then bypass).
 Three passes. Each pass ends with the full existing suite green — the generalizations must
 be invisible to NFL by construction, not by hope. File:line references are from the
 three-agent audit of 2026-08-11 (main at v0.2.0); line numbers will drift, the sites won't.
+**Re-audited 2026-08-17** against milestone 8 (`planPolicy`, `roster.go`) and the board-tab
+blocks that shipped after this file was written (`field.go`, `views.go`, `notes.go`'s map,
+the data tab becoming views) — those sites are folded into the lists below, not called out
+separately, because the rule is the same one f1.5/f2.2/f3 already state.
 
 ### f1 — engine generalization (internal/engine only)
 
@@ -168,9 +216,34 @@ three-agent audit of 2026-08-11 (main at v0.2.0); line numbers will drift, the s
    sizes at runtime, unknown-position bucket last). NFL derivation yields the same six
    strings in the same order → byte-identical rollouts (the determinism test corpus
    already pins this).
-5. **`state.go:606` `needSlots`** — the quota rule: when `s.Roster.Bench == 0`, return 0
-   instead of `NeedBench`. Add a test that a quota-filled position reads need 0 through
+5. **`state.go:636` `needSlots`** — the quota rule: when `s.Roster.Quota` is set (decision
+   3 — the bit, not `Bench == 0`), return 0 instead of `NeedBench`. Add a test that a quota-filled position reads need 0 through
    `Need`, `NeedAfter`, `opponentNeed` and `Deny`.
+6. **`lookahead.go:319` `const numPlanPos = len(simPositions)` and `newPlanPolicy` (~365-390)
+   — milestone 8, postdates this file.** `numPlanPos` sizes `planPolicy`'s five fixed
+   arrays (`rank`/`cursor`/`base`/`kdef`/`late`, plus the local `repl` in `take`; `vor`
+   is pool-sized, not position-sized); once f1.4 turns `simPositions` into
+   a derived slice this becomes a runtime size again, same as `needPow` in f1.4's sim.go
+   site — the array literals must become slices sized in `newPlanPolicy`, not just the
+   const. Separately, `pol.kdef[pi] = pos == "K" || pos == "DEF"` (`lookahead.go:388`) and
+   `allows()`'s `s.Rounds-round+1 > KDefLastRounds` (`lookahead.go:476`) are an
+   **independent, hardcoded copy** of the suppression rule — it is deliberately evaluated
+   at the leg's own round rather than the vantage's (see the big comment above `allows`),
+   so it cannot simply call `State.Suppressed`, but it must read the same configurable set
+   f1.2 introduces rather than the literal `{K,DEF}`. Left as `{K,DEF}`, every FPL plan leg
+   refuses all 188 defenders and 64 keepers until the last three rounds regardless of the
+   roster's own (empty) suppressed set — the plan line and `your team from here` would go
+   silent on GKP/DEF for the whole draft. Order matters here: f1.4's slice conversion
+   breaks `numPlanPos` at compile time, which is the good kind of failure; the `kdef`
+   literal does not — it compiles and is wrong quietly, so it needs its own line in the
+   FPL checklist rather than riding along on f1.4's build error.
+7. **`sim.go:337`** — the unknown-position bucket (`needPow[len(simPositions)]`) is priced
+   at `powBench` directly rather than through `needSlots`, so it doesn't see f1.5's
+   quota-zero rule. Under FPL this bucket should never actually price anyone (draft_rank
+   covers all 577, so nothing lands in "unknown position" — see decision 11), which is why
+   this is a note and not its own fix: f1.5's sim-side test can't exercise it either way
+   until f1.4 lands (the bucket index depends on the derived `len(simPositions)`), so land
+   f1.4 before writing f1.5's test.
 
 DoD: entire existing suite passes untouched; new table-driven tests for each derivation
 (NFL roster → old constants exactly; FPL quota roster → GKP/DEF/MID/FWD, no suppression,
@@ -192,7 +265,16 @@ league details, choices), disk-cached like `internal/sleeper`, stdlib http+json 
    lineup rule then yields 15 by itself), skip `leagueDemand` (`board.go:78`), skip
    `loadEscape` (escape.go — set OffBoard nil, the note already says escape-less), force
    `-room=false` (`mock.go:177` — say so in a note), sport-keyed board file in `loadBoard`
-   (`mock.go:136`), zero Freshness (`mock.go:298`).
+   (`mock.go:136`), zero Freshness (`mock.go:298`). **Also sport-key `-teams`**
+   (`board.go:30`, `mock.go:25` both default `12` — the league is 10, and every pick number
+   in the snake math derives from `teams`; not on the list above until this pass because
+   the default was never audited against decision 7's own sport). Either key the default
+   off `-sport` or read team count from `league/{id}/details` and skip the flag entirely
+   under FPL. **`pick6 tiers`** also needs a sport-keyed board file: it reads
+   `players.json` by its own hardcoded path (`cmd/pick6/tiers.go:30-34`), not through
+   `loadBoard`, so it's a second reader that would need the same `players_fpl.json` switch
+   as `loadBoard` gets — add it to this list since f3's DoD assumes `tiers` works under
+   FPL.
 3. **`live -sport fpl <league_id>`** — poll choices every 3s; apply each choice through
    the existing `ApplyRemote` with `PickNo: index`, `Slot`/`OwnerSlot` from the seat
    mapping (no trades in FPL: owner == slot always); seat order derived from round 1's
@@ -200,7 +282,19 @@ league details, choices), disk-cached like `internal/sleeper`, stdlib http+json 
    completes if order is not published pre-draft (re-probe near draft day); register
    every element from the cached pool (no EnsurePlayer surprises — the pool is total);
    `-replay` renders one frame headlessly from a finished draft. Reuse the existing
-   polling model (`ui.NewLiveModel`) — it is feed-agnostic except for construction.
+   polling model (`ui.NewLiveModel`) — it is feed-agnostic except for construction, and
+   this was actually verified 2026-08-17, not just claimed: `Poll()` is an interface
+   (`internal/sleeper/feed.go:8`), `*sleeper.Draft` is nil-guarded inside the model (owner falls back to
+   slot when nil, which is exactly right for FPL's owner==slot rule), `Status` is set by
+   the adapter rather than read off a Sleeper type, and `ui/live_test.go:16-31`'s fake feed already drives
+   the model off a bare `sleeper.Snapshot` with no Sleeper API behind it — an FPL feed is
+   one more type returning that same `Snapshot`, nothing more. One thing this pass DID
+   find: `cmd/pick6/live.go:105-121`'s `-replay` path hand-copies the same
+   `EnsurePlayer`+`ApplyRemote` apply loop that `LiveModel.handlePoll` runs for the live
+   TUI case — an FPL live command written the same way would be a *third* copy of that
+   loop. Extract one apply-snapshot helper (`applySnapshot(s, snap) error`, say) before
+   adding FPL's, so the loop that made the Sleeper zero-desync claim is the loop FPL's
+   claim rests on too.
 4. **Data mapping** (bootstrap-static element → adp.Player / engine.Player):
 
 ```
@@ -216,21 +310,74 @@ id (int, stringified)                      -> ID          ("fpl:123" if collisio
                                                            shouldn't; the pools never meet)
 ```
 
+5. **The rankings views are NFL-pathed and would misrepresent an FPL board.**
+   `rankingsDir()` (`cmd/pick6/notes.go:40-46`) resolves `-rankings` to
+   `~/.config/pick6/rankings` regardless of `-sport`, and `fetchedRankings()`
+   (`cmd/pick6/notes.go:49-59`) reads the file `fetch -rankings` recorded in the *NFL*
+   `meta.json`'s `TiersFile`. Left alone, an FPL board's data tab would list every one of
+   the user's NFL rankings csvs as a view — each rendering nothing but `?` rows, since
+   f1/f2's DEF-collision fix aside, the names simply aren't FPL players. Sport-key the
+   folder (e.g. `~/.config/pick6/rankings/fpl/`) and skip `fetchedRankings()` for FPL
+   entirely, consistent with decision 7 already saying FPL skips `meta.json` outright.
+
 DoD: `pick6 fetch -sport fpl && pick6 board -sport fpl -snapshot 0` renders a correct
 draftable board with real names; `pick6 live -sport fpl 2400 -replay -slot 1` replays the
 captured real draft with **zero snake desyncs**; NFL suite untouched.
 
 ### f3 — display polish
 
-Audit sites: position colors (`style.go:52` — decision 8), UI position lists derived
-(`board.go:15`, `data.go:18` — same derivation as f1), data tab per-sport columns
-(`data.go:183` — drop bye/spread/fmt-gap, relabel adp → rank; legend follows at
-`data.go:213`), price-noun threading ("rank" not "adp" in priceClause `board.go:693`,
-marketRow `board.go:770`, search rows `search.go:310`), quota-aware slot clauses
-(`board.go:740` — "both X slots open" only when the roster has exactly two; a full quota
-says "def full", never "bench depth"; the endgame line skips benchless rosters,
-`board.go:1006`), `tiers` position order derived from the loaded pool (`tiers.go:45`) and
-its faint keyed properly (`tiers.go:75`).
+Audit sites, line numbers checked against the tree as of 2026-08-17 (`priceClause` and
+`slotClause` had already drifted from this file's original 2026-08-11 numbers, which is
+the drift the top-of-section note above is about):
+
+Position colors (`style.go:52` — decision 8), UI position lists derived (`board.go:15`,
+`data.go:18` — same derivation as f1), data tab per-sport columns (drop bye/spread/fmt-gap,
+relabel adp → rank; column head at `data.go:196`, legend at `data.go:289`), price-noun
+threading ("rank" not "adp" in priceClause `board.go:795`, marketRow `board.go:1093`,
+search rows `search.go:309`), quota-aware slot clauses (`slotClause`, `board.go:842` — this
+is already count-aware today, `open >= 2` / `open == 1` / flex / bench, so f3 only needs to
+add FPL's fourth case: a position at full quota, where `Need(pos)` is 0 and the current
+`default: "bench depth"` branch would print a lie — say `"pos full"` instead when
+`b.State.Need(pos) == 0` and no slot is open; the endgame line's benchless-roster skip is
+`board.go:1424` (`b.State.MustFillStarters()`), see decision 3's amendment above for why
+that gate must key on `Roster.Bench > 0`, not on the arithmetic alone), `tiers` position
+order derived from the loaded pool (`tiers.go:45`) and its faint keyed properly
+(`tiers.go:75`).
+
+Four more sites, all shipped after this file was written and missed by its original audit:
+
+- `internal/ui/field.go:174` — `tierLadder`'s `roomBlock`/tiers-picture block loops the
+  literal `[]string{"QB", "RB", "WR", "TE"}`. Under FPL this isn't wrong so much as
+  invisible: the block silently renders nothing (GKP/DEF/MID/FWD never match), and nobody
+  building f3 off the original site list would know to look for it since it postdates the
+  list.
+- `internal/ui/notes.go` — three sites in the notes tab's draft map, all missed for the
+  same reason. `mapTally` (:744) loops the same six-position NFL literal for the `gone qb
+  4 · rb 6 ...` tally line (its own docstring, "in the board's position order", is already
+  wrong today — there's no shared derivation backing it, corroborating decision 5's point
+  that this needs to be one derivation, not N independent literals). `nameIndex` (:534)
+  excludes `p.Pos == "DEF"` from last-name highlighting in note prose — correct today only
+  because NFL's DEF entries have no surname to collide on (city/nickname instead); FPL's
+  188 real defenders have real surnames and want the same last-name matching everyone else
+  gets, so this exclusion needs to become "positions with no surname" rather than a literal
+  `DEF` check. `posWords` (:564) is `qb/rb/wr/te/k/def` only — no `gkp`, `mid`, `fwd`
+  aliases for a note-writer typing "he's a top gkp" the night before the draft.
+- `internal/ui/views.go` — `viewStrip` labels the second view `"adp"` (:55; the data tab's
+  per-sport relabel to "rank" above needs to reach this string too, not just the column
+  head), `:193` iterates the package `positions` var, which is covered for free once f1's
+  derivation lands and `board.go:15` is no longer a hand-written six-string literal — but
+  say explicitly that GKP/MID/FWD would otherwise silently vanish from every view exactly
+  the way QB/RB/WR/TE vanish from `field.go:174` above, since it's the same failure mode
+  twice. `sheetIndex.find`'s DEF fallback (:343-345, `r.Pos == "DEF" && r.Team != ""`
+  keying off `ix.byID[r.Team]`, the team code used as a player id) is NFL-only by
+  construction and **inert, not broken, under FPL** — say so rather than flagging it, since
+  it just never matches for a sport with no team-keyed DEF ids; a rankings-file row for an
+  FPL defender resolves through the name/key paths above it instead.
+- Two more price-noun sites the original list didn't name: the standing-selection line in
+  the `/` overlay (`internal/ui/search.go:363`, the `id + tier + adp + surv` clause
+  assembly — note its `" · adp %.1f"` literal at :307-309 too, same fix as priceClause) and
+  the data tab's sort caption (`internal/ui/data.go:190`, `"all players — sorted by
+  "+by` where `by` is literally `"value"`/`"adp"`).
 
 DoD: rendered frames eyeballed (house rule — visual work does not ship on green tests
 alone): board tab on/off clock, data tab, search overlay, a cliff banner, all with real

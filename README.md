@@ -116,8 +116,11 @@ synthetic. `-seed N` replays the same draft every time; `space` steps, `a` autop
 
 <img src="docs/shots/board-forecast.svg" alt="off the clock: forecast, cliff banner, chips">
 
-Off the clock the same ranking reads as a forecast: who'll likely be there, who's falling
-(amber — the draft moved past his price), what you'd settle for.
+Off the clock each ranked row is the position's depth — its best three by value, each with
+his odds of still being there when you pick — and under the ranking the pane fills with the
+board behind it: what the room is about to do (`expect 10 wr · 7 rb · 4 qb`, and the men
+likeliest gone before you pick — the simulation's rollouts read as picks instead of
+percentages), and every position's tiers as a row of dots with the taken ones filled in.
 
 ### `pick6 tiers` — the tier board, printed
 
@@ -127,11 +130,9 @@ pick6 tiers -pos wr -depth 15
 
 <img src="docs/shots/tiers.svg" alt="the wr tier board">
 
-Between picks each ranked row is the position's depth — its best three by value, each with
-his odds of still being there when you pick — and under the ranking the pane fills with the
-board behind it: what the room is about to do (`expect 10 wr · 7 rb · 4 qb`, and the men
-likeliest gone before you pick — the simulation's rollouts read as picks instead of
-percentages), and every position's tiers as a row of dots with the taken ones filled in.
+The paper cheat sheet, but the tool crosses names off by itself: every man at the position,
+grouped by tier, straight from the cache — no live draft, no `-slot`, nothing but `-pos` and
+`-depth` to slice it.
 
 ### the data tab
 
