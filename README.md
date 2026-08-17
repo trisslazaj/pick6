@@ -147,7 +147,7 @@ not dropped.
 
 <img src="docs/shots/data-tab.svg" alt="the data tab">
 
-<img src="docs/shots/rankings-view.svg" alt="a rankings file as its own view">
+<img src="docs/shots/tiers-view.svg" alt="the tiers view">
 
 Late in the draft, kickers and defenses light up exactly when they should and not a round
 before:

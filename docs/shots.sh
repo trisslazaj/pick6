@@ -37,8 +37,10 @@ shot board-forecast.svg 2 pick6 mock -slot 3 -seed 5 -snapshot 10
 # the data tab: every number the engine holds, opinions riding the names
 shot data-tab.svg 2 pick6 mock -slot 3 -seed 5 -snapshot 40 -data
 
-# a rankings file as its own view: the file's order and tiers, the taken struck
-shot rankings-view.svg 2 pick6 mock -slot 3 -seed 5 -snapshot 40 -tab data -view smyth-2026
+# the tiers view: the ladder, every man grouped by tier, the taken struck. Not a
+# rankings-file view on purpose — those are the user's own files and the readme
+# ships the default board only.
+shot tiers-view.svg 2 pick6 mock -slot 3 -seed 5 -snapshot 40 -tab data -view tiers
 
 # kicker o'clock: k/def unsuppressed, the file's endgame calls on screen
 shot endgame.svg 2 pick6 mock -slot 3 -seed 5 -snapshot 158 -data
