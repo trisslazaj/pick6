@@ -90,7 +90,7 @@ func (b Board) Manual() bool { return b.Mode == ModeManual }
 // actually want more of.
 const (
 	MinWidth    = 80
-	MaxWidth    = 104
+	MaxWidth    = 128
 	SidebarW    = 34 // minimum; grows with the terminal up to SidebarMaxW
 	SidebarMaxW = 38
 	MinTickerN  = 4
@@ -578,6 +578,7 @@ func (b Board) bestAvailable(w int, choices []engine.PickChoice) string {
 			sb.WriteString(rows)
 		}
 		sb.WriteString(b.teamAhead(w, choices[0]))
+		sb.WriteString(b.fieldBlocks(w, rowCount(sb.String())))
 		return sb.String()
 	}
 
@@ -590,6 +591,7 @@ func (b Board) bestAvailable(w int, choices []engine.PickChoice) string {
 	sb.WriteString("\n  " + Dim.Render(fitCaption(w-4, caption, "who'll likely be there")) + "\n")
 	sb.WriteString(b.choiceRows(w, choices, false))
 	sb.WriteString(b.teamAhead(w, choices[0]))
+	sb.WriteString(b.fieldBlocks(w, rowCount(sb.String())))
 	return sb.String()
 }
 

@@ -227,7 +227,14 @@ func leftPane(line string) string {
 func choiceOrder(view string) []string {
 	var out []string
 	for _, line := range strings.Split(view, "\n") {
-		if m := choiceRowRe.FindStringSubmatch(leftPane(line)); m != nil {
+		l := leftPane(line)
+		// The ranking ends where the field blocks begin: everything under
+		// "the room" / "tiers" / "what's left" is the board, not the ranking.
+		if strings.HasPrefix(l, "the room before") || strings.HasPrefix(l, "tiers —") ||
+			strings.HasPrefix(l, "what's left") {
+			break
+		}
+		if m := choiceRowRe.FindStringSubmatch(l); m != nil {
 			out = append(out, m[1])
 		}
 	}
