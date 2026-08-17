@@ -135,11 +135,19 @@ percentages), and every position's tiers as a row of dots with the taken ones fi
 
 ### the data tab
 
-`tab` flips any board to a flat table of every available player and every number the engine
-holds — value, tier, adp, spread, survival, format gap — with your rankings file's opinions
-riding the names.
+`tab` flips any board to the numbers, in views you switch with `←`/`→`: **value** is every
+available player and every number the engine holds — value, tier, adp, spread, survival,
+format gap — with your rankings file's opinions riding the names; **adp** is the same table by
+price; **tiers** is the ladder, every man at every position grouped by tier, the taken struck
+through; and **every rankings csv** in `~/.config/pick6/rankings/` (or `-rankings <dir>`) is a
+view of its own, shown exactly as the file ranks them — its order, its tiers, its opinions —
+with nothing added but each man's odds of reaching your pick and a strike once he is gone. The
+file you gave `fetch -rankings` is always there. A name the board does not know gets a `?`,
+not dropped.
 
 <img src="docs/shots/data-tab.svg" alt="the data tab">
+
+<img src="docs/shots/rankings-view.svg" alt="a rankings file as its own view">
 
 Late in the draft, kickers and defenses light up exactly when they should and not a round
 before:
@@ -177,7 +185,7 @@ team each one walked out with. None of the three is needed to draft.
 | `/` | search players — taken ones stay in the results with the pick that took them |
 | `x` / `u` | mark taken / undo (board mode) |
 | `tab` | cycle board → data table → notes |
-| `j` `k` / `p` | scroll / position filter (data tab) |
+| `j` `k` / `p` / `←` `→` | scroll / position filter / switch view (data tab) |
 | `←` `→` / `e` | switch file / open it in `$EDITOR` (notes tab) |
 | `space` / `a` | step / autoplay (mock mode) |
 | `q` | quit |

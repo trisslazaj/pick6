@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/trisslazaj/pick6/internal/adp"
+	"github.com/trisslazaj/pick6/internal/cache"
 	"github.com/trisslazaj/pick6/internal/ui"
 )
 
@@ -15,10 +17,45 @@ func notesFlag(fs *flag.FlagSet) *string {
 	return fs.String("notes", "", "folder of markdown notes for the notes tab (default: ~/.config/pick6/notes)")
 }
 
+// rankingsFlag declares -rankings, which mock, board and live share: the
+// folder of rankings csvs the data tab shows one view each. The file `fetch
+// -rankings` loaded is always a view too, wherever it lives, so the usual case
+// needs no folder at all. Empty means the config dir's rankings folder.
+func rankingsFlag(fs *flag.FlagSet) *string {
+	return fs.String("rankings", "", "folder of rankings csvs, one data-tab view each (default: ~/.config/pick6/rankings)")
+}
+
 // tabFlag declares -tab for the headless frames: which tab a snapshot renders.
 // -data survives as the older spelling of -tab data.
 func tabFlag(fs *flag.FlagSet) *string {
 	return fs.String("tab", "", "with -snapshot/-replay: which tab to render — board, data or notes")
+}
+
+// viewFlag declares -view for the headless frames: which data-tab view.
+func viewFlag(fs *flag.FlagSet) *string {
+	return fs.String("view", "", "with -tab data: which view — value, adp, tiers, or a rankings file's name")
+}
+
+// rankingsDir resolves -rankings the same way notesDir resolves -notes.
+func rankingsDir(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	return filepath.Join(filepath.Dir(notesDir("")), "rankings")
+}
+
+// fetchedRankings is the file `fetch -rankings` loaded, off meta.json; "" when
+// there wasn't one or there is no meta.
+func fetchedRankings() string {
+	dir, err := cache.Dir()
+	if err != nil {
+		return ""
+	}
+	m, err := adp.LoadMeta(dir)
+	if err != nil {
+		return ""
+	}
+	return m.TiersFile
 }
 
 // notesDir resolves the flag: the folder given, else ~/.config/pick6/notes.
@@ -42,8 +79,8 @@ func notesDir(flagVal string) string {
 	return filepath.Join(base, "pick6", "notes")
 }
 
-// pickTab applies -tab / -data to a headless board.
-func pickTab(b *ui.Board, tab string, data bool) {
+// pickTab applies -tab / -data / -view to a headless board.
+func pickTab(b *ui.Board, tab string, data bool, view string) {
 	switch tab {
 	case "data":
 		b.Tab = 1
@@ -53,5 +90,9 @@ func pickTab(b *ui.Board, tab string, data bool) {
 		if data {
 			b.Tab = 1
 		}
+	}
+	if view != "" {
+		b.Tab = 1
+		b.SelectView(view)
 	}
 }

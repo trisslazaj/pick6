@@ -20,6 +20,7 @@ func runLive(args []string) error {
 	replay := fs.Bool("replay", false, "load a finished draft once and print one frame (no tui)")
 	data := fs.Bool("data", false, "render the data tab instead of the board in replay mode")
 	tab, notes := tabFlag(fs), notesFlag(fs)
+	view, ranks := viewFlag(fs), rankingsFlag(fs)
 	// Matching board's, and here for the same reason -data landed here: the
 	// overlay's taken rows carry the pick that took a man, and a board with no
 	// picks in it cannot show one. A replayed draft is the only headless frame
@@ -124,8 +125,9 @@ func runLive(args []string) error {
 		// finished: the frame you eyeball has to advertise the keys the live
 		// board binds, not the mock's.
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Mode: ui.ModeLive, Fresh: loadFreshness(), Notes: ui.Notes{Dir: notesDir(*notes)}}
-		pickTab(&b, *tab, *data)
+			Mode: ui.ModeLive, Fresh: loadFreshness(), Notes: ui.Notes{Dir: notesDir(*notes)},
+			Views: ui.Views{Dir: rankingsDir(*ranks), Fetched: fetchedRankings()}}
+		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
 			b.Search = ui.Search{Open: true, Query: *search}
 		}
@@ -140,7 +142,8 @@ func runLive(args []string) error {
 		ui.NewLiveModel(s, feed, interval, false).
 			WithDraft(draft).
 			WithFreshness(loadFreshness()).
-			WithNotes(notesDir(*notes)),
+			WithNotes(notesDir(*notes)).
+			WithRankings(rankingsDir(*ranks), fetchedRankings()),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()

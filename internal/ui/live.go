@@ -46,6 +46,13 @@ func (m LiveModel) WithNotes(dir string) LiveModel {
 	return m
 }
 
+// WithRankings points the data tab's file views at a folder of csvs, plus the
+// file fetch loaded.
+func (m LiveModel) WithRankings(dir, fetched string) LiveModel {
+	m.board.Views.Dir, m.board.Views.Fetched = dir, fetched
+	return m
+}
+
 func (m LiveModel) Init() tea.Cmd { return m.pollNow() }
 
 func (m LiveModel) pollNow() tea.Cmd {

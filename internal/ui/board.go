@@ -50,6 +50,10 @@ type Board struct {
 	DataScroll int
 	DataFilter string // "" = all positions
 
+	// Views is which of the data tab's views is open and where the rankings
+	// csvs it shows live. See views.go. Nothing on it reaches the engine.
+	Views Views
+
 	// Notes is tab 2: your own markdown, rendered beside a map of the draft.
 	// See notes.go. Nothing on it reaches the engine.
 	Notes Notes
@@ -1769,7 +1773,7 @@ func (b Board) footerKeys() []string {
 	}
 	switch b.Tab {
 	case 1:
-		return []string{"tab notes", "j/k scroll", "p filter", "/ search", "q quit"}
+		return []string{"tab notes", "←→ view", "j/k scroll", "p filter", "/ search", "q quit"}
 	case 2:
 		return []string{"tab board", "←→ file", "j/k scroll", "e edit", "/ search", "q quit"}
 	}

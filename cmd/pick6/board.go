@@ -39,6 +39,7 @@ func runBoard(args []string) error {
 	selected := fs.String("selected", "", "with -snapshot: select this query's best match, prompt closed")
 	data := fs.Bool("data", false, "with -snapshot: render the data tab instead of the board")
 	tab, notes := tabFlag(fs), notesFlag(fs)
+	view, ranks := viewFlag(fs), rankingsFlag(fs)
 	width := fs.Int("width", 100, "terminal width for snapshot mode")
 	height := fs.Int("height", 40, "terminal height for snapshot mode")
 	if err := fs.Parse(args); err != nil {
@@ -87,8 +88,9 @@ func runBoard(args []string) error {
 	// command's whole point and it is the one pane no scripted draft can reach.
 	if *snapshot {
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Mode: ui.ModeManual, Fresh: loadFreshness(), Notes: ui.Notes{Dir: notesDir(*notes)}}
-		pickTab(&b, *tab, *data)
+			Mode: ui.ModeManual, Fresh: loadFreshness(), Notes: ui.Notes{Dir: notesDir(*notes)},
+			Views: ui.Views{Dir: rankingsDir(*ranks), Fetched: fetchedRankings()}}
+		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
 			b.Search = ui.Search{Open: true, Query: *search}
 		}
@@ -100,7 +102,7 @@ func runBoard(args []string) error {
 	}
 
 	p := tea.NewProgram(
-		ui.NewManualModel(s).WithFreshness(loadFreshness()).WithNotes(notesDir(*notes)),
+		ui.NewManualModel(s).WithFreshness(loadFreshness()).WithNotes(notesDir(*notes)).WithRankings(rankingsDir(*ranks), fetchedRankings()),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()

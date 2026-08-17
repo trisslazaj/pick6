@@ -58,6 +58,10 @@ func (b *Board) HandleKey(key string) bool {
 	case "p":
 		b.DataFilter = nextFilter(b.DataFilter)
 		b.DataScroll = 0
+	case "right", "l", "]":
+		b.cycleView(1)
+	case "left", "h", "[":
+		b.cycleView(-1)
 	default:
 		return false
 	}
@@ -75,7 +79,9 @@ func nextFilter(cur string) string {
 }
 
 // dataRows is every available player under the current filter, best value
-// first — the same comparator Available uses, so the two tabs agree.
+// first — the same comparator Available uses, so the two tabs agree. The adp
+// view sorts the same rows by price instead, cheapest first, value breaking
+// ties; the undrafted (no adp) sink to the bottom either way.
 func (b Board) dataRows() []engine.Player {
 	s := b.State
 	var out []engine.Player
@@ -88,16 +94,20 @@ func (b Board) dataRows() []engine.Player {
 		}
 		out = append(out, p)
 	}
+	byADP := b.currentView().kind == viewADP
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Value != out[j].Value {
-			return out[i].Value > out[j].Value
-		}
 		ai, aj := out[i].ADP, out[j].ADP
 		if ai <= 0 {
 			ai = engine.UndraftedADP
 		}
 		if aj <= 0 {
 			aj = engine.UndraftedADP
+		}
+		if byADP && ai != aj {
+			return ai < aj
+		}
+		if out[i].Value != out[j].Value {
+			return out[i].Value > out[j].Value
 		}
 		if ai != aj {
 			return ai < aj
@@ -111,13 +121,28 @@ func (b Board) visibleDataRows() int {
 	if b.Height <= 0 {
 		return 20
 	}
-	// header, banner, urgency strip, title, column head, legend, footer — plus
-	// whatever the caller draws under the whole board (see Board.Reserve).
-	n := b.Height - 11 - b.Reserve
+	// header, banner, view strip, urgency strip, title, column head, legend,
+	// footer — plus whatever the caller draws under the whole board (see
+	// Board.Reserve). A file view has no urgency strip: it is the file's word,
+	// not the engine's, so those two rows go to the file.
+	n := b.Height - 12 - b.Reserve
+	if b.currentView().kind == viewFile {
+		n += 2
+	}
 	if n < 8 {
 		return 8
 	}
 	return n
+}
+
+// dataCount is how many lines the open view has to page through.
+func (b Board) dataCount() int {
+	switch v := b.currentView(); v.kind {
+	case viewTiers, viewFile:
+		lines, _ := b.sheetLines(v, b.Width)
+		return len(lines)
+	}
+	return len(b.dataRows())
 }
 
 // dataNameW scales the player column with the terminal: every other column is
@@ -135,7 +160,7 @@ func dataNameW(w int) int {
 }
 
 func (b *Board) clampScroll() {
-	max := len(b.dataRows()) - b.visibleDataRows()
+	max := b.dataCount() - b.visibleDataRows()
 	if max < 0 {
 		max = 0
 	}
@@ -148,38 +173,23 @@ func (b *Board) clampScroll() {
 }
 
 func (b Board) dataPane(w int) string {
+	v := b.currentView()
+	if v.kind == viewTiers || v.kind == viewFile {
+		return b.sheetPane(v, w)
+	}
 	rows := b.dataRows()
 	vis := b.visibleDataRows()
-	off := b.DataScroll
-	if max := len(rows) - vis; off > max {
-		off = max
-	}
-	if off < 0 {
-		off = 0
-	}
-	end := off + vis
-	if end > len(rows) {
-		end = len(rows)
-	}
+	off, end := b.page(len(rows), vis)
 
 	var sb strings.Builder
+	sb.WriteString(b.viewStrip(w) + "\n")
 	sb.WriteString(b.urgencyStrip(w))
 
-	label := "all players — sorted by value"
-	if b.DataFilter != "" {
-		label = strings.ToLower(b.DataFilter) + " only — sorted by value"
+	by := "value"
+	if v.kind == viewADP {
+		by = "adp"
 	}
-	counter := fmt.Sprintf("rows %d–%d of %d", off+1, end, len(rows))
-	if len(rows) == 0 {
-		counter = "no players"
-	}
-	left := Dim.Render(label)
-	right := Dim.Render(counter)
-	pad := w - lipgloss.Width(left) - lipgloss.Width(right) - 4
-	if pad < 1 {
-		pad = 1
-	}
-	sb.WriteString("  " + left + strings.Repeat(" ", pad) + right + "\n")
+	sb.WriteString(b.dataTitle("all players — sorted by "+by, off, end, len(rows), w))
 
 	nameW := dataNameW(w)
 	sb.WriteString(Dim.Render(fmt.Sprintf("  %-3s  %-*s  %-3s  %3s  %4s  %5s  %5s  %6s  %4s  %7s",
@@ -195,6 +205,72 @@ func (b Board) dataPane(w int) string {
 	}
 	sb.WriteString(b.legend(tripped, w) + "\n")
 	return sb.String()
+}
+
+// sheetPane is the tiers view or a file view: the strip, the title, the
+// column head, a page of the ladder, and a legend only when a ? is on it.
+func (b Board) sheetPane(v view, w int) string {
+	lines, unmatched := b.sheetLines(v, w)
+	vis := b.visibleDataRows()
+	if !unmatched {
+		vis++ // no legend row this frame: the table gets it
+	}
+	off, end := b.page(len(lines), vis)
+
+	var sb strings.Builder
+	sb.WriteString(b.viewStrip(w) + "\n")
+	title := "every player — by position and tier, taken struck"
+	if v.kind == viewFile {
+		title = v.label + " — as the file ranks them"
+	}
+	if v.kind == viewTiers {
+		sb.WriteString(b.urgencyStrip(w))
+	}
+	sb.WriteString(b.dataTitle(title, off, end, len(lines), w))
+	sb.WriteString(sheetColumns(w) + "\n")
+	for _, l := range lines[off:end] {
+		sb.WriteString(l + "\n")
+	}
+	if unmatched {
+		sb.WriteString("  " + Dim.Render("?: not on the board") + "\n")
+	}
+	return sb.String()
+}
+
+// page clamps the scroll to the last page and returns the visible window.
+func (b Board) page(n, vis int) (off, end int) {
+	off = b.DataScroll
+	if max := n - vis; off > max {
+		off = max
+	}
+	if off < 0 {
+		off = 0
+	}
+	end = off + vis
+	if end > n {
+		end = n
+	}
+	return off, end
+}
+
+// dataTitle is the row over a table: what it is on the left, the page counter
+// on the right. The position filter rewrites the left half.
+func (b Board) dataTitle(label string, off, end, n, w int) string {
+	if i := strings.Index(label, " —"); b.DataFilter != "" && i >= 0 {
+		label = strings.ToLower(b.DataFilter) + " only" + label[i:]
+	}
+	counter := fmt.Sprintf("rows %d–%d of %d", off+1, end, n)
+	if n == 0 {
+		counter = "no players"
+	}
+	label = trunc(label, w-lipgloss.Width(counter)-5)
+	left := Dim.Render(label)
+	right := Dim.Render(counter)
+	pad := w - lipgloss.Width(left) - lipgloss.Width(right) - 4
+	if pad < 1 {
+		pad = 1
+	}
+	return "  " + left + strings.Repeat(" ", pad) + right + "\n"
 }
 
 // legend is the one row under the table that says what the columns mean, and —

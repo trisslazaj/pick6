@@ -62,6 +62,13 @@ func (m Model) WithNotes(dir string) Model {
 	return m
 }
 
+// WithRankings points the data tab's file views at a folder of csvs, plus the
+// file fetch loaded. Both models take it the same way.
+func (m Model) WithRankings(dir, fetched string) Model {
+	m.board.Views.Dir, m.board.Views.Fetched = dir, fetched
+	return m
+}
+
 func (m Model) Init() tea.Cmd {
 	if m.auto {
 		return m.tick()
