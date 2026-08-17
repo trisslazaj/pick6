@@ -18,8 +18,9 @@ func TestTabTogglesDataView(t *testing.T) {
 		t.Error("tab should switch to the data view")
 	}
 	m = send(m, key("tab"))
+	m = send(m, key("tab"))
 	if !strings.Contains(m.View(), "your roster") {
-		t.Error("tab again should switch back to the board")
+		t.Error("tab twice more (through notes) should return to the board")
 	}
 }
 
@@ -140,7 +141,7 @@ func TestDataStripDropsThePlanWhenItDoesNotFit(t *testing.T) {
 	for _, c := range cases {
 		b := Board{State: lookaheadState(), Width: c.w, Height: 40, Tab: 1}
 		view := ansi.ReplaceAllString(b.View(), "")
-		if got := strings.Contains(view, "plan  wr at 1.02 → rb at 2.03"); got != c.want {
+		if got := strings.Contains(view, "plan  wr 1.02 → rb 2.03"); got != c.want {
 			t.Errorf("width %d: plan on the strip = %v, want %v\n%s", c.w, got, c.want, view)
 		}
 	}

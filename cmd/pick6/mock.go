@@ -29,13 +29,15 @@ func runMock(args []string) error {
 	auto := fs.Bool("auto", true, "auto-advance picks")
 	snapshot := fs.Int("snapshot", -1, "advance N picks, print one frame, exit (no tui)")
 	data := fs.Bool("data", false, "render the data tab instead of the board in snapshot mode")
+	tab, notes := tabFlag(fs), notesFlag(fs)
+	view, ranks := viewFlag(fs), rankingsFlag(fs)
 	// The same pair board and live -replay carry. This is the command CLAUDE.md
 	// points at for readme screenshots, so it is the one that most needs to be
 	// able to frame the overlay.
 	search := fs.String("search", "", "with -snapshot: open the search overlay on this query")
 	selected := fs.String("selected", "", "with -snapshot: select this query's best match, prompt closed")
 	room := roomFlag(fs)
-	survival := survivalFlag(fs)
+	survival, scorer := survivalFlag(fs), scorerFlag(fs)
 	width := fs.Int("width", 100, "terminal width for snapshot mode")
 	height := fs.Int("height", 40, "terminal height for snapshot mode")
 	if err := fs.Parse(args); err != nil {
@@ -53,7 +55,7 @@ func runMock(args []string) error {
 	s.Demand = leagueDemand() // replacement level, from this room's own drafts
 	// The mock's sim seed is the draft seed: same -seed, same scripted picks AND
 	// the same rollout futures, so a demo frame is reproducible to the pixel.
-	if err := applySim(s, *survival, "", *seed); err != nil {
+	if err := applyBrain(s, *survival, *scorer, "", *seed); err != nil {
 		return err
 	}
 	pick := scriptedPicker(*seed)
@@ -70,10 +72,9 @@ func runMock(args []string) error {
 			s.Draft(id)
 		}
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Fresh: loadFreshness()}
-		if *data {
-			b.Tab = 1
-		}
+			Fresh: loadFreshness(), Notes: ui.Notes{Dir: notesDir(*notes)},
+			Views: ui.Views{Dir: rankingsDir(*ranks), Fetched: fetchedRankings()}}
+		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
 			b.Search = ui.Search{Open: true, Query: *search}
 		}
@@ -85,7 +86,7 @@ func runMock(args []string) error {
 	}
 
 	p := tea.NewProgram(
-		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness()),
+		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness()).WithNotes(notesDir(*notes)).WithRankings(rankingsDir(*ranks), fetchedRankings()),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()

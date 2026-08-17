@@ -96,9 +96,13 @@ the unconditional logistic. Decomposing the Brier score shows where the gain cam
 the reliability term falls from $0.0231$ to $0.0051$ while resolution barely moves, which
 is to say the work bought \emph{calibration}, not \emph{discrimination}.
 
-Three ideas were built, measured, and did not survive, and they get a section of their
+Four ideas were built, measured, and did not survive, and they get a section of their
 own, because the reasons they failed are more interesting than the reasons the survivors
-worked. One shipped feature --- the room-warped price of \S\ref{sec:room} --- has had its
+worked. The largest of the four is the most recent: \S\ref{sec:roster} replaces the entire
+decision score with the value of the roster the draft actually ends with, which dissolves
+five hand-tuned constants and needed a second referee built from scratch to grade --- and
+it is switched off, because it did not separate from the score it replaces and because the
+drafter read its recommendations and rejected them. One shipped feature --- the room-warped price of \S\ref{sec:room} --- has had its
 supporting evidence retracted in full: it did not replicate on the second and third folds,
 and the fold it was chosen on turned out to be priced off a curve built from drafts that
 happened a year later. It still ships, now on a structural argument rather than a score,
@@ -1568,7 +1572,7 @@ The evidence that it is a policy and not a belief is that the engine carries a s
 looser constant for the same phenomenon. This league takes its first kicker in round 10
 and its first defense in round 11 (medians: round 14 for both). So the opponent model of
 engine v2 --- which is asking ``what will the room actually do'', a factual question ---
-uses \code{OpponentKDefLastRounds} $= 6$, while our own recommendation uses
+uses \code{OpponentKDefLastRounds} $= 7$, while our own recommendation uses
 \code{KDefLastRounds} $= 3$. Two constants because they are two different questions:
 what we are willing to recommend, and what the room actually does. Collapsing them would
 make one of the two answers wrong.
@@ -1766,7 +1770,7 @@ allowed, since double-tapping a position at the turn is a real strategy:
 
 The recommendation is the argmax over pairs. With at most six positions that is at most
 $36$ pairs and no search --- but it is not free: each pair re-solves the tilt inside the
-loop, so \code{BestPlan} measures at $1.3$--$2.9$\,ms on the shipped $203$-player board
+loop, so Under \code{-survival=adp}, \code{BestPlan} measures at $1.3$--$2.9$\,ms on the shipped $203$-player board
 against $0.33$--$0.51$\,ms for a full six-position urgency pass. A render happens on a
 pick or a keypress, so that is affordable and the formula stays as written rather than
 hoisting the solve out and drifting from it. Four details:
@@ -1883,7 +1887,12 @@ scripted plan lines, none before pick $120$.
 \subsubsection*{What can and cannot be claimed}
 
 A decision score has no counterfactual labels, so \S\ref{sec:backtest}'s referee cannot
-grade it and this document does not pretend otherwise. The evidence is a scenario. Build
+grade it and this document does not pretend otherwise. Milestone 8 later built the
+instrument this paragraph says does not exist --- \code{pick6 regret}, \S\ref{sec:roster}
+--- and the pair score is one of the policies it replays. What it says about the pair
+score is worth stating here rather than only there: over the three cached drafts nothing
+separated it from the objective built to replace it, which is a result about the
+\emph{resolution of the instrument} as much as about either score. The evidence is a scenario. Build
 the mirror of \S\ref{sec:sim}'s flagship board: national ADP says the backs are going now
 (ADP $103$--$110$ against a pick at $102$) and the receivers will keep (ADP $120$--$122$
 against my next pick at $115$), while all six seats picking in between are full at
@@ -1905,21 +1914,23 @@ inside the conditioned rollouts should differ from the unconditioned row
 a board of ninety. Worst move measured, $0.064$, every sign in the direction removing a
 player predicts.
 
-\subsubsection*{Three picks: built, measured, switched off}
+\subsubsection*{Three picks: built, measured, and finally retired unanswered}
 
-The same machinery extends to $q_3$ and does, behind \code{PlanDepth} $= 2$. The wheel is
-where the effect should be largest and it is: over $54$ scripted frames at seats 1 and
-12, depth three changes the \emph{first} leg on $16$ of them, and every flip moves away
-from running back --- coherent with the wheel's own arithmetic, where two back-to-back
-picks let you double-tap the deep position later and take the scarce one now.
+The same machinery extends to $q_3$, and for one milestone it did, behind
+\code{PlanDepth} $= 2$. The wheel was where the effect should be largest and it was: over
+$54$ scripted frames at seats 1 and 12, depth three changed the \emph{first} leg on $16$
+of them, and every flip moved away from running back --- coherent with the wheel's own
+arithmetic, where two back-to-back picks let you double-tap the deep position later and
+take the scarce one now. Coherent is not right, and this project does not ship a change of
+that size on plausibility; \S\ref{sec:roomfail} is the cautionary tale.
 
-Coherent is not right, and this project does not ship a change of that size on
-plausibility; \S\ref{sec:roomfail} is the cautionary tale. Promotion needs a scenario
-fixture of its own showing a wheel frame where depth two is demonstrably wrong. Two
-confounds to separate first: $\mathrm{mustFill}$ is computed \emph{from} the leg count, so
-depth three carries one more unit of endgame feasibility pressure and some of those $16$
-flips may be that rather than the third leg; and the cost is $115$\,ms per pick event
-against $36$\,ms, past budget, so promotion means dropping the rollout count with it.
+The question was never answered. Milestone 8 superseded it --- \S\ref{sec:roster} scores
+the roster the draft ends with, which has no depth parameter at all --- and then failed its
+own gate, so the horizon that ships is still two. What that leaves is not a dissolution but
+a retirement: the depth-three branch and its test are gone from the tree, \code{PlanDepth}
+survives only as a comment nothing reads, and reviving the question means rebuilding the
+branch as well as re-arguing it. The $16$-of-$54$ measurement is recorded here because it
+is now the only surviving evidence of what a third leg did.
 
 \subsubsection*{On screen}
 
@@ -1934,6 +1945,10 @@ strictly good news. It drops whole below $92$ columns, before the plan does.
 
 \subsection{The one thing that outranks the score}
 
+(This is the default path, \code{-scorer pair}, and it continues to work exactly as
+described. \S\ref{sec:roster} replaces most of it with a price rather than a guard, and is
+opt-in.)
+
 Late in a draft, finishing the lineup beats maximising the score, and by a lot, because
 K and DEF carry no imported value --- both legs of any pair containing one score near
 zero, so such a pair can never win an argmax over value. Measured: at pick 14.10 with a
@@ -1945,6 +1960,248 @@ to what is arithmetically required ($\mathrm{mustFill} = \operatorname{clamp}(2 
 0, 2)$, with $L$ and $U$ as in \eqref{eq:endgame}), and only then maximises
 \eqref{eq:plan}. Up to the last couple of rounds $\mathrm{mustFill} = 0$ and this is a
 plain argmax on score.
+%=======================================================================
+\section{The finished roster}
+\label{sec:roster}
+%=======================================================================
+
+\textbf{Status, before anything else: this section describes a scorer that does not ship
+on.} It is built, tested, wired to a flag, and off. \code{-scorer roster} turns it on;
+\code{-scorer pair} --- milestone 7's two-leg pair score of \S\ref{sec:plan} --- is the
+default and is what a live board ranks on. Two things put it there, and they are given in
+full in \S\ref{sec:regret}: it did not separate from the score it replaces on either fold
+that can test it causally, and the drafter read its recommendations on the 2026 board and
+rejected them. The derivation is here rather than in \S\ref{sec:negative} because it is
+long and because the idea is right even where the implementation is not; \S\ref{sec:negative}
+carries the verdict in the shape the other three negatives use.
+
+\subsection{Every constant so far was standing in for one number}
+
+Look at what the pair score is made of. The need steps $1.0 / 0.6 / 0.25$; the replacement
+discount $R(P)$; \code{EndgameSlack}; $\mathrm{mustFill}$; the two-leg horizon. Each was
+introduced separately, for a reason of its own, and each was measured or argued into place.
+But they are all answers to the same question, asked without the means to answer it
+directly: \emph{what does this pick do to the team I walk out with?}
+
+$\mathrm{need}$ guesses what an open slot is worth. $R(P)$ guesses what you could have
+filled it with later. \code{EndgameSlack} guesses what a bench pick costs when the picks
+run out. $\mathrm{mustFill}$ guesses when that becomes binding. The two-leg horizon guesses
+that two picks is far enough to see.
+
+\S\ref{sec:sim} built a simulator that plays a draft forward. \S\ref{sec:plan} pointed it
+at one extra pick. There is no reason \emph{in principle} to stop there. There turned out
+to be two in practice.
+
+\subsection{The objective}
+
+Let $\mathcal{R}$ be a finished roster --- a multiset of players. Assign it to the lineup
+by the same greedy rule the roster pane uses, dedicated slots before flex, taking players
+in value order; write $\sigma(\mathcal{R})$ for the assigned starters and
+$\beta(\mathcal{R})$ for the spill. Then
+
+\begin{equation}
+U(\mathcal{R}) \;=\; \sum_{j \in \sigma(\mathcal{R})} v_j
+\;+\; \sum_{j \in \beta(\mathcal{R})} w(\mathrm{pos}_j)\, v_j ,
+\qquad
+w(P) = \begin{cases} 0.25 & P \text{ can reach a flex slot} \\ 0 & \text{otherwise,}\end{cases}
+\label{eq:U}
+\end{equation}
+
+with an unfilled starting slot contributing nothing.
+
+Three things fall out of \eqref{eq:U} that are constants everywhere else in this paper ---
+under \code{-scorer roster}, that is; on the default path all three are exactly as
+\S\ref{sec:urgency} and \S\ref{sec:plan} describe them. A flex slot is worth exactly the
+player the assignment puts in it, so $0.6$ goes. An unfilled slot costs exactly the player
+who would have stood in it, so \code{EndgameSlack} and $\mathrm{mustFill}$ leave the score
+--- feasibility stops being a guard bolted on from outside and becomes a price. And the
+later picks \emph{actually fill} the positions $R(P)$ was standing in for, so the
+replacement discount goes too. One piece of the old machinery survives even here:
+$\mathrm{Fills}$ remains the outer sort, because a starting slot filled by a man carrying
+no imported value is a slot \eqref{eq:U} cannot distinguish from an empty one.
+
+The bench weight $w$ is the one constant \eqref{eq:U} still owns, and it carries the
+two-index rule of \S\ref{sec:vor} rather than a second guess: a bench back converts to
+points all season through flex, byes and injuries, while a second quarterback in a 1QB
+league scores zero by construction. That is not a new claim. It is the same finding that
+ended the $930$-point subsidy early quarterbacks were collecting, applied in the one place
+it had not yet reached --- and before it was applied, the board recommended a \emph{second}
+quarterback in a one-quarterback league, at a quarter of a value the market inflates for
+scarcity.
+
+\textbf{And that fix is only half of the bug, which is the single most useful sentence in
+this section.} \eqref{eq:U}'s \emph{first} sum is raw value with no normalisation across
+positions at all --- which is the entire reason \S\ref{sec:vor} exists. Measured by
+\code{pick6 mock -slot 6 -seed 5 -snapshot 29 -scorer roster}, i.e. on the clock at 3.06 of
+the scripted 2026 mock, on the 2026-08-14 board:
+
+\begin{center}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+& value & vor & $R(\mathrm{pos})$ \\
+\midrule
+josh allen (QB)   & 6091 & 5074 & 1017 \\
+malik nabers (WR) & 5699 & 5627 & 72 \\
+breece hall (RB)  & 5004 & 5004 & 0 \\
+tyler warren (TE) & 3453 & 3139 & 314 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+vor ranks nabers over allen by $553$. $U$ ranks allen over nabers by $341$ --- i.e. $U$'s
+order is the \emph{raw-value} order. The simulation is supposed to recover the difference
+by playing out what I would actually get at each position later, and it recovers about
+half. So the bias vor was built to remove is reintroduced on the starters even after it has
+been removed from the bench, and the visible symptom is a board that reaches for
+quarterbacks and tight ends: across seeds and seats, one frame recommends a quarterback at
+five separate vantages. This is what the drafter saw and rejected.
+
+\subsection{The estimator}
+
+For each candidate $P$, with $b_P$ its best available man:
+
+\begin{equation}
+\mathrm{score}(P) \;=\; \mathbb{E}\!\left[\, U(\mathcal{R}) \;\middle|\; b_P \text{ is
+mine} \,\right],
+\label{eq:rosterscore}
+\end{equation}
+
+estimated, under \code{-scorer roster}, by playing the window from my next pick to my
+\emph{last} one, $M = 500$ times. The default \code{-scorer pair} keeps milestone 7's
+two-leg window and \code{-survival=adp} keeps the v1 formula wholesale, so everything below
+describes a configuration that is off unless asked for. Each
+future: $b_P$ comes off the board at the start (the conditioning of \S\ref{sec:plan},
+unchanged --- ``will I get him'' is the survival column's question and is answered there);
+opponents draft through the same \code{simCore} the survival table uses; every later pick
+of mine is taken by the engine's own greedy rule over whoever is really left; and the
+roster that results is scored with \eqref{eq:U}.
+
+Two implementation notes, both load-bearing. The leg policy stops sorting the board: within
+a position, $(v - R)^+ \times \mathrm{need}$ is monotone in value, so the argmax
+factorises into a walk down one static list per position with a per-rollout cursor. The
+winner of the six-way compare is the winner of the sort, ties included, and the cost of a
+leg drops from $O(n \log n)$ to $O(1)$ amortised. And common random numbers are not
+optional here: one seed per vantage, shared by every candidate, so two scores differ by the
+difference the choice makes and not by sampling noise. Measured at full horizon --- the \code{-scorer roster}
+configuration --- the paired variance of a score gap is $17\%$ of the unpaired
+(\code{TestConditionedPlanUsesCommonRandomNumbers}); the shipped two-leg window measures
+under half.
+
+\subsection{What the display can say now}
+
+The score's units changed, and the display followed, because under \code{-scorer roster}
+the engine holds five hundred finished versions of my team and had been discarding all of
+them but the mean. Three claims become sayable that were not --- and all three are gated on
+the plan having actually run to my last pick, so on the default board none of them render
+mid-draft. The exception is the endgame, where a two-pick window \emph{is} the whole
+remaining horizon and the claims are honest under either scorer:
+
+\begin{itemize}
+\item \emph{The skeleton.} \code{plan te 10.10 $\to$ rb 11.03 $\to$ rb 12.10}. The plan
+runs to the end; the line renders a prefix of it, because a sixteen-leg line is a printout.
+\item \emph{Your team from here.} One row per starting slot open today, read off the top
+choice's own futures: the modal filler when he recurs often enough to name, his band when
+he does not, the pick he arrives at, and the odds. One brain, so it cannot contradict the
+verdict above it.
+\item \emph{Consequences, named in players.} ``Taking rb instead costs you mcbride.'' This
+one exists \emph{because} of the common random numbers: future $m$ of the top choice and
+future $m$ of the runner-up are the same world, so their ending rosters differ by what the
+choice caused and nothing else. Under independent sampling the same diff would be mostly
+noise, and the sentence would be a lie with a name in it.
+\end{itemize}
+
+\subsection{Grading a decision, which \texorpdfstring{\S\ref{sec:backtest}}{the backtest} cannot}
+\label{sec:regret}
+
+A survival prediction has a label: the draft either took him or it did not. A decision has
+none --- nobody recorded what would have happened if you had taken the receiver. So
+\code{pick6 regret} builds the counterfactual instead. For each cached real draft, my seat
+is played by a policy while the other eleven keep their real recorded picks; when my
+counterfactual takes a man a later real pick names, that manager receives their own next
+surviving real pick, and every substitution is counted. Ending rosters are scored two ways
+and never averaged: $U$ on era-adp-rank values, and the same lineup on a \emph{linear}
+exchange rate, so a win that comes from the value curve's convexity rather than from the
+decisions shows up as a disagreement between the two columns.
+
+The causality rules are \S\ref{sec:causal}'s, and they are a package: a fold's room curve,
+its off-board escape rates \emph{and} its measured positional demand all come from drafts
+that started before it. The 2024 fold has nothing before it and therefore has none of the
+three; its sim policies run in a configuration a live clock is never in, so it is reported
+and not gated on.
+
+Four caveats ride on every run, printed by the tool rather than left to this document. $U$
+is also the quantity the new scorer optimises --- what is being tested is whether optimising
+it against the \emph{simulator} transfers to real rooms, and the opponents here are real.
+The harness's own value curve is a monotone function of era adp rank, because no historical
+value source exists; ``best available'' is therefore very nearly a greedy optimum of the
+exchange rate itself, and a policy beats it only through lineup structure. The opponents
+cannot react --- they replay their recorded picks in their recorded order, so a policy that
+hoards a position pays no price for it. And the \code{actual} row is not a fair baseline:
+seven of the drafter's real picks across the three folds were handcuffs the era board never
+priced, worth $0$ to $U$, while a model policy cannot take an unpriced man at all.
+
+\subsubsection*{What it said}
+
+The gate, fixed before the contender was scored: the roster objective ships only if it
+beats the shipped pair score on $U$ on \emph{both} causal folds. Eighty paired seeds at
+$M = 500$, after the adversarial review of \S\ref{sec:threats} found four bugs in the
+referee itself:
+
+\begin{center}
+\begin{tabular}{@{}llrrrr@{}}
+\toprule
+fold & priors & pair $U$ & roster $U$ & difference & s.e. \\
+\midrule
+2024   & reported & $808{,}459$ & $850{,}348$ & $+41{,}889$ & $2{,}155$ \\
+2025-a & causal   & $978{,}267$ & $978{,}449$ & $+181$      & $1{,}516$ \\
+2025-b & causal   & $929{,}417$ & $928{,}688$ & $-729$      & $0$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Every seed replays both scorers through the same futures, so the difference is per world
+and carries none of the variance the two worlds share. One causal fold is a tie inside its
+own error bar; the other is a $0.08\%$ loss with no error bar at all, being deterministic.
+The honest word for the pair is \emph{indistinguishable}, not \emph{worse} --- and the gate
+asks for better on both. 2024 is a large win and does not gate: it has no prior drafts, so
+its sim policies run with no room curve, no escape rates and no measured demand, which is a
+configuration a live clock is never in.
+
+\subsubsection*{What actually decided it}
+
+The drafter looked at the board and rejected it. Shown the roster scorer's recommendations
+on the 2026 board, his verdict was that reaching for a quarterback and a tight end early is
+``objectively bad'' and he did not want the scorer. \textbf{That outranks the gate, and it
+should.} A decision score has no labels; the harness prints four blind spots on every run;
+someone who has played this league for years reading the output is a better instrument than
+either. The mechanism he was reacting to is the un-normalised starter sum measured above.
+
+So the promotion bar is three things and not one: fix the starter-side pricing, win a
+causal fold, and change his mind. The strongest lever on the first is that the continuation
+policy inside the rollouts still picks by $(v - R)^+ \times \mathrm{need}$ while the score
+being maximised is $U$ --- a rollout that models my later picks with a different objective
+from the one being maximised under-estimates every candidate, and not necessarily by the
+same amount. $\Delta U$ for one player is $O(1)$ given the current assignment, so a
+$U$-greedy leg policy is cheap. It was not attempted.
+
+\subsubsection*{The ritual, and the referee grading itself}
+
+The verification milestone 7 introduced was repeated and is the reason a reader can trust
+the default board after all of this: across $280$ scripted frames --- seven seeds, five
+seats, eight vantages each --- the verdict, the ranked rows, the alert banner and the
+plan's positions are identical to the commit before the milestone. The survival path was
+not touched, and that was measured rather than argued.
+
+The adversarial review found twelve confirmed defects, and \emph{four of them were in the
+referee}: an exchange-rate check that varied two things at once, an attribution bug on
+traded picks, a standard error of zero printed as certainty, and --- the one that matters
+--- the drafter's own unranked real picks being registered into the pool before a policy
+chose, which is a leak of exactly the kind that retracted the simulation's first scoring
+run (\S\ref{sec:escape}). Two more were milestone-8 rules that had leaked onto the shipped
+pair path, so the baseline the first gate numbers were measured against was not the shipped
+scorer at all. Every number above is post-fix. An instrument gets reviewed harder than the
+thing it measures, and this one needed it.
+
 %=======================================================================
 \section{Room-warped prices}
 \label{sec:room}
@@ -2533,8 +2790,11 @@ that is called a pick. Strategically marginal, socially essential.
 %=======================================================================
 
 This is the intellectual core of the project. Everything above is a model; this section
-is how the model is graded, and it is the reason two of the ideas in the previous
-sections ship and two do not.
+is how the \emph{survival} model is graded, and it is the reason two of the ideas in the
+previous sections ship and two do not. The fourth negative could not be decided here at
+all: a decision score has no labels, so \S\ref{sec:regret} had to build a second referee
+out of counterfactual replays --- and where that one disagrees with a human it loses,
+which is what happened in \S\ref{sec:rosterfail}.
 
 \subsection{Scoring a probability}
 
@@ -3644,15 +3904,18 @@ Sleeper column to check it against.
 \label{sec:negative}
 %=======================================================================
 
-Three ideas were built, measured, and did not survive. They get their own section
+Four ideas were built, measured, and did not survive. They get their own section
 because they are the best evidence that the measurement apparatus of
 \S\ref{sec:calibration} is doing real work --- a backtest that only ever confirms is not
-a backtest --- and because in two of the three cases the reason for failure is more
+a backtest --- and because in three of the four cases the reason for failure is more
 instructive than any of the successes.
 
-Each subsection ends with what evidence would overturn it. That is not a formality: two
-of the three are still in the codebase, exported and tested, one call site away from
-being switched back on.
+Each subsection ends with what evidence would overturn it. That is not a formality, and
+the four survive in the tree in two different ways. \code{SupportFloor} and
+\code{EffectiveADP} are unwired code, exported and tested, one call site from live. The
+fourth --- the finished-roster objective --- is a fully wired second brain the drafter can
+turn on from the command line, and it is off because he read what it recommended and said
+no.
 
 \subsection{The full-depth room warp}
 
@@ -3893,6 +4156,46 @@ grid still wins, or an interior winner that is not simply flat sigma wearing fou
 constants. The tuner still exists and still prints; it never auto-writes. Printing rather
 than writing is the whole reason any of this was catchable.
 
+\subsection{The finished-roster objective}
+\label{sec:rosterfail}
+
+Derived in full in \S\ref{sec:roster}; listed here so the four negatives sit together, and
+because it is the cleanest instance of what this section is for.
+
+\textbf{What it was.} Replace the decision score entirely. Instead of
+$(v-R)^+ \times \mathrm{need}$ summed over two legs, take each candidate, play the draft
+out to my last pick five hundred times, and score the \emph{finished roster} ---
+\eqref{eq:U}. Five hand-tuned constants dissolve, feasibility becomes a price rather than
+a guard, and the wheel is priced by construction.
+
+\textbf{Why it failed.} Two reasons, and the second is the one that settled it. The score
+did not separate from the score it replaces: on the two folds that can test it causally the
+difference was $+181$ (s.e. $1{,}516$) and $-729$ over eighty paired seeds, i.e. a tie inside its own error bar and a $0.08\%$ loss. And
+\eqref{eq:U}'s starter sum is raw value with no cross-position normalisation, which is the
+exact bias \S\ref{sec:vor} exists to remove --- so the board reached for quarterbacks and
+tight ends, and the drafter rejected it on sight. Fixing the \emph{bench} side of the same
+bias (a backup quarterback in a 1QB league is worth zero) is what flipped the gate from
+passing to failing, because the harness's own value curve is position-blind and cannot see
+why a backup quarterback is worthless. That is the most instructive sentence in this
+section: a correction that is right about football read as pure loss to the instrument.
+
+\textbf{The score.} Table in \S\ref{sec:regret}. Note what it is \emph{not}: no Brier, no
+log-loss, no labels. A decision has no counterfactual, which is why the referee had to be
+built (\code{pick6 regret}) and why its own four blind spots are printed on every run.
+
+\textbf{Status.} Wired, tested and off. \code{-scorer roster} turns it on and brings three
+display features with it; \code{-scorer pair} is the default and is milestone 7's score,
+verified byte-identical over $280$ scripted frames. \code{engine.RosterValue} is exported
+and table-tested independently of any of this, because $U$ is the one piece of the
+milestone with an exact right answer for every input.
+
+\textbf{What would overturn it.} Three things, all of them: the starter-side pricing fixed
+(the leg policy maximising $\Delta U$ rather than $(v-R)^+ \times \mathrm{need}$ is the same
+fix approached from the other end), a causal fold on which it wins, and the drafter's
+agreement. One or two of the three is not enough --- the first two were what the gate asked
+for, and the third is what actually decided it.
+
+%=======================================================================
 %=======================================================================
 \section{Threats to validity}
 \label{sec:threats}
@@ -4099,6 +4402,30 @@ in \S\ref{sec:results}, because the backtest grades survival and tiers do not en
 survival. It is a real gap all the same, and the fix is one call to \code{subdivide} on
 \code{deriveBlocks}' output.
 
+\paragraph{12. The regret harness's opponents cannot react.}
+\S\ref{sec:regret}. They replay their recorded picks in their recorded order, so a policy
+that hoards a position pays no price for it and nothing punishes a counterfactual for being
+strange. Every number the harness prints is therefore an upper bound on a policy that a
+live room would have pushed back on, and the bound is loosest for the policies that
+deviate most --- which the substitution count is there to make visible.
+
+\paragraph{13. The regret harness's value curve is position-blind.}
+No historical value source exists (probed and dead, \S\ref{sec:provenance}), so a fold's
+values come from era adp rank through $v = 250e^{-\mathrm{rank}/40}$. That curve carries no
+information about position at all, which means the harness \emph{structurally cannot}
+referee any claim about cross-position pricing --- and cross-position pricing is exactly
+what \eqref{eq:U} is for. It is why fixing the backup-quarterback bug read to the
+instrument as pure loss. Read every regret number as a claim about lineup structure, and
+none of them as a claim about which position is worth more.
+
+\paragraph{14. The regret harness's \code{actual} row is unfairly penalised.}
+Seven of the drafter's real picks across the three folds were handcuffs and deep fliers the
+era board never priced. They are worth $0$ to $U$, while a model policy cannot take an
+unpriced man at all --- he is not on the board until the pick that registers him, which is
+the leak guard of \S\ref{sec:escape} working as designed. So the gap between ``what I
+really did'' and everything under it is mostly board depth, not decisions, and the gate
+does not use that row.
+
 %=======================================================================
 \section{Constants}
 \label{sec:constants}
@@ -4154,7 +4481,16 @@ precomputes sigma and tiers without importing the engine.
 \code{NeedBench} & 0.25 & Judgement, unmeasured. \\
 \code{EndgameSlack} & 0.5 & Judgement. At $L = U+1$ a bench flier is still affordable but spends the only spare pick. At $L = U$ the multiplier is $0$, which is not tuneable --- it is the arithmetic of having no spare picks. \\
 \code{KDefLastRounds} & 3 & \textbf{Policy, not a model.} What we are willing to recommend. \\
-\code{OpponentKDefLastRounds} & 6 & \textbf{Measurement.} This room takes its first kicker in round 10 and first defense in round 11. Used by engine v2's opponent model only. Two constants because they are two questions. \\
+\code{OpponentKDefLastRounds} & 7 & \textbf{Measurement.} This room takes its first kicker in round 10 and first defense in round 11. Seven and not six, and the difference is the draft's \emph{length}: the round-10 observation was read off a 15-round draft, while the 16-round room that actually matters took two kickers with seven rounds remaining. Used by engine v2's opponent model only. Two constants because they are two questions. \\
+\addlinespace
+\multicolumn{3}{@{}l}{\emph{Simulation and the plan --- \code{engine/tuning.go}}}\\[0.2em]
+\code{Tau} & 5.0 & Judgement. Desirability decays $e$-fold every five ranks in the opponent model, \S\ref{sec:sim}. \\
+\code{CandidatePool} & 25 & Judgement. Nobody is taking the 60th-best player, and the sample is over the top of the board. \\
+\code{Rollouts} & 500 & Cost against resolution. At 500 the standard error on a $90\%$ survival is $\approx 1.3\%$, under the board's own rounding. \\
+\code{PlanRollouts} & 500 & Its own number rather than \code{Rollouts} because the survival column is a percentage a human reads and the plan is a ranking. Milestone 8 pre-authorised a drop to 300 for the full-horizon window and \textbf{did not take it}, because the objective that needed it does not ship on and leaving the default path at the count it was measured at is worth more than the milliseconds. A promotion should take the drop with it. \\
+\code{PlanDepth} & 2 & \textbf{Retired.} Nothing reads it. It survives as a comment recording that the third-leg question (\S\ref{sec:plancond}) was superseded rather than answered. \\
+\code{BenchWeight} & 0.25 & \textbf{Judgement inherited, rule measured.} The number is \code{NeedBench}'s, on the same argument --- a bench body scores through flex, byes and injuries. The \emph{rule} around it is not judgement: it is $0$ for any position that cannot reach a lineup through a flex slot, which is \S\ref{sec:vor}'s two-index finding. A \code{var} rather than a \code{const} so \code{pick6 regret -bench} can sweep it. Read only by \eqref{eq:U} and the harness, so it is inert on the default board. \\
+\code{MarketGapPicks} & 4 & Judgement, promoted from the ui to the engine when the market's dissenting man stopped being a note and became a scored candidate under \code{-scorer roster}. Contesting every one- or two-pick wobble would bury the one that matters. \\
 \addlinespace
 \multicolumn{3}{@{}l}{\emph{Runs, byes, freshness --- \code{engine/tuning.go}}}\\[0.2em]
 \code{RunWindow} & 6 & Judgement. Half a round of a 12-team draft. \\
@@ -4270,9 +4606,35 @@ Prop.~\ref{prop:greedy} & greedy slot filling & \code{State.FilledSlots}, \code{
 --- & derived tiers, runt merge & \code{deriveBlocks}, \code{mergeRuntTiers} & \code{adp/aggregate.go} \\
 
 \addlinespace
-\multicolumn{4}{@{}l}{\emph{Two-pick lookahead}}\\[0.2em]
-\eqref{eq:plan} & the pair score and argmax & \code{State.BestPlan} & \code{engine/plan.go} \\
---- & rendering both legs by pick & \code{Board.planCopy}, \code{Board.planLine} & \code{ui/board.go} \\
+\multicolumn{4}{@{}l}{\emph{The plan, and the primary key}}\\[0.2em]
+\eqref{eq:plan} & the pair score and argmax & \code{State.PickChoices} & \code{engine/plan.go} \\
+--- & its first row, with pick numbers & \code{State.BestPlan} & \code{engine/plan.go} \\
+--- & conditioned legs, one seed per vantage & \code{State.conditionedLegs}, \code{State.planSeed} & \code{engine/lookahead.go} \\
+--- & one candidate's futures & \code{State.planRollout} & \code{engine/lookahead.go} \\
+--- & what I would do with a later pick & \code{planPolicy.take}, \code{newPlanPolicy} & \code{engine/lookahead.go} \\
+--- & the vantage-keyed cache & \code{planTable}, \code{State.invalidate} & \code{engine/lookahead.go}, \code{engine/state.go} \\
+--- & value against market at one position & \code{State.MarketPick} & \code{engine/plan.go} \\
+--- & rendering the legs by pick & \code{Board.planCopy}, \code{Board.planSkeleton}, \code{Board.planLine} & \code{ui/board.go} \\
+
+\addlinespace
+\multicolumn{4}{@{}l}{\emph{The finished roster (\textbf{built, graded, off})}}\\[0.2em]
+\eqref{eq:U} & $U$, and the bench rule inside it & \code{State.RosterValue}, \code{State.benchWeight} & \code{engine/roster.go} \\
+--- & the assignment $U$ scores, for the display & \code{State.RosterLineup} & \code{engine/roster.go} \\
+\eqref{eq:rosterscore} & mean $U$ over the futures & \code{State.conditionedLegs} & \code{engine/lookahead.go} \\
+--- & which scorer is running & \code{State.Scorer}, \code{State.ScoresTheTeam} & \code{engine/plan.go}, \code{engine/tuning.go} \\
+--- & the flag that turns it on & \code{scorerFlag}, \code{applyBrain} & \code{cmd/pick6/escape.go} \\
+--- & what the futures put in each open slot & \code{SlotOutlook}, \code{planTally} & \code{engine/lookahead.go} \\
+--- & what the runner-up costs, named & \code{State.Consequence} & \code{engine/plan.go} \\
+--- & the three gated display blocks & \code{Board.teamAhead}, \code{Board.consequence}, \code{Board.fullHorizon} & \code{ui/board.go} \\
+
+\addlinespace
+\multicolumn{4}{@{}l}{\emph{Replay-regret --- the decision referee}}\\[0.2em]
+\S\ref{sec:regret} & the whole command & \code{runRegret} & \code{cmd/pick6/regret.go} \\
+--- & one draft, one policy, my seat & \code{regretFold.replay} & \code{cmd/pick6/regret.go} \\
+--- & era adp rank $\to$ value & \code{regretFold.value} & \code{cmd/pick6/regret.go} \\
+--- & the linear exchange-rate check & \code{regretFold.linearValue}, \code{State.BenchWeightFor} & \code{cmd/pick6/regret.go}, \code{engine/roster.go} \\
+--- & causality: curve, escape and demand & \code{splitByStart}, \code{checkRegretCurve} & \code{cmd/pick6/calibrate.go}, \code{cmd/pick6/regret.go} \\
+--- & the paired gate & \code{regretGate}, \code{paired}, \code{stderr} & \code{cmd/pick6/regret.go} \\
 
 \addlinespace
 \multicolumn{4}{@{}l}{\emph{Room warp}}\\[0.2em]
@@ -4281,8 +4643,8 @@ Prop.~\ref{prop:greedy} & greedy slot filling & \code{State.FilledSlots}, \code{
 --- & picks $\to$ positions in order & \code{adp.RoomDraftOf} & \code{adp/room.go} \\
 --- & read one point of the curve & \code{RoomCurve.At}, \code{RoomCurve.Depth} & \code{adp/room.go} \\
 \eqref{eq:warp} & the blend & \code{RoomCurve.Warp} & \code{adp/room.go} \\
---- & whole board, full depth (\textbf{loses the gate}) & \code{RoomCurve.EffectiveADP} & \code{adp/room.go} \\
---- & whole board, top $K$ (\textbf{ships}) & \code{RoomCurve.EffectiveADPTopK} & \code{adp/room.go} \\
+--- & whole board, full depth (\textbf{ships}) & \code{RoomCurve.EffectiveADP} & \code{adp/room.go} \\
+--- & whole board, top $K$ (\textbf{retracted}, kept for the cutoff sweep) & \code{RoomCurve.EffectiveADPTopK} & \code{adp/room.go} \\
 --- & the three monotonicity guards & \code{RoomCurve.effectiveADP} & \code{adp/room.go} \\
 --- & apply it at board load & \code{roomWarp}, \code{loadBoard} & \code{cmd/pick6/mock.go} \\
 --- & read the cached drafts & \code{adp.CachedRoomDrafts}, \code{LoadRoomDrafts} & \code{adp/room.go} \\
@@ -4346,9 +4708,25 @@ one thing this section got wrong when it asked for it: the honest simplification
 \S\ref{sec:plan} is about leg one's optimism, and that survives untouched, because every
 candidate still carries it equally and it is a ranking. What the rollouts replaced was the
 expectation --- the second leg is now the player who actually landed, averaged over the
-futures. Two leftovers with their own promotion bars: the third leg
-(built, measured, off --- see the depth-three note in \S\ref{sec:plancond}) and the
-v2.1 levers named at the end of \S\ref{sec:sim}.
+futures. It left one leftover with a promotion bar --- the v2.1 levers named at the end of
+\S\ref{sec:sim}. The other, the third leg, is no longer deferred but retired: milestone 8
+superseded the question and then failed, so the branch is gone from the tree and reviving
+it means rebuilding it (\S\ref{sec:plancond}).
+
+\paragraph{The finished-roster objective (milestone 8) --- BUILT, GRADED, OFF (2026-08-14).}
+\S\ref{sec:roster}, verdict in \S\ref{sec:rosterfail}. The referee landed with the
+contender rather than before it, which cost nothing in the end because it printed every
+baseline before it scored anything --- and then the contender lost. Two things worth
+keeping. \code{pick6 regret} is the durable half: it caught four bugs in itself and two
+rules that had leaked onto the shipped path, and it is the only instrument in the project
+that can say anything at all about a decision. And a human reading the output is still the
+sharpest referee available --- the one time he was consulted, he overruled a table.
+
+The live question it leaves is narrow and stated in \S\ref{sec:rosterfail}: make the
+rollouts' continuation policy maximise $\Delta U$ rather than $(v-R)^+ \times
+\mathrm{need}$, so the estimator stops modelling my own later picks with an objective
+different from the one it maximises. That is cheap, it is the starter-side pricing bug seen
+from the other end, and it is the only route to the three things promotion now needs.
 
 Two things that are deliberately \emph{not} next: an ADP over/under-performance model
 (the blocker is labels --- it needs several seasons of historical ADP joined to actual

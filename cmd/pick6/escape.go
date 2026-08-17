@@ -195,6 +195,25 @@ func escapeSummary(rates []float64) string {
 // it did — the sim is the board's default brain, and which brain is running
 // with which escape is a fact the terminal should state once.
 func applySim(s *engine.State, survival, replaying string, seed int64) error {
+	return applyBrain(s, survival, engine.ScorerPair, replaying, seed)
+}
+
+// applyBrain is applySim plus the decision score, which milestone 8 made a
+// second switch. The default is milestone 7's two-leg pair score; `-scorer
+// roster` opts in to the finished-roster objective, which was built, graded
+// against `pick6 regret` and did not clear its gate — and which the drafter
+// then looked at and rejected outright. It stays in the tree as a documented
+// negative result and as the smaller step back than turning the whole sim off,
+// and it stays OFF.
+func applyBrain(s *engine.State, survival, scorer, replaying string, seed int64) error {
+	switch scorer {
+	case "pair", "":
+		s.Scorer = engine.ScorerPair
+	case "roster":
+		s.Scorer = engine.ScorerRoster
+	default:
+		return fmt.Errorf("-scorer must be pair or roster, not %q", scorer)
+	}
 	switch survival {
 	case "adp":
 		s.Survival = engine.SurvivalADP
@@ -207,6 +226,10 @@ func applySim(s *engine.State, survival, replaying string, seed int64) error {
 	s.Survival = engine.SurvivalSim
 	s.SimSeed = seed
 	s.OffBoard = loadEscape(replaying)
+	if s.Scorer == engine.ScorerRoster {
+		note("scorer", "roster", "milestone 8's finished-team objective — built, graded, and off by "+
+			"default: it did not beat the pair score on either causal fold of `pick6 regret`")
+	}
 	if s.OffBoard == nil {
 		// Two states share this nil and the advice differs: no file means fetch
 		// hasn't measured, while a replay can hold every measured draft out —
@@ -229,6 +252,12 @@ func applySim(s *engine.State, survival, replaying string, seed int64) error {
 func survivalFlag(fs *flag.FlagSet) *string {
 	return fs.String("survival", "sim",
 		"survival model: sim (opponent-aware rollouts, the default) or adp (the v1 logistic)")
+}
+
+// scorerFlag declares -scorer alongside -survival, same one-declaration rule.
+func scorerFlag(fs *flag.FlagSet) *string {
+	return fs.String("scorer", "pair",
+		"decision score under -survival=sim: pair (milestone 7's two-leg score, the default) or roster (milestone 8's finished-team objective, which did not clear its gate)")
 }
 
 // sortEscapeRecs keeps escape.json diffable run to run.

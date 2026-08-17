@@ -19,6 +19,8 @@ func runLive(args []string) error {
 	poll := fs.Int("poll", 3, "seconds between polls (sleeper asks for 2-3+)")
 	replay := fs.Bool("replay", false, "load a finished draft once and print one frame (no tui)")
 	data := fs.Bool("data", false, "render the data tab instead of the board in replay mode")
+	tab, notes := tabFlag(fs), notesFlag(fs)
+	view, ranks := viewFlag(fs), rankingsFlag(fs)
 	// Matching board's, and here for the same reason -data landed here: the
 	// overlay's taken rows carry the pick that took a man, and a board with no
 	// picks in it cannot show one. A replayed draft is the only headless frame
@@ -26,7 +28,7 @@ func runLive(args []string) error {
 	search := fs.String("search", "", "with -replay: open the search overlay on this query")
 	selected := fs.String("selected", "", "with -replay: select this query's best match, prompt closed")
 	room := roomFlag(fs)
-	survival := survivalFlag(fs)
+	survival, scorer := survivalFlag(fs), scorerFlag(fs)
 	width := fs.Int("width", 92, "board width for replay mode")
 	height := fs.Int("height", 40, "board height for replay mode")
 	// Go's flag package stops parsing at the first positional argument, so
@@ -75,7 +77,7 @@ func runLive(args []string) error {
 	}
 	// The draft id is the hold-out for the escape rates exactly as it is for the
 	// room curve, and it seeds the rollouts so a re-render never jiggles.
-	if err := applySim(s, *survival, draftID, simSeedOf(draftID)); err != nil {
+	if err := applyBrain(s, *survival, *scorer, draftID, simSeedOf(draftID)); err != nil {
 		return err
 	}
 
@@ -123,10 +125,9 @@ func runLive(args []string) error {
 		// finished: the frame you eyeball has to advertise the keys the live
 		// board binds, not the mock's.
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Mode: ui.ModeLive, Fresh: loadFreshness()}
-		if *data {
-			b.Tab = 1
-		}
+			Mode: ui.ModeLive, Fresh: loadFreshness(), Notes: ui.Notes{Dir: notesDir(*notes)},
+			Views: ui.Views{Dir: rankingsDir(*ranks), Fetched: fetchedRankings()}}
+		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
 			b.Search = ui.Search{Open: true, Query: *search}
 		}
@@ -140,7 +141,9 @@ func runLive(args []string) error {
 	p := tea.NewProgram(
 		ui.NewLiveModel(s, feed, interval, false).
 			WithDraft(draft).
-			WithFreshness(loadFreshness()),
+			WithFreshness(loadFreshness()).
+			WithNotes(notesDir(*notes)).
+			WithRankings(rankingsDir(*ranks), fetchedRankings()),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()

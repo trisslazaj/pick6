@@ -33,11 +33,13 @@ func runBoard(args []string) error {
 	lineup := fs.String("lineup", "", "starting slots, e.g. \"qb rb rb wr wr te flex flex k def\"")
 	bench := fs.Int("bench", 0, "bench spots; only read with -lineup")
 	room := roomFlag(fs)
-	survival := survivalFlag(fs)
+	survival, scorer := survivalFlag(fs), scorerFlag(fs)
 	snapshot := fs.Bool("snapshot", false, "print one frame and exit (no tui)")
 	search := fs.String("search", "", "with -snapshot: open the search overlay on this query")
 	selected := fs.String("selected", "", "with -snapshot: select this query's best match, prompt closed")
 	data := fs.Bool("data", false, "with -snapshot: render the data tab instead of the board")
+	tab, notes := tabFlag(fs), notesFlag(fs)
+	view, ranks := viewFlag(fs), rankingsFlag(fs)
 	width := fs.Int("width", 100, "terminal width for snapshot mode")
 	height := fs.Int("height", 40, "terminal height for snapshot mode")
 	if err := fs.Parse(args); err != nil {
@@ -76,7 +78,7 @@ func runBoard(args []string) error {
 	s := engine.New(players, *teams, *rounds, *slot)
 	s.SetRoster(roster)
 	s.Demand = leagueDemand()
-	if err := applySim(s, *survival, "", 0); err != nil {
+	if err := applyBrain(s, *survival, *scorer, "", 0); err != nil {
 		return err
 	}
 
@@ -86,10 +88,9 @@ func runBoard(args []string) error {
 	// command's whole point and it is the one pane no scripted draft can reach.
 	if *snapshot {
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Mode: ui.ModeManual, Fresh: loadFreshness()}
-		if *data {
-			b.Tab = 1
-		}
+			Mode: ui.ModeManual, Fresh: loadFreshness(), Notes: ui.Notes{Dir: notesDir(*notes)},
+			Views: ui.Views{Dir: rankingsDir(*ranks), Fetched: fetchedRankings()}}
+		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
 			b.Search = ui.Search{Open: true, Query: *search}
 		}
@@ -101,7 +102,7 @@ func runBoard(args []string) error {
 	}
 
 	p := tea.NewProgram(
-		ui.NewManualModel(s).WithFreshness(loadFreshness()),
+		ui.NewManualModel(s).WithFreshness(loadFreshness()).WithNotes(notesDir(*notes)).WithRankings(rankingsDir(*ranks), fetchedRankings()),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()

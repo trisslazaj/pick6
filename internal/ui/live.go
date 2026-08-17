@@ -40,6 +40,19 @@ func NewLiveModel(s *engine.State, feed sleeper.Feed, pollSeconds int, once bool
 	}
 }
 
+// WithNotes points the notes tab at a folder.
+func (m LiveModel) WithNotes(dir string) LiveModel {
+	m.board.Notes.Dir = dir
+	return m
+}
+
+// WithRankings points the data tab's file views at a folder of csvs, plus the
+// file fetch loaded.
+func (m LiveModel) WithRankings(dir, fetched string) LiveModel {
+	m.board.Views.Dir, m.board.Views.Fetched = dir, fetched
+	return m
+}
+
 func (m LiveModel) Init() tea.Cmd { return m.pollNow() }
 
 func (m LiveModel) pollNow() tea.Cmd {
@@ -71,7 +84,13 @@ func (m LiveModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.board.Status = "refreshing"
 			return m, m.pollNow()
+		case "e":
+			return m, m.board.EditNote()
 		}
+		return m, nil
+
+	case editDoneMsg:
+		m.board.Status = editStatus(msg)
 		return m, nil
 
 	case tickMsg:

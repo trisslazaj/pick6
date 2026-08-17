@@ -194,7 +194,7 @@ func runFetch(args []string) error {
 		Players:      len(players),
 		TotalDrafts:  primary.TotalDrafts,
 		ADPWindowEnd: windowEnd,
-		TiersFile:    *rankFile,
+		TiersFile:    absPath(*rankFile),
 		TiersMod:     adp.ModTime(*rankFile),
 		SleeperMod:   adp.ModTime(filepath.Join(dir, sleeper.PlayersCache)),
 	}
@@ -631,4 +631,16 @@ func repriceFromSleeper(players map[string]*adp.Player, ix *rankings.Index, src,
 		}
 	}
 	return nil
+}
+
+// absPath is the flag's path made absolute, so the data tab can find the file
+// from whatever directory the draft is run in; "" stays "".
+func absPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if a, err := filepath.Abs(p); err == nil {
+		return a
+	}
+	return p
 }

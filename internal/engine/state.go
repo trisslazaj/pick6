@@ -24,13 +24,12 @@ type Player struct {
 	// ADPEff is ADP as THIS room prices it: the national number blended with
 	// where the k-th player at his position actually goes in this league's own
 	// completed drafts (adp.RoomCurve). It is populated by default on mock and
-	// live, but only for the top adp.RoomWarpTopK players at each position —
-	// past there the room's curve measured worse than the market, so everyone
-	// deeper keeps a zero here on purpose.
+	// live, at every depth the curve reaches — the top-k cap this comment used
+	// to describe won one fold, lost both causal ones, and was retracted along
+	// with the constant that named it.
 	//
-	// 0 therefore means "no warp for this man": he is outside the top of his
-	// position, the curve never reached his rank, no draft is cached, or
-	// `-room=false`. Every one of those is the same instruction — price him off
+	// 0 therefore means "no warp for this man": the curve never reached his
+	// rank, no draft is cached, or `-room=false`. Every one of those is the same instruction — price him off
 	// raw ADP — which is what price() does.
 	//
 	// Exactly two things read it, PSurviveAt and Falling, and that is the whole
@@ -108,6 +107,12 @@ type State struct {
 	// logistic + tilt. Sim is the product default and the cmd layer sets it;
 	// the engine's own zero value stays adp so the v1 math keeps its tests.
 	Survival string
+	// Scorer selects the decision score under sim: the ZERO VALUE is
+	// ScorerPair, milestone 7's two-leg pair score, and ScorerRoster is
+	// milestone 8's finished-roster objective. It does nothing under adp, which
+	// has one formula and keeps it wholesale. See the constants for why the new
+	// one is off.
+	Scorer string
 	// SimSeed is the base the per-vantage rollout seed mixes from, so a mock
 	// or a test can replay identical futures. Zero is a fine base; what matters
 	// is that the seed is derived, never wall-clock — a keypress re-render must
@@ -424,44 +429,63 @@ func (s *State) FilledSlots(slot int) (filled []string, bench []string) {
 // existed.
 func (s *State) fillSlots(ids []string) (filled []string, bench []string) {
 	filled = make([]string, len(s.Roster.Slots))
-	used := map[string]bool{}
-
-	// Dedicated slots first, so a flex-eligible player never squats on a flex
-	// slot while his own position sits open.
-	for i, want := range s.Roster.Slots {
-		if isFlexSlot(want) {
-			continue
-		}
-		for _, id := range ids {
-			if used[id] {
-				continue
-			}
-			if s.Players[id].Pos == want {
-				filled[i] = id
-				used[id] = true
-				break
-			}
-		}
-	}
-	for i, want := range s.Roster.Slots {
-		if !isFlexSlot(want) {
-			continue
-		}
-		for _, id := range ids {
-			if used[id] || !EligibleFor(want, s.Players[id].Pos) {
-				continue
-			}
-			filled[i] = id
-			used[id] = true
-			break
-		}
-	}
-	for _, id := range ids {
-		if !used[id] {
+	used := make([]bool, len(ids))
+	s.assign(ids, filled, used, make([]string, len(ids)))
+	for i, id := range ids {
+		if !used[i] {
 			bench = append(bench, id)
 		}
 	}
 	return filled, bench
+}
+
+// assign is the fill rule itself, over buffers the caller owns. It exists as a
+// separate function for one reason: the milestone-8 rollouts run it a few
+// hundred thousand times per pick event — once per simulated opponent pick, to
+// price that seat's need — and the map lookups and allocations fillSlots used to
+// do inside its inner loop were most of the cost of the whole objective.
+//
+// The buffers are `filled` (one per lineup slot), and `used`/`pos` (one per id).
+// pos is filled first so a player's position costs ONE map lookup rather than
+// one per slot it is compared against; `used` is indexed by position in `ids`
+// rather than keyed by player, which is the same thing for a roster (no team
+// holds a player twice) and free.
+func (s *State) assign(ids []string, filled []string, used []bool, pos []string) {
+	for i, id := range ids {
+		pos[i] = s.Players[id].Pos
+		used[i] = false
+	}
+	for i := range filled {
+		filled[i] = ""
+	}
+	// Dedicated slots first, so a flex-eligible player never squats on a flex
+	// slot while his own position sits open.
+	for si, want := range s.Roster.Slots {
+		if isFlexSlot(want) {
+			continue
+		}
+		for i := range ids {
+			if used[i] || pos[i] != want {
+				continue
+			}
+			filled[si] = ids[i]
+			used[i] = true
+			break
+		}
+	}
+	for si, want := range s.Roster.Slots {
+		if !isFlexSlot(want) {
+			continue
+		}
+		for i := range ids {
+			if used[i] || !EligibleFor(want, pos[i]) {
+				continue
+			}
+			filled[si] = ids[i]
+			used[i] = true
+			break
+		}
+	}
 }
 
 // UnfilledStarters lists the starting slots a team still has open, in lineup

@@ -227,7 +227,14 @@ func leftPane(line string) string {
 func choiceOrder(view string) []string {
 	var out []string
 	for _, line := range strings.Split(view, "\n") {
-		if m := choiceRowRe.FindStringSubmatch(leftPane(line)); m != nil {
+		l := leftPane(line)
+		// The ranking ends where the field blocks begin: everything under
+		// "the room" / "tiers" / "what's left" is the board, not the ranking.
+		if strings.HasPrefix(l, "the room before") || strings.HasPrefix(l, "tiers —") ||
+			strings.HasPrefix(l, "what's left") {
+			break
+		}
+		if m := choiceRowRe.FindStringSubmatch(l); m != nil {
 			out = append(out, m[1])
 		}
 	}
@@ -552,7 +559,7 @@ func TestRunBannerDoesNotShoutAtATierThatHolds(t *testing.T) {
 // across the sweep is a truncation or a wrap — either of which reads as a
 // rendering fault rather than as a tight fit.
 func TestPlanLineNamesBothLegsByPick(t *testing.T) {
-	const legs = "plan  wr at 1.02 → rb at 2.03"
+	const legs = "plan  wr 1.02 → rb 2.03"
 	for _, w := range []int{80, 92, 104, 140} {
 		view := ansi.ReplaceAllString(
 			Board{State: lookaheadState(), Width: w, Height: 40}.View(), "")

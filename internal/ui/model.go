@@ -56,6 +56,19 @@ func (m Model) WithFreshness(f Freshness) Model {
 	return m
 }
 
+// WithNotes points the notes tab at a folder. Both models take it the same way.
+func (m Model) WithNotes(dir string) Model {
+	m.board.Notes.Dir = dir
+	return m
+}
+
+// WithRankings points the data tab's file views at a folder of csvs, plus the
+// file fetch loaded. Both models take it the same way.
+func (m Model) WithRankings(dir, fetched string) Model {
+	m.board.Views.Dir, m.board.Views.Fetched = dir, fetched
+	return m
+}
+
 func (m Model) Init() tea.Cmd {
 	if m.auto {
 		return m.tick()
@@ -108,7 +121,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.board.Status = "undid last pick"
 			m.board.Synced = time.Now()
 			return m, nil
+		case "e":
+			return m, m.board.EditNote()
 		}
+		return m, nil
+
+	case editDoneMsg:
+		m.board.Status = editStatus(msg)
 		return m, nil
 
 	case tickMsg:
