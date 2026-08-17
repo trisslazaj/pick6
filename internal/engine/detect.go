@@ -200,15 +200,24 @@ func (s *State) expectedInWindow(pos string) float64 {
 	type pricedPlayer struct {
 		adp float64
 		pos string
+		id  string
 	}
 	var priced []pricedPlayer
 	for id, p := range s.Players {
 		if s.Taken[id] || p.ADP <= 0 {
 			continue
 		}
-		priced = append(priced, pricedPlayer{p.ADP, p.Pos})
+		priced = append(priced, pricedPlayer{p.ADP, p.Pos, id})
 	}
-	sort.Slice(priced, func(i, j int) bool { return priced[i].adp < priced[j].adp })
+	// Same id tiebreak Available() uses: two players priced identically at the
+	// window's cutoff would otherwise land on either side of it depending on map
+	// order, and the gate would flicker between renders on nothing.
+	sort.Slice(priced, func(i, j int) bool {
+		if priced[i].adp != priced[j].adp {
+			return priced[i].adp < priced[j].adp
+		}
+		return priced[i].id < priced[j].id
+	})
 	if len(priced) > RunWindow {
 		priced = priced[:RunWindow]
 	}

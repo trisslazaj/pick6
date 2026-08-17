@@ -36,14 +36,23 @@ func (s *State) RoomForecast() []PickForecast {
 	}
 	t := s.simFor()
 	at := s.ActPick()
+	// Walk the removals in id order rather than map order, the same reason
+	// lookahead.go's modalID sorts: two men removed at a pick equally often
+	// would otherwise hand "likely gone" a different name every render.
+	ids := make([]string, 0, len(t.removals))
+	for id := range t.removals {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
 	var out []PickForecast
 	for _, q := range t.oppPicks {
 		if q >= at {
 			break
 		}
 		f := PickForecast{PickNo: q, Slot: s.SlotAt(q), Mix: map[string]float64{}}
-		total := 0
-		for id, row := range t.removals {
+		total, bestC := 0, 0
+		for _, id := range ids {
+			row := t.removals[id]
 			i := q - t.pickNo
 			if i < 0 || i >= len(row) || row[i] == 0 {
 				continue
@@ -51,13 +60,15 @@ func (s *State) RoomForecast() []PickForecast {
 			c := int(row[i])
 			total += c
 			f.Mix[s.Players[id].Pos] += float64(c) / Rollouts
-			if c > int(f.PlayerShare*Rollouts) {
-				f.PlayerID, f.PlayerShare = id, float64(c)/Rollouts
+			if c > bestC {
+				f.PlayerID, f.PlayerShare, bestC = id, float64(c)/Rollouts, c
 			}
 		}
 		f.OffBoard = float64(Rollouts-total) / Rollouts
-		for pos, share := range f.Mix {
-			if share > f.Share {
+		// Positions in planPositions order, modalPos's tiebreak, so an exact tie
+		// between two positions names the same one twice running.
+		for _, pos := range forecastPositions(f.Mix) {
+			if share := f.Mix[pos]; share > f.Share {
 				f.Pos, f.Share = pos, share
 			}
 		}
@@ -67,6 +78,33 @@ func (s *State) RoomForecast() []PickForecast {
 		out = append(out, f)
 	}
 	return out
+}
+
+// forecastPositions is the mix's positions in planPositions order, with anything
+// planPositions doesn't know sorted after it by name so a stray position is
+// still reported rather than dropped.
+func forecastPositions(mix map[string]float64) []string {
+	out := make([]string, 0, len(mix))
+	for _, pos := range planPositions {
+		if _, ok := mix[pos]; ok {
+			out = append(out, pos)
+		}
+	}
+	var rest []string
+	for pos := range mix {
+		known := false
+		for _, p := range planPositions {
+			if p == pos {
+				known = true
+				break
+			}
+		}
+		if !known {
+			rest = append(rest, pos)
+		}
+	}
+	sort.Strings(rest)
+	return append(out, rest...)
 }
 
 // ExpectedRemovals sums the forecast: how many of each position the window is

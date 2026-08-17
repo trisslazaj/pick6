@@ -271,6 +271,12 @@ func (s *State) ApplyRemote(r RemotePick) error {
 	if s.Taken[r.PlayerID] {
 		return nil // already applied; polling returns the full list every time
 	}
+	// SlotAt indexes Order off the pick number, so a pick number outside the
+	// draft indexes outside the slice: pick 0 asks for Order[-1] and panics
+	// rather than reporting the nonsense it was handed.
+	if last := s.Teams * s.Rounds; r.PickNo < 1 || r.PickNo > last {
+		return fmt.Errorf("pick %d is outside this draft (1..%d)", r.PickNo, last)
+	}
 	if want := s.SlotAt(r.PickNo); want != r.Slot {
 		return fmt.Errorf("draft order desync at pick %d: feed says slot %d, snake math says %d",
 			r.PickNo, r.Slot, want)

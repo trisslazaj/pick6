@@ -38,6 +38,13 @@ type Meta struct {
 	TiersFile  string    `json:"tiers_file"` // "" when no rankings file was given
 	TiersMod   time.Time `json:"tiers_modified"`
 	SleeperMod time.Time `json:"sleeper_modified"`
+
+	// PriceFile is the fantasypros export the board's price ORDER came from —
+	// separate from TiersFile, which is a rankings csv and a different input
+	// entirely. "" when the board stayed on ffc's own price (`-adp ffc`, or no
+	// export found for the season).
+	PriceFile string    `json:"price_file"`
+	PriceMod  time.Time `json:"price_modified"`
 }
 
 // Age is how long ago the board was built.

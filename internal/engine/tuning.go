@@ -66,11 +66,9 @@ const (
 	// arithmetic of having no spare picks at all.
 	EndgameSlack = 0.5
 
-	// Tiers. Mirrored in internal/adp, which precomputes them at fetch time.
-	TierDropPct  = 0.10
-	TierFloorPct = 0.015
-	TierMaxSize  = 8
-	TierMinSize  = 2
+	// Tiers live in internal/adp (TierDropPct/TierFloorPct/TierMaxSize/
+	// TierMinSize), which precomputes them at fetch time; the engine never
+	// reads these numbers, only the tier each player already carries.
 
 	// ByeConflictThreshold is how many starters must share a bye week before it's
 	// worth saying anything. Two is unremarkable across a nine-slot lineup; three
@@ -162,35 +160,13 @@ const (
 	CandidatePool = 25
 	Rollouts      = 500
 
-	// Milestone 7 (the conditioned lookahead, lookahead.go). PlanDepth is how
-	// many of MY OWN picks a plan rollout plays through. Two ships; the
-	// three-leg variant is implemented and tested (TestConditionedPlanAtDepthThree)
-	// and stays off.
-	//
-	// It is off despite clearing the spec's stated bar. The wheel is where the
-	// spec said to look and it looked back loudly: over 54 scripted frames at
-	// slots 1 and 12, depth 3 changes the FIRST leg on 16 of them, and every
-	// flip moves away from running back — which is what you would expect at the
-	// wheel, where two back-to-back picks let you double-tap the deep position
-	// later and take the scarce one now. That is a real strategic argument.
-	//
-	// What is missing is evidence it is RIGHT, and this repo does not ship a
-	// change of that size on plausibility (see the room warp's cap, which won
-	// on one fold, was kept as never-worse, and was eventually retracted). A
-	// decision score has no labels, so the only honest promotion path is a
-	// scenario fixture like the depth-2 one in dod_test.go, showing a wheel
-	// frame where depth 2 is demonstrably wrong and depth 3 is right. Two
-	// confounds to separate first: mustFill is computed FROM the leg count, so
-	// depth 3 carries one more unit of feasibility pressure at the endgame and
-	// some of those 16 flips may be that rather than the third leg; and the
-	// cost is 115ms per pick event against 36ms, past the spec's ~50ms budget,
-	// so promotion means dropping PlanRollouts too.
-	// PlanDepth is RETIRED as of milestone 8 and kept only as documentation of
-	// a question that dissolved. The conditioned rollouts now run to my LAST
-	// pick, because the thing being scored is the finished roster; there is no
-	// depth to choose, no third leg to promote, and no mustFill-versus-horizon
-	// confound to separate. Nothing reads it.
-	PlanDepth = 2
+	// Milestone 7 shipped a two-own-pick plan rollout (lookahead.go); a
+	// three-leg variant was built, tested, and never promoted for lack of a
+	// scenario fixture proving it right rather than merely plausible (see the
+	// room warp's cap, which met the same fate). Milestone 8 retired the whole
+	// question: the conditioned rollouts now run to my LAST pick, because the
+	// thing being scored is the finished roster, so there is no leg depth to
+	// choose or promote.
 )
 
 // The two numbers a harness sweeps rather than a reader tunes. Vars, not

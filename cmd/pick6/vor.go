@@ -40,7 +40,7 @@ func leagueDemand() map[string]int {
 // The number comes from the engine itself, over a throwaway state holding the
 // board fetch just built — a second implementation here would be a second thing
 // to keep in step, and this printout exists precisely to verify the first one.
-func printReplacement(players map[string]*adp.Player) {
+func printReplacement(players map[string]*adp.Player, teams int) {
 	// Not leagueDemand: fetch is the command allowed to PULL these drafts, and it
 	// is the run that warms the cache the board then reads offline. Calling the
 	// board's disk-only version here would report "no cached drafts" on a fresh
@@ -51,12 +51,14 @@ func printReplacement(players map[string]*adp.Player) {
 	if len(demand) == 0 {
 		source = "the league lineup shape (no cached drafts)"
 	}
-	// Teams and Roster are only read by the engine's lineup-shape fallback, which
-	// fires here exactly when the measured table has no entry for a position.
-	// fetch has no draft metadata to read a real shape from — live does — so the
+	// Roster is only read by the engine's lineup-shape fallback, which fires
+	// here exactly when the measured table has no entry for a position. fetch
+	// has no draft metadata to read a real shape from — live does — so the
 	// default stands in, and the row says "shape" when it is the one answering.
+	// Teams is real: fetch's own -teams flag, threaded through rather than
+	// hardcoded, since startable-slot replacement (qb/k/def) scales with it.
 	s := engine.State{Players: map[string]engine.Player{}, Demand: demand,
-		Teams: 12, Roster: engine.DefaultRoster}
+		Teams: teams, Roster: engine.DefaultRoster}
 	byPos := map[string][]*adp.Player{}
 	for _, p := range players {
 		s.Players[p.SleeperID] = engine.Player{ID: p.SleeperID, Pos: p.Pos, Value: p.Value}

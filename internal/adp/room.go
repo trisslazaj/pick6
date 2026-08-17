@@ -234,13 +234,11 @@ type RoomRow struct {
 // rows the curve actually covers — a caller can then leave everyone else on raw
 // adp without deciding what "uncovered" means.
 //
-// `pick6 calibrate` is its only caller and the only one it should ever have: at
-// full depth this is the variant the 2024 gate rejected, so it survives as a
-// comparison row in the model table and nothing else. The board prices
-// EffectiveADPTopK. Note that it is also the variant that WINS on both causal
-// folds — keeping the rejected model scored next to the shipped one is exactly
-// what made that visible, and RoomWarpTopK carries what is left of the case for
-// capping anyway.
+// This is what the board prices: `loadBoard` (cmd/pick6/mock.go) calls it on
+// every mock/board/live startup unless `-room=false`, and `pick6 regret` prices
+// its era boards the same way. `pick6 calibrate` also scores it at full depth —
+// the variant that WINS on both causal folds, against EffectiveADPTopK's
+// retracted cap, which survives only as calibrate's comparison row.
 //
 // Rank is by adp WITHIN the position, over the board rows handed in, which is the
 // only rank that lines up with adp_room's own definition: adp_room(WR, 5) is where
@@ -256,11 +254,10 @@ func (c RoomCurve) EffectiveADP(rows []RoomRow) map[string]float64 {
 }
 
 // EffectiveADPTopK is that warp restricted to the first maxK players at each
-// position (0 means no limit). At maxK = RoomWarpTopK this is the warp the board
-// ships with: `loadBoard` calls it on every mock and live startup unless
-// `-room=false`, and `pick6 calibrate` grades the same call as the row that wins
-// the 3a gate. One function, so the graded variant and the priced one cannot
-// drift apart.
+// position (0 means no limit). It is the retracted top-5 cap, and today its
+// only callers are `pick6 calibrate`'s comparison row (at the retracted
+// cutoff) and its cutoff sweep — nothing prices the live board with it. One
+// function, so the graded variant and the retracted one cannot drift apart.
 func (c RoomCurve) EffectiveADPTopK(rows []RoomRow, maxK int) map[string]float64 {
 	return c.effectiveADP(rows, maxK)
 }

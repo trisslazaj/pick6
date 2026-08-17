@@ -79,9 +79,12 @@ func nextFilter(cur string) string {
 }
 
 // dataRows is every available player under the current filter, best value
-// first — the same comparator Available uses, so the two tabs agree. The adp
-// view sorts the same rows by price instead, cheapest first, value breaking
-// ties; the undrafted (no adp) sink to the bottom either way.
+// first — the same comparator Available uses, so the two tabs agree, except
+// that here an undrafted player (adp <= 0) is priced at UndraftedADP before
+// comparing rather than left at raw adp, which is what sinks him to the bottom
+// instead of the top. The adp view sorts the same rows by price instead,
+// cheapest first, value breaking ties; the undrafted sink to the bottom
+// either way.
 func (b Board) dataRows() []engine.Player {
 	s := b.State
 	var out []engine.Player

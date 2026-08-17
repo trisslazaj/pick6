@@ -585,9 +585,13 @@ func scoutTally(picks []scoutPick, draftRounds map[string]int) (scoutBaseline, [
 		leagueCount[pos] = make([]int, maxRound)
 	}
 	for _, k := range seatOrder {
-		for pos, r := range firstAt[k] {
-			if leagueCount[pos] == nil {
-				leagueCount[pos] = make([]int, maxRound)
+		// scoutFirstPositions only — a rb/wr "first pick" curve says nothing
+		// (everyone takes one in round 1 or 2) and firstAt tracks every position
+		// firstAt is keyed on, not just the profiled four.
+		for _, pos := range scoutFirstPositions {
+			r, ok := firstAt[k][pos]
+			if !ok {
+				continue
 			}
 			for i := r - 1; i < maxRound; i++ {
 				if i >= 0 {

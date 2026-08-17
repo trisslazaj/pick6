@@ -26,7 +26,8 @@ import (
 //   - The replacement discount. The later legs actually fill the positions R was
 //     a stand-in for filling. R survives inside the leg POLICY, where a
 //     heuristic belongs.
-//   - PlanDepth and the third-leg promotion question. There is no depth to pick.
+//   - The plan-depth constant and the third-leg promotion question (milestone 7's
+//     PlanDepth, since deleted). There is no depth to pick.
 //
 // It changes the DECISION score and nothing else. Survival, urgency, tier holds
 // and the banners keep reading survivalAt; if a change in this file moves a

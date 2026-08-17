@@ -15,23 +15,30 @@ import (
 )
 
 // FantasyPros' overall adp table, exported by hand as a csv, read here as a
-// BACKTEST board and nothing else.
+// backtest board and — since `fetch -adp sleeper` — as the live board's price
+// ORDER (see below).
 //
 // WHY IT EXISTS. Every gate in this project has rested on one fold: the user's
 // 2024 draft, scored against era-correct ffc 2024 prices. Ffc's archive has no
 // 2025 — all four formats answer `{"status":"Error","errors":"No ADP data
-// found."}`, rechecked 2026-07-30, while 2023 and 2024 both work — and the draft
-// that matters most is a 2025 one: `1261824503076360192`, the same twelve
+// found."}`, rechecked 2026-07-30 (that expired 2026-08-11: FFC now serves 2025
+// and loadEraBoard prefers it, so this is the fallback), while 2023 and 2024
+// both work — and the draft that matters most is a 2025 one: `1261824503076360192`, the same twelve
 // managers this user drafts against in 2026. A hand-exported 2025 board is the
 // only way to score it, and a second fold is the only way to tell a real edge
 // from a lucky one.
 //
-// WHAT IT IS NOT: a price source for the live board. There is no `stdev`, no
-// `times_drafted`, no `high`/`low`, so a fold priced off it runs every player on
-// SigmaDefault and cannot referee SigmaMin, SigmaMax, the shrink or the support
-// floor. It CAN referee the tilt, EBest, the conditioning, the room warp and the
-// need weights, which is most of the engine. `pick6 calibrate` is the only
-// caller and says which regime it is in on every run.
+// WHAT IT IS, AND ISN'T, ANYMORE. Since `fetch -adp sleeper` (overlay.go) it IS
+// a price-ORDER source for the live board: `OverlayADP` maps this file's
+// Sleeper column's ORDER onto FFC's own distribution, so what it contributes is
+// rank, not units — the priced values stay FFC's. It is not, and never was, a
+// source of `stdev`/`times_drafted`/`high`/`low`, so a fold priced directly off
+// it runs every player on SigmaDefault and cannot referee SigmaMin, SigmaMax,
+// the shrink or the support floor; it CAN referee the tilt, EBest, the
+// conditioning, the room warp and the need weights. The other callers reach it
+// through cmd/pick6's loadEraBoard — calibrate, regret and fetch's escape build
+// — as the era board for a season FFC cannot serve; calibrate says which regime
+// each fold is in on every run.
 //
 // WHERE THE FILE LIVES: not in this repo. It is FantasyPros' data and this is a
 // public repository, so calibrate reads it out of the cache dir — see

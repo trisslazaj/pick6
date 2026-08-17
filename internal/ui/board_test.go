@@ -1347,3 +1347,48 @@ func TestPlanOddsDropBeforeThePlanDoes(t *testing.T) {
 		}
 	}
 }
+
+// "both wr slots open" is a claim about the LINEUP, and it was written as a
+// claim about the count: two-or-more open said "both". A sleeper 3-WR roster
+// prints it over three open receiver slots at 1.01, and fpl's five-defender
+// quota is worse. "both" now needs the position to have exactly two dedicated
+// slots with both of them open; anything else counts out loud.
+func TestSlotClauseCountsSlotsItCannotCallBoth(t *testing.T) {
+	cases := []struct {
+		name  string
+		slots []string
+		mine  []string
+		pos   string
+		want  string
+	}{
+		{"two dedicated, both open", []string{"QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "K", "DEF"},
+			nil, "WR", "both wr slots open"},
+		{"three dedicated, three open", []string{"QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "K", "DEF"},
+			nil, "WR", "3 wr slots open"},
+		{"three dedicated, two open", []string{"QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "K", "DEF"},
+			[]string{"WR"}, "WR", "2 wr slots open"},
+		{"three dedicated, one open", []string{"QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "K", "DEF"},
+			[]string{"WR", "WR"}, "WR", "fills your wr slot"},
+		{"one dedicated, one open", []string{"QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "K", "DEF"},
+			nil, "TE", "fills your te slot"},
+	}
+	for _, c := range cases {
+		players, add := newBoard()
+		add("wr1", "WR", 60, 5, 4, 1)
+		add("te1", "TE", 55, 6, 4, 1)
+		for i, pos := range c.mine {
+			add(fmt.Sprintf("mine%d", i), pos, 500, 1, 4, 1)
+		}
+		s := engine.New(players, 12, 15, 3)
+		s.Roster = engine.Roster{Slots: c.slots, Bench: 6}
+		s.PickNo = 3
+		for i := range c.mine {
+			id := fmt.Sprintf("mine%d", i)
+			s.Taken[id] = true
+			s.Rosters[3] = append(s.Rosters[3], id)
+		}
+		if got := (Board{State: s}).slotClause(c.pos); got != c.want {
+			t.Errorf("%s: slotClause(%s) = %q, want %q", c.name, c.pos, got, c.want)
+		}
+	}
+}
