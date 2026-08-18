@@ -73,7 +73,7 @@ func TestDataViewFilterCycles(t *testing.T) {
 	if strings.Contains(view, "fake wr") {
 		t.Error("rb filter should hide receivers")
 	}
-	for i := 0; i < len(dataFilters)-1; i++ {
+	for i := 0; i < len(m.board.dataFilters())-1; i++ {
 		m = send(m, key("p"))
 	}
 	if !strings.Contains(ansi.ReplaceAllString(m.View(), ""), "all players") {

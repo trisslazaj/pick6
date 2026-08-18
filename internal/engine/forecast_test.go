@@ -64,7 +64,7 @@ func TestRoomForecastIsSimOnly(t *testing.T) {
 // removed at a pick equally often then swapped places between renders, and
 // "likely gone" named a different man each time. Ties resolve the way
 // lookahead.go's modalID and modalPos resolve them: id order for players,
-// planPositions order for positions.
+// lineup order for positions.
 func TestRoomForecastBreaksTiesTheSameWayEveryTime(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -81,7 +81,7 @@ func TestRoomForecastBreaksTiesTheSameWayEveryTime(t *testing.T) {
 			wantShare: 1,
 		},
 		{
-			name:      "two positions tied, planPositions order wins",
+			name:      "two positions tied, lineup order wins",
 			pos:       map[string]string{"aaa": "WR", "zzz": "RB"},
 			wantID:    "aaa",
 			wantPos:   "RB",

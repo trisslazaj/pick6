@@ -49,9 +49,37 @@ const (
 	ColInk = "#1A1B26"
 )
 
+// Every hue is still Sleeper's own, which is the whole principle: the board is
+// read beside another screen all night, and a receiver that is cyan here and
+// blue there costs a beat every glance. Fpl reuses them rather than inventing a
+// palette, because the four positions it needs are four Sleeper already has and
+// the eye has already learned them here.
 var posColor = map[string]string{
 	"QB": ColQB, "RB": ColRB, "WR": ColWR,
 	"TE": ColTE, "K": ColK, "DEF": ColDEF,
+}
+
+// fplColor is the second vocabulary, and it exists for ONE string.
+//
+// Gkp takes violet, the hue nfl spends on the kicker; mid takes mint, the
+// busiest position getting the colour nfl gives its busiest; fwd takes rose.
+// None of those collide, so they could have gone in the map above.
+//
+// DEF is why they didn't. It means opposite things in the two sports — one team
+// unit per club in nfl, a hundred and eighty-four outfield defenders in fpl —
+// and slate is the colour nfl gives it BECAUSE it is a unit you draft last and
+// think about least: the least saturated hue in the palette, twelve degrees of
+// hue and 1.7:1 of luminance from the dim prose it sits beside. That is exactly
+// right for a position rendered faint for twelve of sixteen rounds.
+//
+// On an fpl board it was unreadable. Defenders are a third of the pool, they are
+// never suppressed, and on the opening frame DEF is the TOP-RANKED position —
+// so the most important row on the board was the one row you could not see.
+// Eyeballed, not reasoned: `board -sport fpl -snapshot` through freeze.
+// Cornflower is nfl's receiver blue, which fpl leaves unemployed, and it is
+// clear of violet, mint and rose.
+var fplColor = map[string]string{
+	"GKP": ColK, "DEF": ColWR, "MID": ColRB, "FWD": ColQB,
 }
 
 // Pos styles a position tag or a player name in that position's colour.
@@ -69,8 +97,23 @@ var posColor = map[string]string{
 // K/DEF here, which was a belt on top of the one caller that asked with
 // Need == 0; a sport whose suppressed set is empty (or somebody else's) has
 // every right to un-faint everything.
-func Pos(pos string, suppressed bool) lipgloss.Style {
-	c, ok := posColor[pos]
+func Pos(pos string, suppressed bool) lipgloss.Style { return posStyle(posColor, pos, suppressed) }
+
+// PosFPL is Pos read in fpl's vocabulary, for the printers outside a Board.
+func PosFPL(pos string, suppressed bool) lipgloss.Style { return posStyle(fplColor, pos, suppressed) }
+
+// pos is Pos in whichever vocabulary THIS board is drawn in. Every renderer in
+// the package is a Board method, so this is the one every one of them calls and
+// the package function is left for `pick6 tiers`, which has no board.
+func (b Board) pos(pos string, suppressed bool) lipgloss.Style {
+	if b.State != nil && b.State.Roster.Quota {
+		return PosFPL(pos, suppressed)
+	}
+	return Pos(pos, suppressed)
+}
+
+func posStyle(palette map[string]string, pos string, suppressed bool) lipgloss.Style {
+	c, ok := palette[pos]
 	if !ok {
 		c = ColFG
 	}
@@ -110,3 +153,34 @@ var (
 			Foreground(lipgloss.Color(ColInk)).
 			Background(lipgloss.Color(ColDim))
 )
+
+// PriceNoun is what this board calls the number in its price column.
+//
+// Nfl's is an average draft position: pick units, a mean over a thousand real
+// drafts, with a measured spread under it. Fpl's is fpl's own draft_rank — an
+// ordering, and nothing but — so printing "adp 41.0" beside it claims a
+// measurement nobody made, and the ".0" claims a precision a rank does not have.
+//
+// The arithmetic around it survives the change and only the noun moves: a
+// ten-manager fpl draft spends 150 picks over the top 150 ranks, so "12 before
+// his price" reads as true there as it does on an adp board. What does not
+// survive is the decimal, hence Digits.
+//
+// One method rather than a sport flag threaded to eight print sites, because
+// eight print sites is how the verdict says rank and the search overlay says adp
+// about the same number.
+func (b Board) PriceNoun() string {
+	if b.State != nil && b.State.Roster.Quota {
+		return "rank"
+	}
+	return "adp"
+}
+
+// PriceFmt is "%.1f" for a measured mean and "%.0f" for a rank, because a
+// trailing .0 on an integer ordering is exactly the tell that it is a mean.
+func (b Board) PriceFmt() string {
+	if b.PriceNoun() == "rank" {
+		return "%.0f"
+	}
+	return "%.1f"
+}

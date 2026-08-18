@@ -27,11 +27,12 @@ import (
 // which has nothing to disagree with when the picks are yours.
 func runBoard(args []string) error {
 	fs := flagSet("board")
-	teams := fs.Int("teams", 12, "league size")
+	sportName := sportFlag(fs)
+	teams := fs.Int("teams", 0, "league size (default 12, or 10 under -sport fpl)")
 	rounds := fs.Int("rounds", 15, "rounds; defaults to lineup + bench when -lineup is given")
 	slot := fs.Int("slot", 1, "my draft slot, 1-indexed")
 	lineup := fs.String("lineup", "", "starting slots, e.g. \"qb rb rb wr wr te flex flex k def\"")
-	bench := fs.Int("bench", 0, "bench spots; only read with -lineup")
+	bench := fs.Int("bench", -1, "bench spots; only read with -lineup (default: the sport's own)")
 	room := roomFlag(fs)
 	survival, scorer := survivalFlag(fs), scorerFlag(fs)
 	snapshot := fs.Bool("snapshot", false, "print one frame and exit (no tui)")
@@ -45,6 +46,13 @@ func runBoard(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	sp, err := resolveSport(*sportName)
+	if err != nil {
+		return err
+	}
+	if *teams == 0 {
+		*teams = sp.teams
+	}
 	if *slot < 1 || *slot > *teams {
 		return fmt.Errorf("slot %d is outside a %d-team league", *slot, *teams)
 	}
@@ -54,14 +62,23 @@ func runBoard(args []string) error {
 	// looks: need() drives urgency, the roster pane, MustFillStarters and the
 	// endgame guard, and this user's 2025 league ran TWO flex slots against the
 	// one in the default shape.
-	roster := engine.DefaultRoster
+	roster := sp.roster
 	if *lineup != "" {
-		slots, err := parseLineup(*lineup)
+		slots, err := parseLineup(sp, *lineup)
 		if err != nil {
 			return err
 		}
-		roster = engine.Roster{Slots: slots, Bench: *bench}
-	} else if *bench != 0 {
+		// A -lineup with no -bench used to land on zero, which is a legal
+		// benchless roster: MustFillStarters then reads true from pick one and
+		// the endgame guard fires for the whole draft. Naming your lineup is not
+		// the same statement as "and no bench", so the sport's own bench stands
+		// until somebody says otherwise.
+		b := sp.roster.Bench
+		if *bench >= 0 {
+			b = *bench
+		}
+		roster = engine.Roster{Slots: slots, Bench: b, Quota: sp.roster.Quota, Hold: sp.roster.Hold}
+	} else if *bench >= 0 {
 		return fmt.Errorf("-bench only means something with -lineup")
 	}
 	// A lineup the draft is too short to fill is a board that spends the whole
@@ -71,14 +88,20 @@ func runBoard(args []string) error {
 		*rounds = len(roster.Slots) + roster.Bench
 	}
 
-	players, err := loadBoard(*room, "")
+	players, err := loadBoard(sp, *room, "")
 	if err != nil {
 		return err
 	}
 	s := engine.New(players, *teams, *rounds, *slot)
 	s.SetRoster(roster)
-	s.Demand = leagueDemand()
-	if err := applyBrain(s, *survival, *scorer, "", 0); err != nil {
+	if sp.demand {
+		// Inert under a quota anyway — vor only reads Demand for a position that
+		// can reach a flex slot, and a squad has none — but leaving the nfl
+		// table on an fpl board would be a measurement from another sport
+		// sitting in the state, waiting for a future roster shape to read it.
+		s.Demand = leagueDemand()
+	}
+	if err := applyBrain(s, sp, *survival, *scorer, "", 0); err != nil {
 		return err
 	}
 
@@ -88,8 +111,8 @@ func runBoard(args []string) error {
 	// command's whole point and it is the one pane no scripted draft can reach.
 	if *snapshot {
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Mode: ui.ModeManual, Fresh: loadFreshness(), Notes: ui.Notes{Dir: notesDir(*notes)},
-			Views: ui.Views{Dir: rankingsDir(*ranks), Fetched: fetchedRankings()}}
+			Mode: ui.ModeManual, Fresh: loadFreshness(sp), Notes: ui.Notes{Dir: notesDir(sp, *notes)},
+			Views: ui.Views{Dir: rankingsDir(sp, *ranks), Fetched: fetchedRankings(sp)}}
 		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
 			b.Search = ui.Search{Open: true, Query: *search}
@@ -102,7 +125,7 @@ func runBoard(args []string) error {
 	}
 
 	p := tea.NewProgram(
-		ui.NewManualModel(s).WithFreshness(loadFreshness()).WithNotes(notesDir(*notes)).WithRankings(rankingsDir(*ranks), fetchedRankings()),
+		ui.NewManualModel(s).WithFreshness(loadFreshness(sp)).WithNotes(notesDir(sp, *notes)).WithRankings(rankingsDir(sp, *ranks), fetchedRankings(sp)),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()
@@ -113,12 +136,12 @@ func runBoard(args []string) error {
 // refuses anything the engine cannot fill. A typo'd slot is worse than an error:
 // nothing is eligible for it, so it stays unfilled forever, MustFillStarters
 // fires for the rest of the draft and every need weight downstream is wrong.
-func parseLineup(s string) ([]string, error) {
+func parseLineup(sp sport, s string) ([]string, error) {
 	var out []string
 	for _, f := range strings.Fields(strings.ToUpper(s)) {
-		if !knownSlot(f) {
-			return nil, fmt.Errorf("unknown lineup slot %q — use qb rb wr te k def flex superflex",
-				strings.ToLower(f))
+		if !sp.knownSlot(f) {
+			return nil, fmt.Errorf("unknown lineup slot %q — use %s",
+				strings.ToLower(f), sp.slotVocab())
 		}
 		out = append(out, f)
 	}
@@ -126,14 +149,6 @@ func parseLineup(s string) ([]string, error) {
 		return nil, fmt.Errorf("-lineup is empty")
 	}
 	return out, nil
-}
-
-func knownSlot(s string) bool {
-	switch s {
-	case "QB", "RB", "WR", "TE", "K", "DEF", "FLEX", "SUPERFLEX":
-		return true
-	}
-	return false
 }
 
 // flagSet0 reports whether a flag was given on the command line, as opposed to

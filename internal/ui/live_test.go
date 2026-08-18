@@ -243,3 +243,72 @@ func TestLiveStopsPollingWhenComplete(t *testing.T) {
 		t.Error("the view should say polling has stopped")
 	}
 }
+
+// The whole fpl live path through the model, with no fpl in it: a feed that
+// returns snapshots, no sleeper draft metadata attached, and a quota squad.
+//
+// It exists because that combination is only ever exercised against the network
+// otherwise, and the two things it proves are the two the port rests on — the
+// model never asks whose api it is talking to, and with no draft metadata the
+// seat that picks is the seat that keeps, which is fpl's rule always.
+func TestLiveModelDrivesAQuotaSquadWithNoDraftMetadata(t *testing.T) {
+	players := map[string]engine.Player{}
+	for _, pos := range []string{"GKP", "DEF", "MID", "FWD"} {
+		for i := 0; i < 40; i++ {
+			id := pos + itoa2(i)
+			players[id] = engine.Player{ID: id, Name: strings.ToLower(id), Pos: pos,
+				Team: "AAA", Tier: i/4 + 1, Value: 9000 - i*100, ADP: float64(i + 1), Sigma: 6}
+		}
+	}
+	s := engine.New(players, 10, 15, 3)
+	s.SetRoster(engine.FPLRoster)
+
+	var picks []sleeper.DraftPick
+	for n := 1; n <= 12; n++ {
+		pos := []string{"MID", "FWD", "DEF"}[n%3]
+		picks = append(picks, pick(s, n, pos+itoa2(n), pos))
+	}
+	feed := &fakeFeed{snaps: []sleeper.Snapshot{{Status: "drafting", Picks: picks}}}
+
+	// No WithDraft: there is nothing to resolve a traded pick against, and fpl
+	// has no trades to resolve.
+	m := NewLiveModel(s, feed, 3, true)
+	m2, _ := m.Update(m.Init()())
+	m = m2.(LiveModel)
+
+	if m.desync != "" {
+		t.Fatalf("desync on a clean snake: %s", m.desync)
+	}
+	if m.applied != 12 {
+		t.Fatalf("applied %d of 12 picks", m.applied)
+	}
+	// Every pick landed on the seat that made it, which is the nil-draft rule.
+	for _, p := range picks {
+		found := false
+		for _, id := range s.Rosters[p.DraftSlot] {
+			found = found || id == p.PlayerID
+		}
+		if !found {
+			t.Errorf("pick %d (%s) did not land on seat %d", p.PickNo, p.PlayerID, p.DraftSlot)
+		}
+	}
+	// And the frame renders the squad's own vocabulary rather than football's.
+	view := ansi.ReplaceAllString(m.View(), "")
+	for _, want := range []string{"gkp", "def", "mid", "fwd"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("the frame never mentions %s", want)
+		}
+	}
+	for _, never := range []string{" rb ", " wr ", " qb ", " te "} {
+		if strings.Contains(view, never) {
+			t.Errorf("the frame mentions %q on a premier league board", never)
+		}
+	}
+}
+
+func itoa2(n int) string {
+	if n < 10 {
+		return "0" + string(rune('0'+n))
+	}
+	return string(rune('0'+n/10)) + string(rune('0'+n%10))
+}

@@ -280,7 +280,7 @@ func searchNameW(w int) int {
 
 func (b Board) searchRow(m searchMatch, cursor bool, w int) string {
 	s := b.State
-	style := Pos(m.Pos, s.Suppressed(m.Pos))
+	style := b.pos(m.Pos, s.Suppressed(m.Pos))
 	name := trunc(strings.ToLower(m.Name), searchNameW(w))
 
 	mark := "  "
@@ -307,7 +307,7 @@ func (b Board) searchRow(m searchMatch, cursor bool, w int) string {
 			parts = append(parts, fmt.Sprintf("tier %d", m.Tier))
 		}
 		if m.ADP > 0 {
-			parts = append(parts, fmt.Sprintf("adp %.1f", m.ADP))
+			parts = append(parts, fmt.Sprintf("%s "+b.PriceFmt(), b.PriceNoun(), m.ADP))
 		}
 		facts = Dim.Render(strings.Join(parts, " · "))
 		if len(parts) > 0 {
@@ -335,7 +335,7 @@ func (b Board) selectedLine(w int) string {
 	if !ok {
 		return ""
 	}
-	style := Pos(p.Pos, b.State.Suppressed(p.Pos))
+	style := b.pos(p.Pos, b.State.Suppressed(p.Pos))
 	id := "  " + Dim.Render("selected  ") +
 		style.Render(strings.ToLower(p.Pos)+" "+strings.ToLower(p.Name)) + " " +
 		Dim.Render(p.Team)
@@ -360,7 +360,7 @@ func (b Board) selectedLine(w int) string {
 			tier = Dim.Render(fmt.Sprintf(" · tier %d", p.Tier))
 		}
 		if p.ADP > 0 {
-			adp = Dim.Render(fmt.Sprintf(" · adp %.1f", p.ADP))
+			adp = Dim.Render(fmt.Sprintf(" · %s "+b.PriceFmt(), b.PriceNoun(), p.ADP))
 		}
 		lefts = []string{id + tier + adp + surv, id + adp + surv, id + surv, id}
 	}

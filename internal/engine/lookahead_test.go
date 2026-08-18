@@ -243,12 +243,12 @@ func TestConditionedLegNeverTakesASuppressedPosition(t *testing.T) {
 	core := s.newSimCore(1)
 	core.reset()
 	pol := s.newPlanPolicy(core, allPositions(s), true)
-	for _, pi := range []int{simPosIdx("K"), simPosIdx("DEF")} {
+	for _, pi := range []int{posIndex(core.pos, "K"), posIndex(core.pos, "DEF")} {
 		if pol.allows(s, pi, s.Round(s.PickNo)) {
-			t.Errorf("the policy offered %s in round %d, inside the hold", simPositions[pi], s.Round(s.PickNo))
+			t.Errorf("the policy offered %s in round %d, inside the hold", core.pos[pi], s.Round(s.PickNo))
 		}
 		if !pol.allows(s, pi, s.Rounds) {
-			t.Errorf("the policy still refused %s in the final round", simPositions[pi])
+			t.Errorf("the policy still refused %s in the final round", core.pos[pi])
 		}
 	}
 	idx, _, _, ok := pol.take(s, s.Rosters[s.MySlot], s.Round(s.PickNo), false)
@@ -438,7 +438,7 @@ func TestPlanRunsToMyLastPick(t *testing.T) {
 // question should not have to reconstruct that.
 func allPositions(s *State) map[string]bool {
 	out := map[string]bool{}
-	for _, pos := range planPositions {
+	for _, pos := range s.Positions() {
 		out[pos] = true
 	}
 	return out

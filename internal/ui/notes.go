@@ -506,6 +506,13 @@ func wrapText(s string, w int) []string {
 type nameIndex struct {
 	full map[string]engine.Player // "malik nabers"
 	last map[string]engine.Player // "nabers" — unique last names only
+	// has is the positions THIS board holds, so a position word only counts as
+	// one when the board has that position. posWords carries both sports'
+	// vocabularies and the two barely overlap, so without this an nfl note
+	// saying "mid" or "forwards" or "keeper" — ordinary english — gets
+	// classified as a position and rendered in the fallback foreground, breaking
+	// out of the line's own style for no reason a reader can see.
+	has map[string]bool
 }
 
 // commonLastNames are surnames that are also ordinary words: a note that says
@@ -521,25 +528,41 @@ var commonLastNames = map[string]bool{
 }
 
 func (b Board) nameIndex() nameIndex {
-	ix := nameIndex{full: map[string]engine.Player{}, last: map[string]engine.Player{}}
-	seen := map[string]int{}
+	ix := nameIndex{full: map[string]engine.Player{}, last: map[string]engine.Player{},
+		has: map[string]bool{}}
+	for _, pos := range b.State.Positions() {
+		ix.has[pos] = true
+	}
+	seen, seenFull := map[string]int{}, map[string]int{}
 	for _, p := range b.State.Players {
 		n := rankings.Normalize(p.Name)
 		if n == "" {
 			continue
 		}
+		seenFull[n]++
 		ix.full[n] = p
 		toks := strings.Fields(n)
 		l := toks[len(toks)-1]
-		if len(l) < 4 || commonLastNames[l] || p.Pos == "DEF" {
+		if len(l) < 4 || commonLastNames[l] || !hasSurname(p) {
 			continue
 		}
 		seen[l]++
 		ix.last[l] = p
 	}
+	// Both maps drop the ambiguous keys, and full needs it as much as last does
+	// on a board whose names are one word each. Twelve fpl web_names repeat —
+	// three men are called Wilson — and a note saying "wilson" would have
+	// coloured and struck through whichever of them go's map iteration reached
+	// last, differently on different frames of the same draft. An nfl board is
+	// unaffected: "malik nabers" is two words and unique.
 	for l, n := range seen {
 		if n > 1 {
 			delete(ix.last, l)
+		}
+	}
+	for n, k := range seenFull {
+		if k > 1 {
+			delete(ix.full, n)
 		}
 	}
 	return ix
@@ -561,9 +584,23 @@ func wordLocs(s string) [][]int {
 	return locs
 }
 
+// Both sports, because a note is written the night before in whatever words the
+// writer has. "grab a gkp late" and "two mids before a fwd" got no colour at all
+// while "def" landed on the nfl reading of the same string.
+//
+// One map rather than a per-sport pair: the two vocabularies collide on exactly
+// "def", which means the same thing to the eye either way, and a note that says
+// "rb" on an fpl board is a note about a sport this board is not showing — which
+// is the writer's business, not a bug to guard against.
 var posWords = map[string]string{
 	"qb": "QB", "qbs": "QB", "rb": "RB", "rbs": "RB", "wr": "WR", "wrs": "WR",
 	"te": "TE", "tes": "TE", "k": "K", "def": "DEF", "dst": "DEF",
+
+	"gkp": "GKP", "gkps": "GKP", "gk": "GKP", "keeper": "GKP", "keepers": "GKP",
+	"defs": "DEF", "defender": "DEF", "defenders": "DEF",
+	"mid": "MID", "mids": "MID", "midfielder": "MID", "midfielders": "MID",
+	"fwd": "FWD", "fwds": "FWD", "forward": "FWD", "forwards": "FWD",
+	"striker": "FWD", "strikers": "FWD",
 }
 
 // noteTok is one classified run of a note line: prose, a player, or a
@@ -628,7 +665,7 @@ func noteTokens(seg string, ix nameIndex) []noteTok {
 			add(a, z, noteTok{player: &p})
 		} else if p, ok := ix.full[norm]; ok {
 			add(a, z, noteTok{player: &p})
-		} else if ps, ok := posWords[strings.Trim(word, ".'’")]; ok {
+		} else if ps, ok := posWords[strings.Trim(word, ".'’")]; ok && ix.has[ps] {
 			add(a, z, noteTok{pos: ps})
 		} else {
 			add(a, z, noteTok{})
@@ -650,7 +687,7 @@ func (b Board) styleTokens(seg string, base lipgloss.Style, ix nameIndex) string
 		case t.player != nil:
 			st = b.noteName(*t.player)
 		case t.pos != "":
-			st = Pos(t.pos, false)
+			st = b.pos(t.pos, false)
 		}
 		if t.bold {
 			st = st.Bold(true)
@@ -667,7 +704,7 @@ func (b Board) noteName(p engine.Player) lipgloss.Style {
 	if b.State.Taken[p.ID] {
 		return Dim.Strikethrough(true)
 	}
-	return Pos(p.Pos, false)
+	return b.pos(p.Pos, false)
 }
 
 // ---- the draft map ----
@@ -741,11 +778,11 @@ func (b Board) mapTally(w int) string {
 		n[s.Players[p.PlayerID].Pos]++
 	}
 	var parts []string
-	for _, pos := range []string{"QB", "RB", "WR", "TE", "K", "DEF"} {
+	for _, pos := range s.Positions() {
 		if n[pos] == 0 {
 			continue
 		}
-		parts = append(parts, Pos(pos, false).Render(strings.ToLower(pos))+Dim.Render(fmt.Sprintf(" %d", n[pos])))
+		parts = append(parts, b.pos(pos, false).Render(strings.ToLower(pos))+Dim.Render(fmt.Sprintf(" %d", n[pos])))
 	}
 	if len(parts) == 0 {
 		return Dim.Render("gone  nobody yet")
@@ -828,7 +865,7 @@ func (b Board) mapCell(pickNo, slot int, at map[int]engine.Pick, cw int) string 
 		if tag == "" {
 			tag = "??"
 		}
-		st := Pos(pl.Pos, false)
+		st := b.pos(pl.Pos, false)
 		if p.OwnerSlot != 0 && p.OwnerSlot != p.Slot {
 			// A traded pick: the seat picked, another roster got the player.
 			// Underline marks it — the map is about seats, the roster pane is
@@ -883,4 +920,19 @@ func editStatus(msg editDoneMsg) string {
 		return "editor: " + msg.err.Error()
 	}
 	return "notes reloaded"
+}
+
+// hasSurname reports whether the last word of a player's name is a surname to
+// match note prose against.
+//
+// An nfl team defense has none: sleeper carries its city and nickname
+// ("Seattle Seahawks"), so the "last name" is a nickname a note is likely to use
+// about anything, and "the seahawks are due" would colour a defense. The check
+// used to be `p.Pos == "DEF"`, which is that fact spelled as the string — right
+// for one team unit per club and wrong for fpl's hundred and eighty-four
+// defenders, who have real surnames and want the same last-name matching
+// everyone else gets. A team defense is one whose name is the team's, which is
+// what the id carries: sleeper keys them by the team abbreviation.
+func hasSurname(p engine.Player) bool {
+	return !(p.Pos == "DEF" && p.ID == p.Team && p.Team != "")
 }

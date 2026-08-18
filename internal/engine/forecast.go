@@ -65,9 +65,9 @@ func (s *State) RoomForecast() []PickForecast {
 			}
 		}
 		f.OffBoard = float64(Rollouts-total) / Rollouts
-		// Positions in planPositions order, modalPos's tiebreak, so an exact tie
+		// Positions in lineup order, modalPos's tiebreak, so an exact tie
 		// between two positions names the same one twice running.
-		for _, pos := range forecastPositions(f.Mix) {
+		for _, pos := range forecastPositions(s.Positions(), f.Mix) {
 			if share := f.Mix[pos]; share > f.Share {
 				f.Pos, f.Share = pos, share
 			}
@@ -80,12 +80,12 @@ func (s *State) RoomForecast() []PickForecast {
 	return out
 }
 
-// forecastPositions is the mix's positions in planPositions order, with anything
-// planPositions doesn't know sorted after it by name so a stray position is
+// forecastPositions is the mix's positions in lineup order, with anything
+// the lineup does not name sorted after it by name so a stray position is
 // still reported rather than dropped.
-func forecastPositions(mix map[string]float64) []string {
+func forecastPositions(positions []string, mix map[string]float64) []string {
 	out := make([]string, 0, len(mix))
-	for _, pos := range planPositions {
+	for _, pos := range positions {
 		if _, ok := mix[pos]; ok {
 			out = append(out, pos)
 		}
@@ -93,7 +93,7 @@ func forecastPositions(mix map[string]float64) []string {
 	var rest []string
 	for pos := range mix {
 		known := false
-		for _, p := range planPositions {
+		for _, p := range positions {
 			if p == pos {
 				known = true
 				break

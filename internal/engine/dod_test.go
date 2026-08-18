@@ -152,7 +152,7 @@ func TestConditionedLegBeatsCommittingToOnePosition(t *testing.T) {
 		// The position the v1 formula would have committed leg two to, computed
 		// on the same sim survivals the rollouts see.
 		commit, marginal := "", -1.0
-		for _, q := range planPositions {
+		for _, q := range s.Positions() {
 			leg2 := s.ebest(q, q2, bn.ID) - s.Replacement(q)
 			if leg2 < 0 {
 				leg2 = 0

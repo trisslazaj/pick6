@@ -14,8 +14,12 @@ import (
 // him, one flat table, no abstraction. Between picks there is time to actually
 // read, and the person reading built the tool.
 
-// dataFilters cycles with the p key. Empty string means every position.
-var dataFilters = []string{"", "RB", "WR", "TE", "QB", "K", "DEF"}
+// dataFilters cycles with the p key, empty string meaning every position. Off
+// the same derivation as everything else, or the key walks six filters that each
+// match nothing and the table reads "rows 1-0 of 0" six times running.
+func (b Board) dataFilters() []string {
+	return append([]string{""}, b.positions()...)
+}
 
 // survGoneBand is presentation, not tuning: below this the survival cell
 // renders in the cliff red, because "he is gone" is the same family of alarm.
@@ -56,7 +60,7 @@ func (b *Board) HandleKey(key string) bool {
 	case "k", "up":
 		b.DataScroll--
 	case "p":
-		b.DataFilter = nextFilter(b.DataFilter)
+		b.DataFilter = b.nextFilter(b.DataFilter)
 		b.DataScroll = 0
 	case "right", "l", "]":
 		b.cycleView(1)
@@ -69,10 +73,11 @@ func (b *Board) HandleKey(key string) bool {
 	return true
 }
 
-func nextFilter(cur string) string {
-	for i, f := range dataFilters {
+func (b Board) nextFilter(cur string) string {
+	filters := b.dataFilters()
+	for i, f := range filters {
 		if f == cur {
-			return dataFilters[(i+1)%len(dataFilters)]
+			return filters[(i+1)%len(filters)]
 		}
 	}
 	return ""
@@ -151,8 +156,12 @@ func (b Board) dataCount() int {
 // dataNameW scales the player column with the terminal: every other column is
 // fixed-width, so the name takes the slack, floored at 18 and capped where
 // even hyphenated receivers fit.
-func dataNameW(w int) int {
-	n := w - 62
+func (b Board) dataNameW(w int) int {
+	fixed := 62
+	if !b.hasMarketColumns() {
+		fixed -= 20 // bye, spread and fmt gap, plus their separators
+	}
+	n := w - fixed
 	if n < 18 {
 		return 18
 	}
@@ -190,13 +199,25 @@ func (b Board) dataPane(w int) string {
 
 	by := "value"
 	if v.kind == viewADP {
-		by = "adp"
+		by = b.PriceNoun()
 	}
 	sb.WriteString(b.dataTitle("all players — sorted by "+by, off, end, len(rows), w))
 
-	nameW := dataNameW(w)
-	sb.WriteString(Dim.Render(fmt.Sprintf("  %-3s  %-*s  %-3s  %3s  %4s  %5s  %5s  %6s  %4s  %7s",
-		"pos", nameW, "player", "tm", "bye", "tier", "value", "adp", "spread", "surv", "fmt gap")) + "\n")
+	nameW := b.dataNameW(w)
+	head := []string{fmt.Sprintf("%-3s", "pos"), fmt.Sprintf("%-*s", nameW, "player"), fmt.Sprintf("%-3s", "tm")}
+	if b.hasMarketColumns() {
+		head = append(head, fmt.Sprintf("%3s", "bye"))
+	}
+	head = append(head, fmt.Sprintf("%4s", "tier"), fmt.Sprintf("%5s", "value"),
+		fmt.Sprintf("%5s", b.PriceNoun()))
+	if b.hasMarketColumns() {
+		head = append(head, fmt.Sprintf("%6s", "spread"))
+	}
+	head = append(head, fmt.Sprintf("%4s", "surv"))
+	if b.hasMarketColumns() {
+		head = append(head, fmt.Sprintf("%7s", "fmt gap"))
+	}
+	sb.WriteString(Dim.Render("  "+strings.Join(head, "  ")) + "\n")
 	// Whether the chip RENDERED, not whether the player tripped it: at 80-82
 	// columns the name column cannot afford " past low", and a legend for a
 	// marker nobody can see spends the row explaining nothing while pushing the
@@ -290,10 +311,13 @@ func (b Board) dataTitle(label string, off, end, n, w int) string {
 // ended "d: derived ti…", a rendering fault sitting under a table whose whole
 // job is being readable.
 func (b Board) legend(tripped bool, w int) string {
-	cols := []string{
-		"spread: how widely drafts vary on him",
-		"fmt gap: adp shift by format",
-		"d: derived tier",
+	cols := []string{"d: derived tier"}
+	if b.hasMarketColumns() {
+		cols = []string{
+			"spread: how widely drafts vary on him",
+			"fmt gap: adp shift by format",
+			"d: derived tier",
+		}
 	}
 	out, used := "", 0
 	if tripped {
@@ -324,7 +348,7 @@ func (b Board) dataRow(p engine.Player, nameW int) string {
 	// anyway — but sleeper's kicker is a vivid violet, and undimmed it pulls more
 	// eye in round 9 than the receivers above it. Same player, two tabs, opposite
 	// urgency is the one thing this table cannot do.
-	style := Pos(p.Pos, s.Suppressed(p.Pos))
+	style := b.pos(p.Pos, s.Suppressed(p.Pos))
 
 	// Amber numbers mark a faller, same as the board tab.
 	numeric := Dim
@@ -355,7 +379,7 @@ func (b Board) dataRow(p engine.Player, nameW int) string {
 	}
 	adp := "    —"
 	if p.ADP > 0 {
-		adp = fmt.Sprintf("%5.1f", p.ADP)
+		adp = fmt.Sprintf("%5s", fmt.Sprintf(b.PriceFmt(), p.ADP))
 	}
 	sd := "     —"
 	if p.Stdev > 0 {
@@ -370,19 +394,40 @@ func (b Board) dataRow(p engine.Player, nameW int) string {
 		bye = fmt.Sprintf("%3d", p.Bye)
 	}
 
-	return fmt.Sprintf("  %s  %s  %s  %s  %s  %s  %s  %s  %s  %s",
+	cells := []string{
 		style.Render(fmt.Sprintf("%-3s", strings.ToLower(p.Pos))),
 		b.nameCell(p, style, nameW),
 		Dim.Render(fmt.Sprintf("%-3s", p.Team)),
-		Dim.Render(bye),
+	}
+	if b.hasMarketColumns() {
+		cells = append(cells, Dim.Render(bye))
+	}
+	cells = append(cells,
 		Dim.Render(tier),
 		FG.Render(value),
 		numeric.Render(adp),
-		numeric.Render(sd),
-		survStyle.Render(fmt.Sprintf("%3.0f%%", 100*surv)),
-		Dim.Render(sprd),
 	)
+	if b.hasMarketColumns() {
+		cells = append(cells, numeric.Render(sd))
+	}
+	cells = append(cells, survStyle.Render(fmt.Sprintf("%3.0f%%", 100*surv)))
+	if b.hasMarketColumns() {
+		cells = append(cells, Dim.Render(sprd))
+	}
+	return "  " + strings.Join(cells, "  ")
 }
+
+// hasMarketColumns reports whether this board's source reports the things a
+// thousand-draft adp sample reports and a published ranking does not: a bye
+// week, a draft-position spread, and the same player priced under a second
+// scoring format.
+//
+// Three of the table's ten columns come from there, and on an fpl board all
+// three are em dashes on all 560 rows — thirty cells of nothing per screen,
+// plus two legend clauses spending the glossary row explaining columns that
+// have no numbers in them. Dropping them also frees the width the name column
+// spends its life fighting for.
+func (b Board) hasMarketColumns() bool { return b.PriceNoun() == "adp" }
 
 // urgencyStrip is the engine's summary math on one line: per position, the
 // urgency number and the bestNow→bestLater pair that produces it, plus a green
@@ -411,7 +456,7 @@ func (b Board) urgencyStrip(w int) string {
 		u    float64
 	}
 	var entries []entry
-	for _, pos := range positions {
+	for _, pos := range b.positions() {
 		if s.Need(pos) == 0 {
 			continue
 		}
@@ -419,7 +464,7 @@ func (b Board) urgencyStrip(w int) string {
 		if !ok {
 			continue
 		}
-		tag := Pos(pos, false).Bold(true).Render(strings.ToLower(pos))
+		tag := b.pos(pos, false).Bold(true).Render(strings.ToLower(pos))
 		u := s.Urgency(pos)
 		switch {
 		case s.SafeToWait(pos):

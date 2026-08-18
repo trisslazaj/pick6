@@ -52,7 +52,10 @@ type view struct {
 // by name, then the fetched file if it isn't already there. Files that don't
 // exist are skipped silently — a stale meta.json is not the tab's problem.
 func (b Board) viewList() []view {
-	out := []view{{label: "value", kind: viewValue}, {label: "adp", kind: viewADP}, {label: "tiers", kind: viewTiers}}
+	// The price view's LABEL follows the sport while its kind does not: the kind
+	// names a sort key, and -view adp keeps working on either board so the shot
+	// scripts and anyone's muscle memory survive the rename.
+	out := []view{{label: "value", kind: viewValue}, {label: b.PriceNoun(), kind: viewADP}, {label: "tiers", kind: viewTiers}}
 	seen := map[string]bool{}
 	add := func(path string) {
 		abs, err := filepath.Abs(path)
@@ -115,9 +118,25 @@ func (b *Board) cycleView(d int) {
 // unknown name leaves the default open rather than erroring: the frame still
 // says which views exist, which is the answer to the question being asked.
 func (b *Board) SelectView(name string) {
+	want := strings.ToLower(name)
 	for _, v := range b.viewList() {
-		if v.label == strings.ToLower(name) {
+		if v.label == want {
 			b.Views.Sel = v.label
+			return
+		}
+	}
+	// "adp" is the price view under either name. The label follows the sport —
+	// an fpl board's price is a rank and calling it adp on screen would claim a
+	// measurement nobody made — but the label is not an api, and -view adp is in
+	// the shot scripts and in anyone's fingers. Without this it matched nothing,
+	// left the selection unset, and silently rendered the VALUE view while the
+	// strip said so and nobody read it.
+	if want == "adp" || want == "rank" {
+		for _, v := range b.viewList() {
+			if v.kind == viewADP {
+				b.Views.Sel = v.label
+				return
+			}
 		}
 	}
 }
@@ -190,7 +209,7 @@ func (b Board) sheetRows(v view) ([]sheetRow, error) {
 		for _, p := range b.State.Players {
 			byPos[p.Pos] = append(byPos[p.Pos], p)
 		}
-		for _, pos := range positions {
+		for _, pos := range b.positions() {
 			ps := byPos[pos]
 			if len(ps) == 0 {
 				continue
@@ -317,14 +336,25 @@ func (b Board) sheetIndex() sheetIndex {
 		if n == "" {
 			continue
 		}
+		if _, seen := ix.byKey[n+"|"+p.Pos]; seen {
+			dup[n+"|"+p.Pos] = true
+		}
 		ix.byKey[n+"|"+p.Pos] = p
 		if _, seen := ix.byName[n]; seen {
 			dup[n] = true
 		}
 		ix.byName[n] = p
 	}
+	// byKey gets the same duplicate guard byName always had. Name+position is
+	// unique on an nfl board and is NOT on an fpl one — two midfielders called
+	// Sangaré — so a rankings sheet's row for one of them resolved to whichever
+	// go's map iteration reached last, and the index is rebuilt every frame, so
+	// the row's odds and strike-through flickered between renders. Dropped
+	// rather than guessed: an unresolvable row already renders dim with `?` where
+	// its odds go, which is the honest answer.
 	for n := range dup {
 		delete(ix.byName, n)
+		delete(ix.byKey, n)
 	}
 	return ix
 }
@@ -392,7 +422,7 @@ func (b Board) sheetLines(v view, w int) ([]string, bool) {
 // the board does not know.
 func (b Board) sheetLine(r sheetRow, nameW int, takenAt map[string]int) string {
 	s := b.State
-	style := Pos(r.pos, s.Suppressed(r.pos))
+	style := b.pos(r.pos, s.Suppressed(r.pos))
 	name := strings.ToLower(r.name)
 	var nameCell, odds string
 	oddsStyle := Dim

@@ -302,3 +302,50 @@ func TestNotesScrollAndEditKey(t *testing.T) {
 		t.Error("e off the notes tab is nobody's key")
 	}
 }
+
+// posWords carries both sports' vocabularies, and they barely overlap — so a
+// word is only a position word when THIS board has that position.
+//
+// Without the gate, an nfl note saying "mid" or "forwards" or "keeper" —
+// ordinary english, and the second-most likely thing to appear in draft prose
+// after a player's name — got classified as a position and rendered in the
+// fallback foreground, breaking out of its own line's style for no reason a
+// reader could see. And the same in reverse: "grab a wr" on an fpl board.
+func TestPositionWordsAreThisBoardsOnly(t *testing.T) {
+	nflIdx := nameIndex{full: map[string]engine.Player{}, last: map[string]engine.Player{},
+		has: map[string]bool{"QB": true, "RB": true, "WR": true, "TE": true, "K": true, "DEF": true}}
+	fplIdx := nameIndex{full: map[string]engine.Player{}, last: map[string]engine.Player{},
+		has: map[string]bool{"GKP": true, "DEF": true, "MID": true, "FWD": true}}
+
+	posOf := func(ix nameIndex, seg string) map[string]bool {
+		out := map[string]bool{}
+		for _, tok := range noteTokens(seg, ix) {
+			if tok.pos != "" {
+				out[tok.pos] = true
+			}
+		}
+		return out
+	}
+
+	line := "take a mid, a keeper, a wr and a rb — forwards can wait"
+	nflSaw, fplSaw := posOf(nflIdx, line), posOf(fplIdx, line)
+
+	for _, pos := range []string{"MID", "GKP", "FWD"} {
+		if nflSaw[pos] {
+			t.Errorf("an nfl board classified %s as a position word", pos)
+		}
+	}
+	for _, pos := range []string{"WR", "RB"} {
+		if fplSaw[pos] {
+			t.Errorf("an fpl board classified %s as a position word", pos)
+		}
+		if !nflSaw[pos] {
+			t.Errorf("an nfl board stopped recognising %s", pos)
+		}
+	}
+	for _, pos := range []string{"MID", "GKP", "FWD"} {
+		if !fplSaw[pos] {
+			t.Errorf("an fpl board did not recognise %s", pos)
+		}
+	}
+}

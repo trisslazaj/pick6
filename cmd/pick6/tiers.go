@@ -12,14 +12,20 @@ import (
 
 	"github.com/trisslazaj/pick6/internal/adp"
 	"github.com/trisslazaj/pick6/internal/cache"
+	"github.com/trisslazaj/pick6/internal/engine"
 	"github.com/trisslazaj/pick6/internal/ui"
 )
 
 func runTiers(args []string) error {
 	fs := flagSet("tiers")
-	only := fs.String("pos", "", "show one position only (qb, rb, wr, te, k, def)")
+	sportName := sportFlag(fs)
+	only := fs.String("pos", "", "show one position only (qb, rb, wr, te, k, def — gkp, def, mid, fwd under -sport fpl)")
 	depth := fs.Int("depth", 0, "max players to show per position (0 = all)")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	sp, err := resolveSport(*sportName)
+	if err != nil {
 		return err
 	}
 
@@ -27,10 +33,14 @@ func runTiers(args []string) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "players.json")
+	// Its own reader rather than loadBoard's, because this command wants the adp
+	// rows and not the engine's players — so it needs the same sport key told to
+	// it twice. A second reader of one filename is how `tiers -sport fpl` ends up
+	// printing the nfl board.
+	path := filepath.Join(dir, sp.board)
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("no board yet — run `pick6 fetch` first (%w)", err)
+		return fmt.Errorf("no board yet — run %s first (%w)", sp.fetchCmd(), err)
 	}
 	var list []*adp.Player
 	if err := json.Unmarshal(b, &list); err != nil {
@@ -42,7 +52,7 @@ func runTiers(args []string) error {
 		byPos[p.Pos] = append(byPos[p.Pos], p)
 	}
 
-	order := []string{"QB", "RB", "WR", "TE", "K", "DEF"}
+	order := engine.RosterPositions(sp.roster)
 	if *only != "" {
 		order = []string{strings.ToUpper(*only)}
 	}
@@ -62,22 +72,31 @@ func runTiers(args []string) error {
 			}
 			return group[i].ADP < group[j].ADP
 		})
+		// The tier counts come from the WHOLE position, not from the slice being
+		// printed. `-depth 15` used to truncate first, so a tier with six men in
+		// it printed "2 left — tier ending" in cliff amber because two of them
+		// happened to fall inside the cut. A cheat sheet that invents a cliff is
+		// worse than one that stops early. (Predates fpl; found looking at it.)
+		counts := map[int]int{}
+		for _, p := range group {
+			counts[p.Tier]++
+		}
 		if *depth > 0 && len(group) > *depth {
 			group = group[:*depth]
 		}
-		printPosition(pos, group)
+		printPosition(sp, pos, group, counts)
 	}
 	return nil
 }
 
-func printPosition(pos string, group []*adp.Player) {
-	// K and DEF are suppressed until the last rounds, and render faint to match.
-	suppressed := pos == "K" || pos == "DEF"
+func printPosition(sp sport, pos string, group []*adp.Player, counts map[int]int) {
+	// The early-draft hold renders faint, same as the board. Read off the sport's
+	// roster rather than the literal it used to be: fpl holds nothing back, and
+	// its 184 defenders printed greyed-out under a rule about team defenses.
+	suppressed := sp.roster.Hold == nil && (pos == "K" || pos == "DEF")
 	style := ui.Pos(pos, suppressed)
-
-	counts := map[int]int{}
-	for _, p := range group {
-		counts[p.Tier]++
+	if sp.roster.Hold != nil {
+		style = ui.PosFPL(pos, suppressed)
 	}
 
 	fmt.Println()
@@ -93,7 +112,7 @@ func printPosition(pos string, group []*adp.Player) {
 		fmt.Printf("      %s %s  %s  %s\n",
 			style.Render(fmt.Sprintf("%-24s", trunc(strings.ToLower(p.Name), 24))),
 			ui.Dim.Render(p.Team),
-			ui.Dim.Render(fmt.Sprintf("adp %5.1f", p.ADP)),
+			ui.Dim.Render(fmt.Sprintf("%s "+sp.priceFmt(), sp.priceNoun(), p.ADP)),
 			spreadNote(p))
 	}
 }

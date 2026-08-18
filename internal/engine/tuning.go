@@ -251,6 +251,24 @@ var DefaultRoster = Roster{
 	Bench: 6,
 }
 
+// FPLRoster is an fpl draft squad: a hard quota of fifteen, no bench, no flex,
+// and nothing held back — every position here is somebody's starter from round
+// one, so there is no kicker to keep quiet about.
+//
+// Fifteen slots and no bench means the rounds-follow-lineup rule yields exactly
+// fifteen rounds by itself, which is the real shape.
+var FPLRoster = Roster{
+	Slots: []string{
+		"GKP", "GKP",
+		"DEF", "DEF", "DEF", "DEF", "DEF",
+		"MID", "MID", "MID", "MID", "MID",
+		"FWD", "FWD", "FWD",
+	},
+	Bench: 0,
+	Quota: true,
+	Hold:  NoHold,
+}
+
 // FlexEligible positions, for filling the FLEX slot.
 var FlexEligible = map[string]bool{"RB": true, "WR": true, "TE": true}
 

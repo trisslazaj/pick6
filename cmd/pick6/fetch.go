@@ -11,12 +11,14 @@ import (
 
 	"github.com/trisslazaj/pick6/internal/adp"
 	"github.com/trisslazaj/pick6/internal/cache"
+	"github.com/trisslazaj/pick6/internal/engine"
 	"github.com/trisslazaj/pick6/internal/rankings"
 	"github.com/trisslazaj/pick6/internal/sleeper"
 )
 
 func runFetch(args []string) error {
 	fs := flagSet("fetch")
+	sportName := sportFlag(fs)
 	format := fs.String("format", "half-ppr", "primary scoring format: half-ppr, ppr, standard, 2qb")
 	teams := fs.Int("teams", 12, "league size")
 	year := fs.Int("year", 2026, "season")
@@ -26,6 +28,22 @@ func runFetch(args []string) error {
 	verbose := fs.Bool("v", false, "list every unmatched name")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	sp, err := resolveSport(*sportName)
+	if err != nil {
+		return err
+	}
+	if sp.name == fplSport.name {
+		// A different sport is a different pipeline, not a flag inside this one.
+		// There is no crosswalk to join, no second format to cross-check, no
+		// room curve, no escape to measure and nobody to anchor onto a borrowed
+		// value — every fpl player is ranked. What is left is small enough to
+		// read in one sitting.
+		teams := *teams
+		if !flagSet0(fs, "teams") {
+			teams = sp.teams // the ffc default is 12; an fpl league is 10
+		}
+		return runFetchFPL(sp, teams, *rankFile, *verbose)
 	}
 
 	// 1. sleeper player pool -------------------------------------------------
@@ -161,7 +179,7 @@ func runFetch(args []string) error {
 	fmt.Printf("merged %d players — %d/%d matched to sleeper (%.1f%%), %d with a value\n",
 		len(players), matched, len(primary.Entries),
 		100*float64(matched)/float64(len(primary.Entries)), valued)
-	fmt.Printf("tiers from %s: %s\n", tierOrigin, posSummary(tiered))
+	fmt.Printf("tiers from %s: %s\n", tierOrigin, posSummary(sp, tiered))
 
 	if rankRows > 0 {
 		rankMatched := rankRows - len(rankUnmatched)
@@ -171,25 +189,11 @@ func runFetch(args []string) error {
 
 	if len(primaryUnmatched) > 0 {
 		fmt.Printf("%d unmatched (ffc)\n", len(primaryUnmatched))
-		if *verbose {
-			sort.Strings(primaryUnmatched)
-			for _, n := range primaryUnmatched {
-				fmt.Printf("  %s\n", strings.ToLower(n))
-			}
-		} else {
-			fmt.Println("  run with -v to list them")
-		}
+		printUnmatched(primaryUnmatched, *verbose)
 	}
 	if len(rankUnmatched) > 0 {
 		fmt.Printf("%d unmatched (rankings)\n", len(rankUnmatched))
-		if *verbose {
-			sort.Strings(rankUnmatched)
-			for _, n := range rankUnmatched {
-				fmt.Printf("  %s\n", strings.ToLower(n))
-			}
-		} else {
-			fmt.Println("  run with -v to list them")
-		}
+		printUnmatched(rankUnmatched, *verbose)
 	}
 
 	// 7. write ---------------------------------------------------------------
@@ -234,7 +238,7 @@ func runFetch(args []string) error {
 	printKDefValues(players)
 	printReplacement(players, *teams)
 	printInjuryFlags(players, flagged)
-	printTierDisagreements(players)
+	printTierDisagreements(sp, players)
 	printRoomCurve(players)
 	// The sim's off-board escape, measured here because it needs the era boards
 	// (network) and consumed at draft time from disk. See escape.go.
@@ -252,8 +256,12 @@ func say(source string, fetched bool, detail string) {
 
 // posSummary renders any per-position count in lineup order: "qb 8, rb 12".
 // Zero counts are omitted, so a position nothing landed on stays quiet.
-func posSummary(byPos map[string]int) string {
-	order := []string{"QB", "RB", "WR", "TE", "K", "DEF"}
+//
+// The order comes from the sport rather than a literal: with the nfl six baked
+// in, an fpl summary matched only DEF and printed "def 184" — not "none", which
+// would at least have looked wrong.
+func posSummary(sp sport, byPos map[string]int) string {
+	order := engine.RosterPositions(sp.roster)
 	var parts []string
 	for _, p := range order {
 		if n, ok := byPos[p]; ok && n > 0 {
@@ -436,7 +444,7 @@ func newsAge(ms int64) string {
 // urgency with him. Disagreement with adp doesn't prove a typo, but a typo will
 // almost always be in here, and so will the genuinely contrarian calls that are
 // the reason you trusted the file in the first place.
-func printTierDisagreements(players map[string]*adp.Player) {
+func printTierDisagreements(sp sport, players map[string]*adp.Player) {
 	gaps := adp.TierADPGaps(players, adp.TierAdpGapFlag)
 	fmt.Printf("\ntiers vs market — biggest rank disagreements within a position (>= %d places):\n",
 		adp.TierAdpGapFlag)
@@ -465,7 +473,7 @@ func printTierDisagreements(players map[string]*adp.Player) {
 			byPos[g.Player.Pos]++
 		}
 		fmt.Printf("  %d more at or over %d places: %s\n",
-			len(gaps)-10, adp.TierAdpGapFlag, posSummary(byPos))
+			len(gaps)-10, adp.TierAdpGapFlag, posSummary(sp, byPos))
 	}
 	fmt.Println("  negative delta = your tiers rank him ahead of the market; positive = the market does.")
 	fmt.Println("  rows marked derived have no hand-typed tier to check — that gap is value vs adp.")
@@ -671,4 +679,20 @@ func absPath(p string) string {
 		return a
 	}
 	return p
+}
+
+// printUnmatched lists names no board row matched, or says how to see them. An
+// unmatched name is a csv row to fix by hand — never a name to guess at.
+func printUnmatched(names []string, verbose bool) {
+	if len(names) == 0 {
+		return
+	}
+	if !verbose {
+		fmt.Println("  run with -v to list them")
+		return
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		fmt.Printf("  %s\n", strings.ToLower(n))
+	}
 }

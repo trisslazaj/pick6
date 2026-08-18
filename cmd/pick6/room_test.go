@@ -74,7 +74,7 @@ func TestRoomFlagIsOnAndOptsOutWithEquals(t *testing.T) {
 func TestLoadBoardWarpsAsDeepAsTheCurveReaches(t *testing.T) {
 	fakeBoardHome(t, 7)
 
-	board, err := loadBoard(true, "")
+	board, err := loadBoard(nfl, true, "")
 	if err != nil {
 		t.Fatalf("loadboard: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestLoadBoardWarpsAsDeepAsTheCurveReaches(t *testing.T) {
 	}
 
 	// The opt-out, over the same cache: nobody carries a warped price at all.
-	off, err := loadBoard(false, "")
+	off, err := loadBoard(nfl, false, "")
 	if err != nil {
 		t.Fatalf("loadboard -room=false: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestLoadBoardWarpsAsDeepAsTheCurveReaches(t *testing.T) {
 func TestLoadBoardFallsBackWithNoCachedDrafts(t *testing.T) {
 	fakeBoardHome(t, 0)
 
-	board, err := loadBoard(true, "")
+	board, err := loadBoard(nfl, true, "")
 	if err != nil {
 		t.Fatalf("an uncached room must not be an error: %v", err)
 	}

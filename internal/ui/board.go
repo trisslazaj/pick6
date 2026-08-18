@@ -11,8 +11,17 @@ import (
 	"github.com/trisslazaj/pick6/internal/engine"
 )
 
-// Positions in display order when nothing else separates them.
-var positions = []string{"RB", "WR", "TE", "QB", "K", "DEF"}
+// positions is this draft's positions in READING order — engine.DisplayPositions,
+// which is the lineup's own, flex-eligible first.
+//
+// It used to be five hardcoded lists in four files, in three different orders,
+// one of whose docstrings already claimed to be "in the board's position order"
+// while being in a different one. Every one of them said RB WR TE QB K DEF or
+// some permutation, and every one of them rendered NOTHING under a sport with
+// four positions and none of those names — the tier ladder silently empty, the
+// data tab's p key cycling six filters that each matched zero rows, the notes
+// map's tally blank. Nothing crashes; it just quietly stops being there.
+func (b Board) positions() []string { return b.State.DisplayPositions() }
 
 // Board renders the whole screen. Everything it emits is lowercase; only team
 // abbreviations stay uppercase.
@@ -630,7 +639,7 @@ func fitCaption(w int, long, short string) string {
 // justify the pick.
 func (b Board) verdictBlock(w int, top engine.PickChoice) string {
 	p := top.Best
-	style := Pos(p.Pos, false)
+	style := b.pos(p.Pos, false)
 	edge := style.Render("▏") + " "
 
 	var sb strings.Builder
@@ -796,17 +805,44 @@ func (b Board) priceClause(p engine.Player, long bool) (string, lipgloss.Style) 
 	switch {
 	case b.State.Falling(p):
 		if long {
-			return fmt.Sprintf("fell %.0f past his price — adp %.1f", diff, p.ADP), Run
+			return fmt.Sprintf("fell %.0f past his price — %s "+b.PriceFmt(), diff, b.PriceNoun(), p.ADP), Run
 		}
 		return fmt.Sprintf("fell %.0f", diff), Run
+
+	// The REACH arms are pick-versus-price arithmetic, and they need the two to
+	// be in the same units. On an adp board they are: a thousand real drafts
+	// took him at pick 36.2 on average, so taking him at 24 is twelve picks
+	// early and that is a sentence about the same axis twice.
+	//
+	// A quota board's price is a rank over the WHOLE pool, and only a quarter of
+	// that pool is ever drafted — 150 picks over 560 ranked players, spread
+	// across four positions by a quota that forces the room to reach down for a
+	// second keeper long before the rank order would. So the pick counter falls
+	// behind the rank scale from about round eight, and every man on the board
+	// reads "early": measured on the scripted fpl mock at 13.04, the verdict
+	// block recommended a keeper and captioned him `110 before his price`. A
+	// reach-killer that fires on the board's own recommendation is worse than no
+	// chip, so the reach half goes and the number stays.
+	//
+	// The FALLING arm above survives the change, and that asymmetry is the whole
+	// point: "he is still here after 124 picks" is a true statement about a rank
+	// scale, because those 124 players really are gone. It is only the other
+	// direction — "he would have gone by now" — that the undrafted four hundred
+	// make meaningless.
+	case b.PriceNoun() != "adp":
+		if long {
+			return fmt.Sprintf("%s "+b.PriceFmt(), b.PriceNoun(), p.ADP), Dim
+		}
+		return "", Dim
+
 	case diff <= -3:
 		if long {
-			return fmt.Sprintf("%.0f before his price — adp %.1f", -diff, p.ADP), Dim
+			return fmt.Sprintf("%.0f before his price — %s "+b.PriceFmt(), -diff, b.PriceNoun(), p.ADP), Dim
 		}
 		return fmt.Sprintf("%.0f early", -diff), Dim
 	default:
 		if long {
-			return fmt.Sprintf("at his price — adp %.1f", p.ADP), Dim
+			return fmt.Sprintf("at his price — %s "+b.PriceFmt(), b.PriceNoun(), p.ADP), Dim
 		}
 		return "at price", Dim
 	}
@@ -857,6 +893,14 @@ func (b Board) slotClause(pos string) string {
 		return fmt.Sprintf("fills your %s slot", strings.ToLower(pos))
 	case b.State.Need(pos) >= engine.NeedFlex:
 		return "flex only"
+	case b.State.Need(pos) == 0:
+		// Under a hard quota there is no bench for the depth to sit on: a
+		// position with no slot open is a man the official app will not let you
+		// draft. "bench depth" over him is not a shade of wrong, it is a lie
+		// about what the pick would do. Unreachable under nfl, where needSlots
+		// floors at the bench weight and a zero can only mean the k/def hold,
+		// which hides the row before this is ever asked.
+		return strings.ToLower(pos) + " full"
 	default:
 		return "bench depth"
 	}
@@ -913,7 +957,7 @@ const depthN = 3
 // first man and the short note survive everything.
 func (b Board) depthRow(w int, c engine.PickChoice, accent bool) string {
 	s := b.State
-	style := Pos(c.Pos, false)
+	style := b.pos(c.Pos, false)
 	edge := "  "
 	if accent {
 		edge = style.Render("▏") + " "
@@ -1022,7 +1066,7 @@ func sumWidth(cs []styledClause) int {
 func (b Board) choiceRow(w int, c engine.PickChoice, accent, onClock bool) string {
 	s := b.State
 	p := c.Best
-	style := Pos(c.Pos, false)
+	style := b.pos(c.Pos, false)
 	edge := "  "
 	if accent {
 		// One accent, not five: only the top choice wears its position colour.
@@ -1104,7 +1148,7 @@ func (b Board) marketRow(w int, c engine.PickChoice) string {
 	if !c.AltIsMarket {
 		label = "value's pick"
 	}
-	style := Pos(c.Pos, false)
+	style := b.pos(c.Pos, false)
 	nameW := rowNameWidth(w)
 	tag := Dim.Render(fmt.Sprintf("%-3s", strings.ToLower(c.Pos)))
 	name := b.nameCell(mb, style, nameW)
@@ -1351,7 +1395,7 @@ func (b Board) outlookRow(w, nameW int, o engine.SlotOutlook) string {
 	}
 
 	p := s.Players[o.PlayerID]
-	style := Pos(p.Pos, s.Suppressed(p.Pos))
+	style := b.pos(p.Pos, s.Suppressed(p.Pos))
 	var cell string
 	pct := o.Odds
 	named := o.Share >= planNameShare
@@ -1428,6 +1472,24 @@ func (b Board) endgameLine(w int) string {
 	if !b.State.MustFillStarters() {
 		return ""
 	}
+	// This line says "the slack ran out", so it needs there to have been slack.
+	// A draft with exactly as many rounds as starting slots is in R == U from
+	// pick one and never leaves — fpl's fifteen squad slots over fifteen rounds,
+	// my remaining picks always equal to my unfilled starters because there is
+	// nowhere else a pick could go. Ungated it renders on every frame of every
+	// such draft, which is a warning nobody can act on printed 150 times.
+	//
+	// The gate is the arithmetic and NOT `Bench == 0`, which was the first
+	// spelling and was too broad: `board -lineup "..." -bench 0 -rounds 12` over
+	// ten slots has two spare picks, reaches R == U partway through like any
+	// other roster, and wants the line when it does.
+	//
+	// Gated here rather than inside MustFillStarters, which is a correct
+	// predicate the plan's feasibility rules also read — this is a question about
+	// whether the state is worth SAYING, and that is the ui's to answer.
+	if b.State.Rounds <= len(b.State.Roster.Slots) {
+		return ""
+	}
 	line := "every remaining pick must fill a starter"
 	if hidden := b.hiddenStarters(); len(hidden) > 0 {
 		names := strings.Join(hidden, ", ")
@@ -1451,7 +1513,7 @@ func (b Board) hiddenStarters() []string {
 	s := b.State
 	var out []string
 	for _, slot := range s.UnfilledStarters(s.MySlot) {
-		for _, pos := range positions {
+		for _, pos := range b.positions() {
 			if slot == pos && s.Need(pos) == 0 {
 				out = append(out, strings.ToLower(pos))
 			}
@@ -1583,7 +1645,7 @@ func (b Board) insight(w int) string {
 				continue
 			}
 			labels[i] = strings.ToLower(n)
-			parts[i] = Pos(n, s.Suppressed(n)).Render(labels[i])
+			parts[i] = b.pos(n, s.Suppressed(n)).Render(labels[i])
 		}
 		// "fx" is not always enough: ten unfilled slots overrun a 34-cell sidebar
 		// even abbreviated, and the line wrapped, which put a lone "def" on its
@@ -1694,7 +1756,7 @@ func (b Board) roster(w, benchCap int) string {
 			byeNote = Dim.Render(fmt.Sprintf("  bye %d", p.Bye))
 		}
 		sb.WriteString(fmt.Sprintf("  %s %s%s\n", label,
-			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), nameW)), byeNote))
+			b.pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), nameW)), byeNote))
 	}
 	// A negative cap means the sidebar has no room for the bench at all, but the
 	// count line still earns its row: "six on the bench" is the difference
@@ -1710,7 +1772,7 @@ func (b Board) roster(w, benchCap int) string {
 		p := s.Players[id]
 		sb.WriteString(fmt.Sprintf("  %s %s\n",
 			Dim.Render(fmt.Sprintf("bn%-3d", i+1)),
-			Pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), nameW))))
+			b.pos(p.Pos, false).Render(trunc(strings.ToLower(p.Name), nameW))))
 	}
 	if hidden := len(bench) - shown; hidden > 0 {
 		sb.WriteString(fmt.Sprintf("  %s\n",
@@ -1749,13 +1811,13 @@ func (b Board) ticker(w int) string {
 			sb.WriteString(fmt.Sprintf("%s %s %s %s\n",
 				Wait.Bold(true).Render("▌you"),
 				Dim.Render(label),
-				Pos(p.Pos, false).Render(pos),
+				b.pos(p.Pos, false).Render(pos),
 				Bold.Foreground(lipgloss.Color(ColFG)).Render(name)))
 			continue
 		}
 		sb.WriteString(fmt.Sprintf("     %s %s %s\n",
 			Dim.Render(label),
-			Pos(p.Pos, false).Render(pos),
+			b.pos(p.Pos, false).Render(pos),
 			Dim.Render(name)))
 	}
 	return sb.String()

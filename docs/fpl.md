@@ -1,5 +1,34 @@
 # fpl draft mode (phase 2) — implementation spec
 
+> **BUILT 2026-08-18.** Everything below is the spec as it was written, kept because the
+> reasoning is still the reasoning. What it got WRONG is corrected inline, marked
+> **`[MEASURED]`**; what it missed is in milestone 9 of `docs/milestones.md`, and the shipped
+> shape is the fpl section of `CLAUDE.md`. Read those two first — this file is the argument,
+> they are the record.
+>
+> Six of its claims did not survive contact:
+>
+> 1. **The pool is 592, not 577** (2026-08-18), and the split is gkp 66 / def 195 / mid 261 /
+>    fwd 70 before filtering, 60 / 184 / 252 / 64 after. Status counts moved too: a 481 /
+>    i 48 / u 32 / d 28 / s 3.
+> 2. **`news_added` is RFC3339**, as this file's own api section says — the data-mapping table
+>    says "ms since epoch", and read that way every injury dates to 1970.
+> 3. **`draft/{id}/choices` takes the LEAGUE id.** This file says so; what it does not say is
+>    that passing the DRAFT id returns a real populated feed for a stranger's league with that
+>    number, which is the trap.
+> 4. **The choices feed's `player_first_name` is the MANAGER's name.** This file lists the
+>    field as "carried, unused" without saying whose name it is, and the drafted player is
+>    named nowhere in the feed at all.
+> 5. **room.go's DEF collision does not exist** (decision 9's first sentence). `grep '"DEF"'
+>    internal/adp/room.go` returns nothing. The three real collision sites are aggregate.go's
+>    `isKDef`, match.go's `NewIndex`/`LookupExact`, and the curve keyspace.
+> 6. **`take()` contains no fixed array** (f1.6's "the local `repl` in `take`"). `repl` is a
+>    local in `newPlanPolicy`; `take` has a loop bound and an index.
+>
+> And three things it missed entirely, each of which would have shipped silently wrong: the
+> value curve underflowing to the unranked sentinel, `subdivide()` never running on derived
+> tier blocks, and `rankings.Index`'s Levenshtein fallback being live on the fpl tier path.
+
 The second dataset behind the same engine. FPL Draft is a snake draft over a hard-quota
 squad, and the whole point of phase 2's design — "the engine never asks where a pick came
 from" — is that almost everything already works. This file is a complete hand-off: a fresh
@@ -44,7 +73,9 @@ marked. These are observed shapes, not documented ones.
 ### `bootstrap-static` — the player pool
 
 - **577 players** in `elements`; position via `element_type` 1–4 → `element_types` maps to
-  `GKP / DEF / MID / FWD` (measured pool: 64 / 188 / 256 / 69).
+  `GKP / DEF / MID / FWD` (measured pool: 64 / 188 / 256 / 69). **`[MEASURED 2026-08-18]` 592
+  now, 66 / 195 / 261 / 70, and 560 after dropping status `u`.** The pool moves; do not pin a
+  number to it.
 - **`draft_rank` is populated on all 577, runs 1..577 with no holes, and is FPL's own
   draft-mode ranking.** It is the ordering the entire engine wants, and it is *better*
   than a points sort: rank 5 is Isak at 41 points (injury-shortened season priced back
@@ -109,7 +140,11 @@ is observed (the Sleeper lesson: measure, then bypass).
    need). `-survival=adp` stays reachable but rank-units-as-pick-units is unblessed there
    — nobody has measured an FPL sigma. The sim is the brain.
 2. **Value = `ValueBase * exp(-draft_rank / ValueDecay)`** — the existing convex fallback,
-   consistent across the pool, never mixed with points.
+   consistent across the pool, never mixed with points. **`[MEASURED]` The shape is right and
+   the BASE is not**: Player.Value is an `int`, and 250 × exp(-rank/40) over 560 players rounds
+   everything past rank ~120 to single digits and past ~300 to ZERO, which is the sentinel for
+   "nobody ranked him". Ships as `fpl.ValueTop` = 10000 — fantasycalc's order of magnitude, the
+   one every ui width and threshold was drawn against — floored at 1.
 3. **The hard quota is modelled by an explicit `Roster.Quota bool` (not by `Bench == 0`)
    plus the same engine rule** — corrected 2026-08-17: `Bench == 0` is not an FPL-only
    condition. `board -bench` defaults to 0 (`cmd/pick6/board.go:34`), so a plain NFL
@@ -304,8 +339,10 @@ teams[team].short_name                     -> Team
 draft_rank                                 -> ADP         (rank units; the price)
 ValueBase * exp(-draft_rank/ValueDecay)    -> Value
 0                                          -> Bye, Stdev, TimesDrafted, High, Low, ADPEff
-status i/s/d mapped, u filtered            -> InjuryStatus/Status (chip vocabulary)
-news, news_added (ms since epoch)          -> Status detail, NewsUpdated
+status i/s/d mapped, u filtered            -> InjuryStatus (chip vocabulary; Status stays "")
+news_added — RFC3339, NOT epoch millis     -> NewsUpdated  [MEASURED: the sleeper dump's
+                                              news_updated is millis; this one is a timestamp
+                                              string, and 468 of 592 are null]
 id (int, stringified)                      -> ID          ("fpl:123" if collisions worry you — they
                                                            shouldn't; the pools never meet)
 ```

@@ -22,8 +22,9 @@ import (
 
 func runMock(args []string) error {
 	fs := flagSet("mock")
-	teams := fs.Int("teams", 12, "league size")
-	rounds := fs.Int("rounds", 15, "rounds")
+	sportName := sportFlag(fs)
+	teams := fs.Int("teams", 0, "league size (default 12, or 10 under -sport fpl)")
+	rounds := fs.Int("rounds", 0, "rounds (default: the lineup plus its bench)")
 	slot := fs.Int("slot", 3, "my draft slot, 1-indexed")
 	seed := fs.Int64("seed", 6, "rng seed; same seed replays the same draft")
 	auto := fs.Bool("auto", true, "auto-advance picks")
@@ -43,19 +44,32 @@ func runMock(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	sp, err := resolveSport(*sportName)
+	if err != nil {
+		return err
+	}
+	if *teams == 0 {
+		*teams = sp.teams
+	}
+	if *rounds == 0 {
+		*rounds = len(sp.roster.Slots) + sp.roster.Bench
+	}
 	if *slot < 1 || *slot > *teams {
 		return fmt.Errorf("slot %d is outside a %d-team league", *slot, *teams)
 	}
 
-	players, err := loadBoard(*room, "")
+	players, err := loadBoard(sp, *room, "")
 	if err != nil {
 		return err
 	}
 	s := engine.New(players, *teams, *rounds, *slot)
-	s.Demand = leagueDemand() // replacement level, from this room's own drafts
+	s.SetRoster(sp.roster)
+	if sp.demand {
+		s.Demand = leagueDemand() // replacement level, from this room's own drafts
+	}
 	// The mock's sim seed is the draft seed: same -seed, same scripted picks AND
 	// the same rollout futures, so a demo frame is reproducible to the pixel.
-	if err := applyBrain(s, *survival, *scorer, "", *seed); err != nil {
+	if err := applyBrain(s, sp, *survival, *scorer, "", *seed); err != nil {
 		return err
 	}
 	pick := scriptedPicker(*seed)
@@ -72,8 +86,8 @@ func runMock(args []string) error {
 			s.Draft(id)
 		}
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Fresh: loadFreshness(), Notes: ui.Notes{Dir: notesDir(*notes)},
-			Views: ui.Views{Dir: rankingsDir(*ranks), Fetched: fetchedRankings()}}
+			Fresh: loadFreshness(sp), Notes: ui.Notes{Dir: notesDir(sp, *notes)},
+			Views: ui.Views{Dir: rankingsDir(sp, *ranks), Fetched: fetchedRankings(sp)}}
 		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
 			b.Search = ui.Search{Open: true, Query: *search}
@@ -86,7 +100,7 @@ func runMock(args []string) error {
 	}
 
 	p := tea.NewProgram(
-		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness()).WithNotes(notesDir(*notes)).WithRankings(rankingsDir(*ranks), fetchedRankings()),
+		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness(sp)).WithNotes(notesDir(sp, *notes)).WithRankings(rankingsDir(sp, *ranks), fetchedRankings(sp)),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()
@@ -129,14 +143,14 @@ var leagueDrafts = calibrateDrafts
 //
 // replaying is the draft id being replayed, or "" live and in the mock. It is
 // held out of the curve; see roomWarp.
-func loadBoard(room bool, replaying string) (map[string]engine.Player, error) {
+func loadBoard(sp sport, room bool, replaying string) (map[string]engine.Player, error) {
 	dir, err := cache.Dir()
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "players.json"))
+	b, err := os.ReadFile(filepath.Join(dir, sp.board))
 	if err != nil {
-		return nil, fmt.Errorf("no board yet — run `pick6 fetch` first (%w)", err)
+		return nil, fmt.Errorf("no board yet — run %s first (%w)", sp.fetchCmd(), err)
 	}
 	var list []*adp.Player
 	if err := json.Unmarshal(b, &list); err != nil {
@@ -173,10 +187,29 @@ func loadBoard(room bool, replaying string) (map[string]engine.Player, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("board is empty — run `pick6 fetch` first")
+		return nil, fmt.Errorf("board is empty — run %s first", sp.fetchCmd())
 	}
-	if room {
+	if sp.name != nfl.name {
+		// Said out loud on every frame that isn't nfl's, because the reader
+		// deserves to know which of these numbers has been graded. The nfl
+		// survival math has a referee (`pick6 calibrate`, three causal folds)
+		// and the decision score has another (`pick6 regret`). Fpl has neither
+		// yet — the opponent model's positional mix is measurably off against
+		// eight completed drafts, and the fix for it is unbuilt. Everything
+		// structural is tested; the calibration is not.
+		note(sp.name, "beta", "graded on nfl, not yet on "+sp.name+" — the room model draws too few keepers and defenders")
+	}
+	switch {
+	case room && sp.room:
 		roomWarp(out, list, replaying)
+	case room:
+		// Answered here rather than by sport-keying the flag's default, so that
+		// an explicit -room=true gets an answer instead of being silently
+		// obeyed. There is no fpl room curve to warp against — the leagues are
+		// per-season with fresh ids and this one has no history yet — and the
+		// curve that does exist is keyed by nfl position, where "DEF" means one
+		// team defense rather than a hundred and eighty-four defenders.
+		note("room", "off", sp.name+" has no room curve — the board stays on "+sp.priceNoun())
 	}
 	return out, nil
 }
@@ -296,7 +329,14 @@ func roomWarp(out map[string]engine.Player, list []*adp.Player, replaying string
 // boards fetched before meta.json existed still draw fine, they just cannot say
 // how old they are. The zero Freshness renders as nothing at all, which beats
 // "adp 0h old" about a board from last week.
-func loadFreshness() ui.Freshness {
+func loadFreshness(sp sport) ui.Freshness {
+	if !sp.meta {
+		// A sport with no meta.json of its own must not read the other one's.
+		// The zero value is already the documented "no meta" state and renders
+		// as nothing, which beats a footer claiming the nfl board's age and the
+		// number of drafts behind an adp this board never used.
+		return ui.Freshness{}
+	}
 	dir, err := cache.Dir()
 	if err != nil {
 		return ui.Freshness{}
@@ -340,8 +380,22 @@ func scriptedPicker(seed int64) ui.Autopicker {
 				continue
 			}
 			// Nobody drafts a kicker in round 6, and if the mock does it the
-			// board fills with noise. Matches the engine's own suppression.
-			if (p.Pos == "K" || p.Pos == "DEF") && s.RoundsRemaining() > engine.KDefLastRounds {
+			// board fills with noise. Asks the engine rather than re-spelling
+			// the rule: a sport that holds nothing back answers false, and left
+			// as the literal an fpl mock would refuse every defender and keeper
+			// for twelve of fifteen rounds.
+			if s.Suppressed(p.Pos) {
+				continue
+			}
+			// Under a hard quota the room cannot take a sixth midfielder — the
+			// official app refuses it — so the scripted room must not either.
+			// Left out, my own seat finished a 15-round fpl mock with a player
+			// in "bn1" on a squad that has no bench, while three starting slots
+			// sat empty. The picker is deliberately need-BLIND otherwise: it
+			// drafts near the top of remaining adp so real runs emerge, and
+			// giving it a need model would make the mock confirm the board's own
+			// model by construction. This is legality, not preference.
+			if quotaFull(s, s.OnTheClock(), p.Pos) {
 				continue
 			}
 			a := p.ADP
@@ -373,4 +427,20 @@ func scriptedPicker(seed int64) ui.Autopicker {
 		}
 		return avail[idx].id, true
 	}
+}
+
+// quotaFull reports whether a seat has already filled every slot its lineup
+// gives a position. Reads the engine's own assignment rather than counting by
+// hand, so the mock and the board can never disagree about whose squad is full.
+// Always false without a quota — an nfl roster's spare bodies go to the bench.
+func quotaFull(s *engine.State, slot int, pos string) bool {
+	if !s.Roster.Quota {
+		return false
+	}
+	for _, want := range s.UnfilledStarters(slot) {
+		if want == pos {
+			return false
+		}
+	}
+	return true
 }

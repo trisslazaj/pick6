@@ -200,7 +200,7 @@ func mirrorBoard() *State {
 	return s
 }
 
-// Ties resolve by planPositions order, and nothing else pinned that. The pair
+// Ties resolve by lineup order, and nothing else pinned that. The pair
 // loop's strict > is what makes it true — relax it to >= and the answer becomes
 // whatever the last equal pair happened to be, which on this board is wr-then-rb
 // instead of rb-then-wr. Both are deterministic today because the loop walks a
@@ -228,7 +228,7 @@ func TestBestPlanBreaksExactTiesByPositionOrder(t *testing.T) {
 		t.Fatal("no plan on a mirrored board with two picks to come")
 	}
 	if plan.First != "RB" || plan.Second != "WR" {
-		t.Errorf("plan = %s then %s, want rb then wr — the earlier pair in planPositions",
+		t.Errorf("plan = %s then %s, want rb then wr — the earlier pair in lineup order",
 			plan.First, plan.Second)
 	}
 	if math.Abs(plan.Score-170) > 1e-3 {

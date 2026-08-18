@@ -202,7 +202,7 @@ func escapeSummary(rates []float64) string {
 // looked at and rejected outright. It stays in the tree as a documented
 // negative result and as the smaller step back than turning the whole sim off,
 // and it stays OFF.
-func applyBrain(s *engine.State, survival, scorer, replaying string, seed int64) error {
+func applyBrain(s *engine.State, sp sport, survival, scorer, replaying string, seed int64) error {
 	switch scorer {
 	case "pair", "":
 		s.Scorer = engine.ScorerPair
@@ -213,6 +213,16 @@ func applyBrain(s *engine.State, survival, scorer, replaying string, seed int64)
 	}
 	switch survival {
 	case "adp":
+		if !sp.room {
+			// The v1 logistic reads the price as a pick number and divides the
+			// gap by a per-player sigma measured from real drafts. Fpl's price
+			// is a rank and there is no sigma anywhere, so every player would
+			// run on the default width and the curve would be claiming a
+			// spread nobody has ever measured for this sport. The sim needs
+			// only the ordering, which is why it is the brain here.
+			return fmt.Errorf("-survival=adp is nfl-only: %s has no measured sigma, "+
+				"only a rank order — leave the sim on", sp.name)
+		}
 		s.Survival = engine.SurvivalADP
 		note("survival", "adp", "v1 logistic + tilt — the sim is off by flag")
 		return nil
@@ -222,7 +232,9 @@ func applyBrain(s *engine.State, survival, scorer, replaying string, seed int64)
 	}
 	s.Survival = engine.SurvivalSim
 	s.SimSeed = seed
-	s.OffBoard = loadEscape(replaying)
+	if sp.escape {
+		s.OffBoard = loadEscape(replaying)
+	}
 	if s.Scorer == engine.ScorerRoster {
 		note("scorer", "roster", "milestone 8's finished-team objective — built, graded, and off by "+
 			"default: it did not beat the pair score on either causal fold of `pick6 regret`")
@@ -233,7 +245,14 @@ func applyBrain(s *engine.State, survival, scorer, replaying string, seed int64)
 		// which is correct, not fixable, and the same answer calibrate's fold
 		// gets for that draft.
 		why := "run `pick6 fetch` to measure off-board rates"
-		if replaying != "" {
+		switch {
+		case !sp.escape:
+			// Not a gap: fpl's draft_rank covers the whole pool, so every pick
+			// removes a ranked player by definition and there is nothing for a
+			// pick to escape TO. The sim runs escape-less correctly here rather
+			// than for want of a measurement.
+			why = "every " + sp.name + " player is ranked, so no pick can leave the board"
+		case replaying != "":
 			why = "every measured draft is this one or came after it (or no escape.json yet)"
 		}
 		note("survival", "sim", "opponent rollouts, escape-less — "+why)

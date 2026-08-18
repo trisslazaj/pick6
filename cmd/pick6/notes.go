@@ -36,17 +36,30 @@ func viewFlag(fs *flag.FlagSet) *string {
 	return fs.String("view", "", "with -tab data: which view — value, adp, tiers, or a rankings file's name")
 }
 
-// rankingsDir resolves -rankings the same way notesDir resolves -notes.
-func rankingsDir(flagVal string) string {
+// rankingsDir resolves -rankings the same way notesDir resolves -notes, with a
+// per-sport subfolder past nfl's.
+//
+// Without the split, an fpl board's data tab lists every one of the user's nfl
+// rankings csvs as a view, each rendering nothing but `?` rows — the names are
+// simply not fpl players. A view that claims to show a file verbatim and shows
+// nothing is worse than no view.
+func rankingsDir(sp sport, flagVal string) string {
 	if flagVal != "" {
 		return flagVal
 	}
-	return filepath.Join(filepath.Dir(notesDir("")), "rankings")
+	base := filepath.Join(notesRoot(), "rankings")
+	if sp.name == nfl.name {
+		return base
+	}
+	return filepath.Join(base, sp.name)
 }
 
 // fetchedRankings is the file `fetch -rankings` loaded, off meta.json; "" when
-// there wasn't one or there is no meta.
-func fetchedRankings() string {
+// there wasn't one, there is no meta, or this sport doesn't keep one.
+func fetchedRankings(sp sport) string {
+	if !sp.meta {
+		return ""
+	}
 	dir, err := cache.Dir()
 	if err != nil {
 		return ""
@@ -64,19 +77,32 @@ func fetchedRankings() string {
 // nobody can tab-complete it. ~/.config is what a terminal person types.
 // $XDG_CONFIG_HOME wins when set. A folder that doesn't exist yet is fine —
 // the tab says where to put the first file.
-func notesDir(flagVal string) string {
+func notesDir(sp sport, flagVal string) string {
 	if flagVal != "" {
 		return flagVal
 	}
+	dir := filepath.Join(notesRoot(), "notes")
+	if sp.name == nfl.name {
+		return dir
+	}
+	// A per-sport subfolder, same rule as the rankings views and for the same
+	// reason: a seat file about round-one running backs is not a note about a
+	// premier league draft, and every player name in it colours nothing and
+	// strikes through nothing. Notes are the human's side of the argument the
+	// board is making — a different board is a different argument.
+	return filepath.Join(dir, sp.name)
+}
+
+func notesRoot() string {
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "notes"
+			return "."
 		}
 		base = filepath.Join(home, ".config")
 	}
-	return filepath.Join(base, "pick6", "notes")
+	return filepath.Join(base, "pick6")
 }
 
 // pickTab applies -tab / -data / -view to a headless board.
