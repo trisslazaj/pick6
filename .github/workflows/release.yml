@@ -55,4 +55,12 @@ jobs:
         # The engine paper rides along so the readme's math section can point at
         # a pdf that matches the tagged code. It's committed prebuilt — putting
         # texlive on this runner would take longer than every other step combined.
-        run: gh release create "$GITHUB_REF_NAME" dist/* docs/pick6-engine.pdf --generate-notes
+        # A hyphen in the tag means pre-release, which is semver's own rule and
+        # therefore the one nobody has to be told: v0.3.0-beta.1 lands marked as
+        # a pre-release, v0.3.0 does not. Without this every beta shows up on the
+        # releases page as the thing to download.
+        run: |
+          set -euo pipefail
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* docs/pick6-engine.pdf --generate-notes $pre

@@ -189,6 +189,16 @@ func loadBoard(sp sport, room bool, replaying string) (map[string]engine.Player,
 	if len(out) == 0 {
 		return nil, fmt.Errorf("board is empty — run %s first", sp.fetchCmd())
 	}
+	if sp.name != nfl.name {
+		// Said out loud on every frame that isn't nfl's, because the reader
+		// deserves to know which of these numbers has been graded. The nfl
+		// survival math has a referee (`pick6 calibrate`, three causal folds)
+		// and the decision score has another (`pick6 regret`). Fpl has neither
+		// yet — the opponent model's positional mix is measurably off against
+		// eight completed drafts, and the fix for it is unbuilt. Everything
+		// structural is tested; the calibration is not.
+		note(sp.name, "beta", "graded on nfl, not yet on "+sp.name+" — the room model draws too few keepers and defenders")
+	}
 	switch {
 	case room && sp.room:
 		roomWarp(out, list, replaying)

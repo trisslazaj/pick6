@@ -38,8 +38,8 @@ real thing — [`docs/demo.tape`](docs/demo.tape), `vhs docs/demo.tape` to regen
 - **A verdict, not a spreadsheet** — on the clock it names a man and the two or three facts that
   justify him, in picks and odds rather than abstract points.
 - **Two sports, one engine** — `-sport fpl` points the whole thing at a Fantasy Premier League
-  draft. The engine never asks which game it is scoring; it reads your lineup and derives the
-  rest.
+  draft *(beta)*. The engine never asks which game it is scoring; it reads your lineup and
+  derives the rest.
 
 ## install
 
@@ -112,10 +112,18 @@ came from.
 pick6 board -slot 7 -teams 10 -lineup "qb rb rb wr wr te flex flex k def" -bench 6
 ```
 
-### `pick6 * -sport fpl` — the same war room for an FPL draft
+### `pick6 * -sport fpl` — the same war room for an FPL draft *(beta)*
 
 Fantasy Premier League Draft is a snake draft over a hard-quota squad, so it runs on the same
 engine with nothing turned off but the machinery that only means something in football.
+
+**Beta, and the board says so on every frame.** Everything structural is tested — 105 real picks
+replay across all seven seats of a completed draft with zero desyncs — but the *calibration*
+isn't there yet. NFL survival has a referee (`pick6 calibrate`) and NFL decisions have another
+(`pick6 regret`); FPL has neither. Measured against eight completed public drafts, the room model
+draws too few keepers and defenders and too many midfielders, so a green `safe` tag on a defender
+is right about 60% of the time against 81–85% everywhere else. Read it as a very good tier sheet
+with live odds, and trust the odds a little less on GKP and DEF.
 
 ```sh
 pick6 fetch -sport fpl                   # 1. the pool, from bootstrap-static
