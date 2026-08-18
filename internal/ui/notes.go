@@ -506,6 +506,13 @@ func wrapText(s string, w int) []string {
 type nameIndex struct {
 	full map[string]engine.Player // "malik nabers"
 	last map[string]engine.Player // "nabers" — unique last names only
+	// has is the positions THIS board holds, so a position word only counts as
+	// one when the board has that position. posWords carries both sports'
+	// vocabularies and the two barely overlap, so without this an nfl note
+	// saying "mid" or "forwards" or "keeper" — ordinary english — gets
+	// classified as a position and rendered in the fallback foreground, breaking
+	// out of the line's own style for no reason a reader can see.
+	has map[string]bool
 }
 
 // commonLastNames are surnames that are also ordinary words: a note that says
@@ -521,7 +528,11 @@ var commonLastNames = map[string]bool{
 }
 
 func (b Board) nameIndex() nameIndex {
-	ix := nameIndex{full: map[string]engine.Player{}, last: map[string]engine.Player{}}
+	ix := nameIndex{full: map[string]engine.Player{}, last: map[string]engine.Player{},
+		has: map[string]bool{}}
+	for _, pos := range b.State.Positions() {
+		ix.has[pos] = true
+	}
 	seen := map[string]int{}
 	for _, p := range b.State.Players {
 		n := rankings.Normalize(p.Name)
@@ -642,7 +653,7 @@ func noteTokens(seg string, ix nameIndex) []noteTok {
 			add(a, z, noteTok{player: &p})
 		} else if p, ok := ix.full[norm]; ok {
 			add(a, z, noteTok{player: &p})
-		} else if ps, ok := posWords[strings.Trim(word, ".'’")]; ok {
+		} else if ps, ok := posWords[strings.Trim(word, ".'’")]; ok && ix.has[ps] {
 			add(a, z, noteTok{pos: ps})
 		} else {
 			add(a, z, noteTok{})

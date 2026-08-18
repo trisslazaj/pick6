@@ -808,6 +808,33 @@ func (b Board) priceClause(p engine.Player, long bool) (string, lipgloss.Style) 
 			return fmt.Sprintf("fell %.0f past his price — %s "+b.PriceFmt(), diff, b.PriceNoun(), p.ADP), Run
 		}
 		return fmt.Sprintf("fell %.0f", diff), Run
+
+	// The REACH arms are pick-versus-price arithmetic, and they need the two to
+	// be in the same units. On an adp board they are: a thousand real drafts
+	// took him at pick 36.2 on average, so taking him at 24 is twelve picks
+	// early and that is a sentence about the same axis twice.
+	//
+	// A quota board's price is a rank over the WHOLE pool, and only a quarter of
+	// that pool is ever drafted — 150 picks over 560 ranked players, spread
+	// across four positions by a quota that forces the room to reach down for a
+	// second keeper long before the rank order would. So the pick counter falls
+	// behind the rank scale from about round eight, and every man on the board
+	// reads "early": measured on the scripted fpl mock at 13.04, the verdict
+	// block recommended a keeper and captioned him `110 before his price`. A
+	// reach-killer that fires on the board's own recommendation is worse than no
+	// chip, so the reach half goes and the number stays.
+	//
+	// The FALLING arm above survives the change, and that asymmetry is the whole
+	// point: "he is still here after 124 picks" is a true statement about a rank
+	// scale, because those 124 players really are gone. It is only the other
+	// direction — "he would have gone by now" — that the undrafted four hundred
+	// make meaningless.
+	case b.PriceNoun() != "adp":
+		if long {
+			return fmt.Sprintf("%s "+b.PriceFmt(), b.PriceNoun(), p.ADP), Dim
+		}
+		return "", Dim
+
 	case diff <= -3:
 		if long {
 			return fmt.Sprintf("%.0f before his price — %s "+b.PriceFmt(), -diff, b.PriceNoun(), p.ADP), Dim

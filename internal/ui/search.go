@@ -280,7 +280,7 @@ func searchNameW(w int) int {
 
 func (b Board) searchRow(m searchMatch, cursor bool, w int) string {
 	s := b.State
-	style := Pos(m.Pos, s.Suppressed(m.Pos))
+	style := b.pos(m.Pos, s.Suppressed(m.Pos))
 	name := trunc(strings.ToLower(m.Name), searchNameW(w))
 
 	mark := "  "
@@ -335,7 +335,7 @@ func (b Board) selectedLine(w int) string {
 	if !ok {
 		return ""
 	}
-	style := Pos(p.Pos, b.State.Suppressed(p.Pos))
+	style := b.pos(p.Pos, b.State.Suppressed(p.Pos))
 	id := "  " + Dim.Render("selected  ") +
 		style.Render(strings.ToLower(p.Pos)+" "+strings.ToLower(p.Name)) + " " +
 		Dim.Render(p.Team)

@@ -118,9 +118,25 @@ func (b *Board) cycleView(d int) {
 // unknown name leaves the default open rather than erroring: the frame still
 // says which views exist, which is the answer to the question being asked.
 func (b *Board) SelectView(name string) {
+	want := strings.ToLower(name)
 	for _, v := range b.viewList() {
-		if v.label == strings.ToLower(name) {
+		if v.label == want {
 			b.Views.Sel = v.label
+			return
+		}
+	}
+	// "adp" is the price view under either name. The label follows the sport —
+	// an fpl board's price is a rank and calling it adp on screen would claim a
+	// measurement nobody made — but the label is not an api, and -view adp is in
+	// the shot scripts and in anyone's fingers. Without this it matched nothing,
+	// left the selection unset, and silently rendered the VALUE view while the
+	// strip said so and nobody read it.
+	if want == "adp" || want == "rank" {
+		for _, v := range b.viewList() {
+			if v.kind == viewADP {
+				b.Views.Sel = v.label
+				return
+			}
 		}
 	}
 }
