@@ -111,7 +111,7 @@ func runBoard(args []string) error {
 	// command's whole point and it is the one pane no scripted draft can reach.
 	if *snapshot {
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Mode: ui.ModeManual, Fresh: loadFreshness(sp), Notes: ui.Notes{Dir: notesDir(*notes)},
+			Mode: ui.ModeManual, Fresh: loadFreshness(sp), Notes: ui.Notes{Dir: notesDir(sp, *notes)},
 			Views: ui.Views{Dir: rankingsDir(sp, *ranks), Fetched: fetchedRankings(sp)}}
 		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
@@ -125,7 +125,7 @@ func runBoard(args []string) error {
 	}
 
 	p := tea.NewProgram(
-		ui.NewManualModel(s).WithFreshness(loadFreshness(sp)).WithNotes(notesDir(*notes)).WithRankings(rankingsDir(sp, *ranks), fetchedRankings(sp)),
+		ui.NewManualModel(s).WithFreshness(loadFreshness(sp)).WithNotes(notesDir(sp, *notes)).WithRankings(rankingsDir(sp, *ranks), fetchedRankings(sp)),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()

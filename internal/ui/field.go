@@ -68,7 +68,7 @@ func (b Board) roomBlock(w int) string {
 			parts = append(parts, Dim.Render(fmt.Sprintf("%d unranked", n)))
 			continue
 		}
-		parts = append(parts, FG.Render(fmt.Sprintf("%d ", n))+Pos(r.Pos, false).Render(strings.ToLower(r.Pos)))
+		parts = append(parts, FG.Render(fmt.Sprintf("%d ", n))+b.pos(r.Pos, false).Render(strings.ToLower(r.Pos)))
 	}
 	if len(parts) > 0 {
 		sb.WriteString(fitStyled("  "+Dim.Render("expect  ")+strings.Join(parts, Dim.Render(" · ")), w) + "\n")
@@ -100,7 +100,7 @@ func (b Board) roomBlock(w int) string {
 		if len(cells) >= len(fc) || surv[p.ID] >= 0.5 {
 			break
 		}
-		cells = append(cells, Pos(p.Pos, false).Render(strings.ToLower(p.Name)))
+		cells = append(cells, b.pos(p.Pos, false).Render(strings.ToLower(p.Name)))
 	}
 	if len(cells) > 0 {
 		lines := packCells(cells, Dim.Render(" · "), w-15)
@@ -171,7 +171,11 @@ func fitStyled(s string, w int) string {
 // the banner read, so the ladder cannot disagree with them.
 func (b Board) tierLadder(w int) string {
 	var rows []string
-	for _, pos := range []string{"QB", "RB", "WR", "TE"} {
+	// Every position, not the four tiered nfl ones. ladderRow already returns ""
+	// for a position with no tiers, so k and def drop out on their own and the
+	// nfl ladder is unchanged — while gkp, def, mid and fwd, all four of which
+	// ARE tiered, stop being invisible.
+	for _, pos := range b.State.Positions() {
 		if row := b.ladderRow(pos, w-4); row != "" {
 			rows = append(rows, "  "+row)
 		}
@@ -204,7 +208,7 @@ func (b Board) ladderRow(pos string, w int) string {
 		return ""
 	}
 	level, best, _ := s.Cliff(pos)
-	alarm := Pos(pos, false)
+	alarm := b.pos(pos, false)
 	switch level {
 	case engine.CliffLast:
 		alarm = Cliff
@@ -212,7 +216,7 @@ func (b Board) ladderRow(pos string, w int) string {
 		alarm = Run
 	}
 
-	tag := Pos(pos, s.Suppressed(pos)).Render(fmt.Sprintf("%-3s", strings.ToLower(pos)))
+	tag := b.pos(pos, s.Suppressed(pos)).Render(fmt.Sprintf("%-3s", strings.ToLower(pos)))
 	used := 4
 	var cells []string
 
@@ -246,7 +250,7 @@ func (b Board) ladderRow(pos string, w int) string {
 			rest += left[t]
 			continue
 		}
-		st := Pos(pos, false)
+		st := b.pos(pos, false)
 		if t == best {
 			st = alarm
 		}

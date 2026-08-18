@@ -72,7 +72,7 @@ func runMock(args []string) error {
 			s.Draft(id)
 		}
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Fresh: loadFreshness(nfl), Notes: ui.Notes{Dir: notesDir(*notes)},
+			Fresh: loadFreshness(nfl), Notes: ui.Notes{Dir: notesDir(nfl, *notes)},
 			Views: ui.Views{Dir: rankingsDir(nfl, *ranks), Fetched: fetchedRankings(nfl)}}
 		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
@@ -86,7 +86,7 @@ func runMock(args []string) error {
 	}
 
 	p := tea.NewProgram(
-		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness(nfl)).WithNotes(notesDir(*notes)).WithRankings(rankingsDir(nfl, *ranks), fetchedRankings(nfl)),
+		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness(nfl)).WithNotes(notesDir(nfl, *notes)).WithRankings(rankingsDir(nfl, *ranks), fetchedRankings(nfl)),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()

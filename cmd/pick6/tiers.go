@@ -75,15 +75,20 @@ func runTiers(args []string) error {
 		if *depth > 0 && len(group) > *depth {
 			group = group[:*depth]
 		}
-		printPosition(pos, group)
+		printPosition(sp, pos, group)
 	}
 	return nil
 }
 
-func printPosition(pos string, group []*adp.Player) {
-	// K and DEF are suppressed until the last rounds, and render faint to match.
-	suppressed := pos == "K" || pos == "DEF"
+func printPosition(sp sport, pos string, group []*adp.Player) {
+	// The early-draft hold renders faint, same as the board. Read off the sport's
+	// roster rather than the literal it used to be: fpl holds nothing back, and
+	// its 184 defenders printed greyed-out under a rule about team defenses.
+	suppressed := sp.roster.Hold == nil && (pos == "K" || pos == "DEF")
 	style := ui.Pos(pos, suppressed)
+	if sp.roster.Hold != nil {
+		style = ui.PosFPL(pos, suppressed)
+	}
 
 	counts := map[int]int{}
 	for _, p := range group {
@@ -103,7 +108,7 @@ func printPosition(pos string, group []*adp.Player) {
 		fmt.Printf("      %s %s  %s  %s\n",
 			style.Render(fmt.Sprintf("%-24s", trunc(strings.ToLower(p.Name), 24))),
 			ui.Dim.Render(p.Team),
-			ui.Dim.Render(fmt.Sprintf("adp %5.1f", p.ADP)),
+			ui.Dim.Render(fmt.Sprintf("%s "+sp.priceFmt()+" ", sp.priceNoun(), p.ADP)),
 			spreadNote(p))
 	}
 }

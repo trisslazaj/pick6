@@ -124,7 +124,7 @@ func runLive(args []string) error {
 		// finished: the frame you eyeball has to advertise the keys the live
 		// board binds, not the mock's.
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Mode: ui.ModeLive, Fresh: loadFreshness(sp), Notes: ui.Notes{Dir: notesDir(*notes)},
+			Mode: ui.ModeLive, Fresh: loadFreshness(sp), Notes: ui.Notes{Dir: notesDir(sp, *notes)},
 			Views: ui.Views{Dir: rankingsDir(sp, *ranks), Fetched: fetchedRankings(sp)}}
 		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
@@ -141,7 +141,7 @@ func runLive(args []string) error {
 		ui.NewLiveModel(s, feed, interval, false).
 			WithDraft(draft).
 			WithFreshness(loadFreshness(sp)).
-			WithNotes(notesDir(*notes)).
+			WithNotes(notesDir(sp, *notes)).
 			WithRankings(rankingsDir(sp, *ranks), fetchedRankings(sp)),
 		tea.WithAltScreen(),
 	)

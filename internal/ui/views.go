@@ -52,7 +52,10 @@ type view struct {
 // by name, then the fetched file if it isn't already there. Files that don't
 // exist are skipped silently — a stale meta.json is not the tab's problem.
 func (b Board) viewList() []view {
-	out := []view{{label: "value", kind: viewValue}, {label: "adp", kind: viewADP}, {label: "tiers", kind: viewTiers}}
+	// The price view's LABEL follows the sport while its kind does not: the kind
+	// names a sort key, and -view adp keeps working on either board so the shot
+	// scripts and anyone's muscle memory survive the rename.
+	out := []view{{label: "value", kind: viewValue}, {label: b.PriceNoun(), kind: viewADP}, {label: "tiers", kind: viewTiers}}
 	seen := map[string]bool{}
 	add := func(path string) {
 		abs, err := filepath.Abs(path)
@@ -190,7 +193,7 @@ func (b Board) sheetRows(v view) ([]sheetRow, error) {
 		for _, p := range b.State.Players {
 			byPos[p.Pos] = append(byPos[p.Pos], p)
 		}
-		for _, pos := range positions {
+		for _, pos := range b.positions() {
 			ps := byPos[pos]
 			if len(ps) == 0 {
 				continue
@@ -392,7 +395,7 @@ func (b Board) sheetLines(v view, w int) ([]string, bool) {
 // the board does not know.
 func (b Board) sheetLine(r sheetRow, nameW int, takenAt map[string]int) string {
 	s := b.State
-	style := Pos(r.pos, s.Suppressed(r.pos))
+	style := b.pos(r.pos, s.Suppressed(r.pos))
 	name := strings.ToLower(r.name)
 	var nameCell, odds string
 	oddsStyle := Dim

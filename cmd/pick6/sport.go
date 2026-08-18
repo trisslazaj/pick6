@@ -117,3 +117,11 @@ func (sp sport) priceNoun() string {
 	}
 	return "rank"
 }
+
+// priceFmt matches priceNoun: a measured mean prints a decimal, a rank does not.
+func (sp sport) priceFmt() string {
+	if sp.priceNoun() == "rank" {
+		return "%3.0f"
+	}
+	return "%5.1f"
+}

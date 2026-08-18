@@ -31,6 +31,11 @@ var flexPosOrder = []string{"QB", "RB", "WR", "TE"}
 // which two of them do.
 func (s *State) Positions() []string { return rosterPositions(s.Roster) }
 
+// RosterPositions is Positions for a caller holding a roster and no state — the
+// cmd layer's print order, which has to agree with the board's or `fetch` and
+// `tiers` name their columns in an order the frame doesn't use.
+func RosterPositions(r Roster) []string { return rosterPositions(r) }
+
 func rosterPositions(r Roster) []string {
 	seen := make(map[string]bool, len(r.Slots))
 	out := make([]string, 0, len(r.Slots))

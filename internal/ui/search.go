@@ -307,7 +307,7 @@ func (b Board) searchRow(m searchMatch, cursor bool, w int) string {
 			parts = append(parts, fmt.Sprintf("tier %d", m.Tier))
 		}
 		if m.ADP > 0 {
-			parts = append(parts, fmt.Sprintf("adp %.1f", m.ADP))
+			parts = append(parts, fmt.Sprintf("%s "+b.PriceFmt(), b.PriceNoun(), m.ADP))
 		}
 		facts = Dim.Render(strings.Join(parts, " · "))
 		if len(parts) > 0 {
@@ -360,7 +360,7 @@ func (b Board) selectedLine(w int) string {
 			tier = Dim.Render(fmt.Sprintf(" · tier %d", p.Tier))
 		}
 		if p.ADP > 0 {
-			adp = Dim.Render(fmt.Sprintf(" · adp %.1f", p.ADP))
+			adp = Dim.Render(fmt.Sprintf(" · %s "+b.PriceFmt(), b.PriceNoun(), p.ADP))
 		}
 		lefts = []string{id + tier + adp + surv, id + adp + surv, id + surv, id}
 	}

@@ -47,7 +47,7 @@ func rankingsDir(sp sport, flagVal string) string {
 	if flagVal != "" {
 		return flagVal
 	}
-	base := filepath.Join(filepath.Dir(notesDir("")), "rankings")
+	base := filepath.Join(notesRoot(), "rankings")
 	if sp.name == nfl.name {
 		return base
 	}
@@ -77,19 +77,32 @@ func fetchedRankings(sp sport) string {
 // nobody can tab-complete it. ~/.config is what a terminal person types.
 // $XDG_CONFIG_HOME wins when set. A folder that doesn't exist yet is fine —
 // the tab says where to put the first file.
-func notesDir(flagVal string) string {
+func notesDir(sp sport, flagVal string) string {
 	if flagVal != "" {
 		return flagVal
 	}
+	dir := filepath.Join(notesRoot(), "notes")
+	if sp.name == nfl.name {
+		return dir
+	}
+	// A per-sport subfolder, same rule as the rankings views and for the same
+	// reason: a seat file about round-one running backs is not a note about a
+	// premier league draft, and every player name in it colours nothing and
+	// strikes through nothing. Notes are the human's side of the argument the
+	// board is making — a different board is a different argument.
+	return filepath.Join(dir, sp.name)
+}
+
+func notesRoot() string {
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "notes"
+			return "."
 		}
 		base = filepath.Join(home, ".config")
 	}
-	return filepath.Join(base, "pick6", "notes")
+	return filepath.Join(base, "pick6")
 }
 
 // pickTab applies -tab / -data / -view to a headless board.
