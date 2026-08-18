@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/trisslazaj/pick6/internal/cache"
@@ -216,4 +217,30 @@ func RankValue(rank int, decay float64) int {
 		return v
 	}
 	return 1
+}
+
+// Departed is the stringified ids of players the pool still lists who have left
+// the league — Draftable's complement, and the half a live board needs.
+//
+// The board is built from players_fpl.json, which was filtered when `fetch` ran.
+// A player who transfers out between that fetch and the draft is therefore still
+// ON the board while the official app refuses to let anybody draft him — and
+// because no real pick can ever remove him, nothing in the sim ever removes him
+// either: his survival climbs toward 100% while the faller chip grows, which is
+// the board painting an undraftable man as the biggest bargain on the screen.
+// One such player sits inside the top 150 today.
+//
+// So `live` re-checks against the bootstrap it already fetched for the squad
+// quota. Dropping him is safe even in a draft that already took him: the feed's
+// name roll re-registers a drafted player whatever his status, which is exactly
+// how league 2400's replay handles the one it has.
+func (b *Bootstrap) Departed() []string {
+	var out []string
+	for _, e := range b.Elements {
+		if e.Status == "u" {
+			out = append(out, strconv.Itoa(e.ID))
+		}
+	}
+	sort.Strings(out)
+	return out
 }

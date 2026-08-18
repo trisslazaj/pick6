@@ -28,6 +28,10 @@ type liveDraft struct {
 	// the seat that picks is always the seat that keeps.
 	draft  *sleeper.Draft
 	header string
+
+	// drop is the ids to take OFF the board before the state is built: players
+	// the pool still lists who can no longer be drafted. Empty for sleeper.
+	drop []string
 }
 
 func liveSetup(sp sport, id, user string, slot int, replay bool) (liveDraft, error) {
@@ -114,6 +118,7 @@ func fplLive(sp sport, id, user string, slot int, replay bool) (liveDraft, error
 		roster: roster,
 		feed:   fpl.NewFeed(id, bs.Roll()),
 		draft:  nil, // no trades in an fpl draft: owner is always the seat
+		drop:   bs.Departed(),
 		header: fmt.Sprintf("league %s — %s, %d managers, %d rounds, %s",
 			id, strings.ToLower(league.Info.Name), teams, len(roster.Slots), status),
 	}, nil

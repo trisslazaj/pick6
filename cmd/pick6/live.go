@@ -84,6 +84,22 @@ func runLive(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Off the board before the state is built, never after: a player the source
+	// now says is undraftable is one no real pick can remove, so left on he
+	// survives to ~100% and accumulates a faller chip until the board is
+	// recommending him. See fpl.Bootstrap.Departed.
+	if gone := 0; len(setup.drop) > 0 {
+		for _, id := range setup.drop {
+			if _, ok := players[id]; ok {
+				delete(players, id)
+				gone++
+			}
+		}
+		if gone > 0 {
+			note("board", "current", fmt.Sprintf(
+				"%d players have left the league since the last fetch — dropped", gone))
+		}
+	}
 
 	s := engine.New(players, setup.teams, setup.rounds, setup.mySlot)
 	if sp.demand {
