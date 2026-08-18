@@ -31,7 +31,7 @@ func (s *State) Deny() (Player, int, bool) {
 	filled, _ := s.FilledSlots(them)
 	round := s.Round(next)
 	bestPos, bestNeed := "", 0.0
-	for _, pos := range planPositions {
+	for _, pos := range s.Positions() {
 		if _, ok := s.BestNow(pos); !ok {
 			continue // an empty position cannot be denied
 		}

@@ -69,6 +69,43 @@ type Player struct {
 type Roster struct {
 	Slots []string // e.g. QB, RB, RB, WR, WR, TE, FLEX, K, DEF
 	Bench int
+
+	// Quota marks a squad with a fixed count at every position and no bench at
+	// all — fpl's 2 gkp / 5 def / 5 mid / 3 fwd, fifteen men over fifteen rounds.
+	// A position already filled to its quota is worth NOTHING rather than "bench
+	// depth", because there is no bench for the depth to sit on and the official
+	// app will not let you draft him anyway.
+	//
+	// Its own bit, deliberately, and never read off Bench == 0: `board -lineup
+	// "qb rb rb wr wr te flex k def"` with no -bench is a legal nfl roster with a
+	// zero bench, and inferring the quota rule from the arithmetic would silently
+	// zero that user's bench need too.
+	Quota bool
+
+	// Hold is the set of positions nobody should be drafting early — k and def in
+	// nfl, nothing at all in fpl, where every position is somebody's starter from
+	// round one.
+	//
+	// NIL MEANS {K, DEF}, which is the trap, and NoHold is what makes it
+	// survivable: every production site that builds a Roster out of sleeper
+	// metadata writes Slots and Bench and nothing else, so a zero value meaning
+	// "hold nothing" would quietly un-suppress kickers on the real board. A sport
+	// that holds nothing has to say so out loud.
+	Hold map[string]bool
+}
+
+// NoHold is an explicitly empty hold set: no position is held back. A named
+// value so a roster that suppresses nothing reads as a decision at the call site
+// rather than as somebody forgetting a field.
+var NoHold = map[string]bool{}
+
+// holds reports whether a position is subject to the early-draft hold. See the
+// Hold field for why nil is the nfl default rather than the empty set.
+func (r Roster) holds(pos string) bool {
+	if r.Hold == nil {
+		return pos == "K" || pos == "DEF"
+	}
+	return r.Hold[pos]
 }
 
 // Pick is one completed selection.
@@ -614,7 +651,7 @@ func (s *State) NeedAfter(pos, playerID string) float64 {
 // endgame guard bites, so a ui check written as "Need == 0 means k/def" started
 // silently covering half the board the moment MustFillStarters turned true.
 func (s *State) Suppressed(pos string) bool {
-	return (pos == "K" || pos == "DEF") && s.RoundsRemaining() > KDefLastRounds
+	return s.Roster.holds(pos) && s.RoundsRemaining() > KDefLastRounds
 }
 
 // needFrom is the need rule itself, over an already-filled lineup. The endgame
@@ -643,6 +680,14 @@ func (s *State) needSlots(pos string, filled []string) float64 {
 		if isFlexSlot(want) && filled[i] == "" && EligibleFor(want, pos) {
 			return NeedFlex
 		}
+	}
+	if s.Roster.Quota {
+		// A hard quota has no bench, so a position whose slots are all filled is
+		// not "depth" at a quarter weight — it is a man you cannot draft. Zero,
+		// and every consumer that already knows how to hide a zero-need position
+		// (the field, the plan's membership test, the opponents' sampling) hides
+		// him for free.
+		return 0
 	}
 	return NeedBench
 }

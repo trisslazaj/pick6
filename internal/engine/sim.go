@@ -108,20 +108,10 @@ func betaAt(round int) float64 {
 	return b
 }
 
-// simPositions indexes the pool's positions once, so the per-candidate weight
-// loop reads an array instead of re-deriving need from the roster shape.
-var simPositions = [...]string{"QB", "RB", "WR", "TE", "K", "DEF"}
-
-// simPosIdx maps a position to its simPositions index; unknown positions get
-// the extra bucket at the end, which prices like a bench pick.
-func simPosIdx(pos string) int {
-	for i, p := range simPositions {
-		if p == pos {
-			return i
-		}
-	}
-	return len(simPositions)
-}
+// The core indexes the pool's positions once — State.Positions(), derived from
+// the lineup — so the per-candidate weight loop reads a slice instead of
+// re-deriving need from the roster shape on every candidate. Unknown positions
+// get the extra bucket past the end, which prices like a bench pick.
 
 // simPrice is the price desirability ranks by: the room-warped effective price
 // when a curve is loaded, with the no-ADP sentinel applied the same way
@@ -203,6 +193,21 @@ type simCore struct {
 	w     [CandidatePool]float64
 	rng   *rand.Rand
 
+	// pos is this draft's position vocabulary, derived from the lineup once at
+	// setup. needPow is the parallel weight buffer oppPick fills, one entry per
+	// position plus the unknown bucket — a field rather than a local because
+	// oppPick runs ~20 times per rollout across 500 rollouts, and a slice
+	// declared in there would be ten thousand heap allocations a frame where the
+	// old fixed-size array was free.
+	pos     []string
+	needPow []float64
+	// legal[pi] is "this seat can still roster a pi", read only under quota.
+	// Sized and filled beside needPow because it is the same question asked of
+	// the same loop; a second pass over the positions would just be the first one
+	// twice.
+	legal []bool
+	quota bool
+
 	// head is the first pool index that might still be alive. The candidate
 	// pool is the price-ordered board's top CandidatePool survivors, and a
 	// draft eats it from the front, so by the endgame a naive scan walks past
@@ -241,12 +246,17 @@ func (c *simCore) fill(ids []string) []string {
 // dead.
 func (s *State) newSimCore(seed int64) *simCore {
 	c := &simCore{s: s, index: map[string]int{}, rng: rand.New(rand.NewSource(seed))}
+	c.pos = s.Positions()
+	c.needPow = make([]float64, len(c.pos)+1)
+	c.legal = make([]bool, len(c.pos)+1)
+	c.legal[len(c.pos)] = true // an unknown position is nobody's quota
+	c.quota = s.Roster.Quota
 	price := map[string]float64{}
 	for id, p := range s.Players {
 		if s.Taken[id] {
 			continue
 		}
-		c.pool = append(c.pool, simCand{id: id, pos: p.Pos, posIdx: simPosIdx(p.Pos)})
+		c.pool = append(c.pool, simCand{id: id, pos: p.Pos, posIdx: posIndex(c.pos, p.Pos)})
 		price[id] = simPrice(p)
 	}
 	sort.Slice(c.pool, func(i, j int) bool {
@@ -310,18 +320,10 @@ func (c *simCore) oppPick(q int, rosters map[int][]string) (idx int, took, exhau
 		return 0, false, false
 	}
 	slot := s.SlotAt(q)
-	for c.head < len(c.pool) && !c.alive[c.head] {
-		c.head++
-	}
-	c.top = c.top[:0]
-	for i := c.head; i < len(c.pool) && len(c.top) < CandidatePool; i++ {
-		if c.alive[i] {
-			c.top = append(c.top, i)
-		}
-	}
-	if len(c.top) == 0 {
-		return 0, false, true
-	}
+	// The need read moves ahead of the candidate scan, because under a hard
+	// quota need decides who is even a candidate. Nothing between here and the
+	// sample touches the rng, so an nfl rollout draws exactly the numbers it drew
+	// before — the golden tables are the proof.
 	filled := c.fill(rosters[slot])
 	round := s.Round(q)
 	beta := betaAt(round)
@@ -333,10 +335,12 @@ func (c *simCore) oppPick(q int, rosters map[int][]string) (idx int, took, exhau
 		powFlex = math.Pow(NeedFlex, beta)
 		powBench = math.Pow(NeedBench, beta)
 	}
-	var needPow [len(simPositions) + 1]float64
-	needPow[len(simPositions)] = powBench // an unknown position prices like a bench pick
-	for pi, pos := range simPositions {
-		switch need := s.opponentNeed(pos, filled, round); need {
+	needPow := c.needPow
+	needPow[len(c.pos)] = powBench // an unknown position prices like a bench pick
+	for pi, pos := range c.pos {
+		need := s.opponentNeed(pos, filled, round)
+		c.legal[pi] = need > 0
+		switch need {
 		case 0:
 			needPow[pi] = 0
 		case NeedStarter:
@@ -348,6 +352,28 @@ func (c *simCore) oppPick(q int, rosters map[int][]string) (idx int, took, exhau
 		default:
 			needPow[pi] = math.Pow(need, beta) // unreachable today
 		}
+	}
+	for c.head < len(c.pool) && !c.alive[c.head] {
+		c.head++
+	}
+	c.top = c.top[:0]
+	for i := c.head; i < len(c.pool) && len(c.top) < CandidatePool; i++ {
+		if !c.alive[i] {
+			continue
+		}
+		if c.quota && !c.legal[c.pool[i].posIdx] {
+			// Under a hard quota a position this seat has already filled is not
+			// a bad pick, it is an impossible one — the official app refuses a
+			// sixth defender. A zero WEIGHT is not enough on its own: the
+			// zero-weight guard below exists to rescue a pick whose whole
+			// candidate pool priced at nothing, and it would rescue this one
+			// straight into drafting the illegal man.
+			continue
+		}
+		c.top = append(c.top, i)
+	}
+	if len(c.top) == 0 {
+		return 0, false, true
 	}
 	total := 0.0
 	for k, i := range c.top {
@@ -435,7 +461,7 @@ func (s *State) offBoardRate(q int) float64 {
 // here would keep kickers "available" that were drafted rounds ago, corrupting
 // every survival number downstream.
 func (s *State) opponentNeed(pos string, filled []string, round int) float64 {
-	if (pos == "K" || pos == "DEF") && s.Rounds-round+1 > OpponentKDefLastRounds {
+	if s.Roster.holds(pos) && s.Rounds-round+1 > OpponentKDefLastRounds {
 		return 0
 	}
 	return s.needSlots(pos, filled)

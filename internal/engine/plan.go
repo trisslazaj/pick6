@@ -35,13 +35,12 @@ type Plan struct {
 	Legs []PlanLeg
 }
 
-// planPositions is the order candidates are considered in, and therefore the
-// tie-break: two choices that score identically resolve to the earlier one here.
-// The order carries no meaning of its own (it's the lineup's), but iterating a
+// The order candidates are considered in — State.Positions(), the lineup's own —
+// is therefore the tie-break: two choices that score identically resolve to the
+// earlier one there. The order carries no meaning of its own, but iterating a
 // fixed slice rather than a map is what stops an exact tie — two positions with
 // equal value and equal need, which a fresh board produces more often than it
 // sounds — from recommending a different pair on every frame.
-var planPositions = []string{"QB", "RB", "WR", "TE", "K", "DEF"}
 
 // PickChoice is one way to spend my next pick: a position, its best available
 // man, and what the two-pick lookahead says that choice is worth.
@@ -159,7 +158,7 @@ func (s *State) PickChoices() []PickChoice {
 		return c
 	}
 	var cands []planCand
-	for _, pos := range planPositions {
+	for _, pos := range s.Positions() {
 		if s.Need(pos) == 0 {
 			continue
 		}
@@ -300,7 +299,7 @@ func (s *State) PickChoices() []PickChoice {
 			}
 			score := leg1 + leg2*needAfter
 			// Feasibility first, score second — and strictly greater on both, so a
-			// tie keeps the pair found first and the answer is planPositions order
+			// tie keeps the pair found first and the answer is lineup order
 			// rather than whatever the last loop happened to leave behind.
 			if fills > best.Fills || (fills == best.Fills && score > best.Score) {
 				best.Score, best.Fills, best.Second = score, fills, second.pos
@@ -342,7 +341,7 @@ func (s *State) PickChoices() []PickChoice {
 			out[i].Alt, out[i].AltIsMarket = mp, true
 		}
 	}
-	// Stable, so exact score ties keep planPositions order — the same guarantee
+	// Stable, so exact score ties keep lineup order — the same guarantee
 	// the pair loop's strict > gives the second leg.
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Fills != out[j].Fills {

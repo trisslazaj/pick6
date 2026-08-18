@@ -313,11 +313,11 @@ func mustFillAt(k, legs, mustFill, done int) bool {
 
 // ---- the leg policy ----
 
-// numPlanPos is how many positions a lineup can name. The pool's "unknown
-// position" bucket sits past it and is never a leg: nothing in Roster.Slots can
-// be filled by a position no lineup names, so taking one would be a pick the
-// tool would never recommend.
-const numPlanPos = len(simPositions)
+// How many positions a lineup can name is core.pos's length, sized at runtime
+// off the roster rather than fixed at six. The pool's "unknown position" bucket
+// sits past it and is never a leg: nothing in Roster.Slots can be filled by a
+// position no lineup names, so taking one would be a pick the tool would never
+// recommend.
 
 // planPolicy is what the engine would actually do with one of my picks: prefer
 // the board by VOR × need, given the roster my earlier legs leave behind. It is
@@ -363,12 +363,12 @@ type planPolicy struct {
 	core *simCore
 	// rank[p] is p's pool indices, best first by ((v − R)⁺ desc, pool index
 	// asc). Static for the whole draft; only the cursor moves.
-	rank   [numPlanPos][]int
+	rank   [][]int
 	vor    []float64 // (v − R(pos))⁺ per pool index
-	cursor [numPlanPos]int
-	base   [numPlanPos]bool // in PickChoices' candidate set today
-	kdef   [numPlanPos]bool // subject to OUR suppression, asked per leg round
-	late   [numPlanPos]bool // ...and excluded from the candidate set only by it
+	cursor []int
+	base   []bool // in PickChoices' candidate set today
+	held   []bool // subject to OUR early-draft hold, asked per leg round
+	late   []bool // ...and excluded from the candidate set only by it
 
 	// roster is true when the milestone-8 objective is the thing being scored.
 	// Two of this policy's rules exist only to serve it and would be behaviour
@@ -381,17 +381,31 @@ type planPolicy struct {
 }
 
 func (s *State) newPlanPolicy(core *simCore, allowed map[string]bool, roster bool) *planPolicy {
-	pol := &planPolicy{core: core, roster: roster, vor: make([]float64, len(core.pool))}
-	var repl [numPlanPos]float64
-	for pi, pos := range simPositions {
+	n := len(core.pos)
+	pol := &planPolicy{
+		core: core, roster: roster,
+		vor:    make([]float64, len(core.pool)),
+		rank:   make([][]int, n),
+		cursor: make([]int, n),
+		base:   make([]bool, n),
+		held:   make([]bool, n),
+		late:   make([]bool, n),
+	}
+	repl := make([]float64, n)
+	for pi, pos := range core.pos {
 		repl[pi] = s.Replacement(pos)
 		pol.base[pi] = allowed[pos]
-		pol.kdef[pi] = pos == "K" || pos == "DEF"
-		pol.late[pi] = roster && pol.kdef[pi] && !allowed[pos] && s.Suppressed(pos)
+		// The same early-draft hold State.Suppressed applies, read off the same
+		// configurable set rather than off the literal {K, DEF} this line used to
+		// carry. Left hardcoded, every fpl plan leg would refuse all 184
+		// defenders and 60 keepers until the last three rounds — the plan line
+		// and "your team from here" silent on half the squad for a whole draft.
+		pol.held[pi] = s.Roster.holds(pos)
+		pol.late[pi] = roster && pol.held[pi] && !allowed[pos] && s.Suppressed(pos)
 	}
 	for i, cand := range core.pool {
 		pi := cand.posIdx
-		if pi >= numPlanPos {
+		if pi >= n {
 			continue
 		}
 		if v := float64(s.Players[cand.id].Value) - repl[pi]; v > 0 {
@@ -422,7 +436,7 @@ func (pol *planPolicy) reset() {
 func (pol *planPolicy) take(s *State, ids []string, round int, mustFill bool) (idx int, weight float64, fills, ok bool) {
 	filled := pol.core.fill(ids)
 	best, bestW, bestFill := -1, 0.0, false
-	for pi := 0; pi < numPlanPos; pi++ {
+	for pi := range pol.core.pos {
 		if !pol.allows(s, pi, round) {
 			continue
 		}
@@ -430,8 +444,16 @@ func (pol *planPolicy) take(s *State, ids []string, round int, mustFill bool) (i
 		if i < 0 {
 			continue
 		}
-		pos := simPositions[pi]
+		pos := pol.core.pos[pi]
 		need := s.needSlots(pos, filled)
+		if need == 0 && s.Roster.Quota {
+			// Under a hard quota a filled position is not merely worthless, it
+			// is ILLEGAL — the official app will not let anyone draft a sixth
+			// defender. Without this the walk still takes him whenever he is the
+			// first allowed position with a live man, since a zero weight only
+			// loses ties and the opening `best < 0` loses to nothing at all.
+			continue
+		}
 		f := need > NeedBench
 		if !f && pol.roster {
 			// A bench body is worth what U will pay for him, which for a
@@ -469,7 +491,7 @@ func planBeats(mustFill, f bool, w float64, i int, bestFill bool, bestW float64,
 // allows is the membership test at one leg's round. See planPolicy's comment
 // for why suppression is asked at the leg's round and not at the vantage's.
 func (pol *planPolicy) allows(s *State, pi, round int) bool {
-	if pol.kdef[pi] {
+	if pol.held[pi] {
 		// Our own suppression, and the round it is asked about is the LEG'S,
 		// which is the only reading that survives a horizon long enough to
 		// reach round 14. A caller handing in an unrestricted candidate set
@@ -604,7 +626,7 @@ func (t *planTally) summarise(s *State, mine []int, n int) ([]PlanLeg, []SlotOut
 			legs = append(legs, leg)
 			continue
 		}
-		leg.Pos, _ = modalPos(t.legPos[k])
+		leg.Pos, _ = modalPos(s.Positions(), t.legPos[k])
 		if leg.Pos != "" {
 			leg.Tier, leg.Odds = modalBand(t.legTier[k][leg.Pos], n)
 			id, share := modalID(t.legPlayer[k])
@@ -648,9 +670,9 @@ func (t *planTally) summarise(s *State, mine []int, n int) ([]PlanLeg, []SlotOut
 // tie resolves the same way on every render instead of renaming the plan's
 // second leg between frames.
 
-func modalPos(m map[string]int) (string, int) {
+func modalPos(positions []string, m map[string]int) (string, int) {
 	best, n := "", 0
-	for _, pos := range planPositions {
+	for _, pos := range positions {
 		if k := m[pos]; k > n {
 			best, n = pos, k
 		}
