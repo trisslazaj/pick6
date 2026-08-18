@@ -712,7 +712,36 @@ read it before re-litigating a decision, not before writing code. specs live bes
      drafts, no era board, no room curve — the leagues are per-season with fresh ids), and
      `-survival=adp`, which is refused rather than quietly run: the v1 logistic divides a
      pick gap by a measured sigma and FPL publishes a rank order and no sigma anywhere.
+   - **The adversarial pass found eighteen things, and three of them were nfl regressions**
+     — which is the argument for the pass, since the twelve-frame bit-identity check passed
+     through every one of them. `live -` hung at 100% cpu forever (go's flag package treats a
+     bare dash as a terminating positional, so the id-anywhere loop never made progress); a
+     league whose lineup omits K and DEF lost the sim's kicker hold entirely, because the
+     derived buckets put every kicker in the "unknown position" bucket, which is priced at the
+     bench weight and never consults `opponentNeed`; and the endgame line's first gate was
+     `Bench == 0`, which is fpl's shape rather than fpl's reason and silenced a legal nfl case.
+     The gate is now `rounds > starting slots` — *there was slack to run out*.
+   - **The reach chip was firing on the board's own recommendation.** `12 before his price` is
+     one axis twice on an adp board and nonsense on a rank one: 150 picks over 560 ranked
+     players, spread by a quota that makes the room reach down for a second keeper long before
+     rank order would, so the pick counter falls behind the rank scale from round eight.
+     Measured on the scripted mock at 13.04 — the verdict recommended a keeper and captioned him
+     `110 before his price`. The reach half is gone; the falling half stays, because "he is
+     still here after 124 picks" IS true on a rank scale.
+   - **The fpl edge ignores its own cache headers.** `league/{id}/details` answers
+     `no-cache, no-store, must-revalidate` and varnish serves it `x-cache: HIT` at **age
+     98211 — twenty-seven hours**. `draft_status` would never have flipped. The pick feed
+     measured clean and gets a nonce anyway: which path varnish fronts is a config detail nobody
+     publishes, and a board thirty seconds behind looks exactly like a room that is thinking.
+   - **One finding was refuted by measuring it**, and the measurement is worth keeping: the
+     claim was that the faller flag reads rank as picks and is "measurably false for gkp and
+     def". Over league 2400's real 105 picks the fallers at picks 60/90/105 number 6/21/31 and
+     **every one is a midfielder** — this room takes keepers and defenders at or ahead of their
+     rank, so they never sit past rank+6. Left alone.
    - *Left open*: this room's fingerprint starts accruing now. **Cache `draft/4250/choices`
-     after draft night** — it is next season's only prior draft.
+     after draft night** — it is next season's only prior draft. And the opponent model's need
+     signal is binary under a quota (`NeedStarter` or 0, with no flex or bench tier to grade),
+     which is a modelling gap with **no fold to grade a fix against** — so it stays written down
+     rather than guessed at.
 10. Investigate having a global store of data + allowing new users to upload their own, without for example my own league barging into it --> lowish priority since im focusing on my own draft, but a cool thought.
 11. Using Claude to rate everyones draft on a letter grade scale
