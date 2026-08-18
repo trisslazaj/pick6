@@ -1445,18 +1445,22 @@ func (b Board) endgameLine(w int) string {
 	if !b.State.MustFillStarters() {
 		return ""
 	}
-	// A roster with no bench is in R == U from pick one and stays there for the
-	// whole draft — fifteen fpl squad slots against fifteen rounds, my remaining
-	// picks always equal to my unfilled starters because there is nowhere else a
-	// pick could go. The arithmetic is right and the ALERT is not: this line
-	// exists to say "the slack ran out", and a benchless squad never had any.
-	// Left ungated it renders on every single frame, which is a warning nobody
-	// can act on printed a hundred and fifty times.
+	// This line says "the slack ran out", so it needs there to have been slack.
+	// A draft with exactly as many rounds as starting slots is in R == U from
+	// pick one and never leaves — fpl's fifteen squad slots over fifteen rounds,
+	// my remaining picks always equal to my unfilled starters because there is
+	// nowhere else a pick could go. Ungated it renders on every frame of every
+	// such draft, which is a warning nobody can act on printed 150 times.
+	//
+	// The gate is the arithmetic and NOT `Bench == 0`, which was the first
+	// spelling and was too broad: `board -lineup "..." -bench 0 -rounds 12` over
+	// ten slots has two spare picks, reaches R == U partway through like any
+	// other roster, and wants the line when it does.
 	//
 	// Gated here rather than inside MustFillStarters, which is a correct
 	// predicate the plan's feasibility rules also read — this is a question about
 	// whether the state is worth SAYING, and that is the ui's to answer.
-	if b.State.Roster.Bench == 0 {
+	if b.State.Rounds <= len(b.State.Roster.Slots) {
 		return ""
 	}
 	line := "every remaining pick must fill a starter"

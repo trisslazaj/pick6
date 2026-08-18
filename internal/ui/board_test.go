@@ -1392,3 +1392,48 @@ func TestSlotClauseCountsSlotsItCannotCallBoth(t *testing.T) {
 		}
 	}
 }
+
+// The endgame line says "the slack ran out", so it needs there to have been
+// slack. A draft with exactly as many rounds as starting slots is R == U from
+// pick one and never leaves it — fpl's fifteen-man squad over fifteen rounds —
+// and the line would render on every frame of the whole draft.
+//
+// The gate is the arithmetic and NOT "has a bench", which was the first spelling
+// and killed a legal nfl case: a benchless lineup with rounds to spare reaches
+// R == U partway through like any other roster and wants the line when it does.
+func TestEndgameLineNeedsSlackToHaveExisted(t *testing.T) {
+	slots := []string{"QB", "RB", "RB", "WR", "WR", "TE", "FLEX", "K", "DEF"}
+
+	// All four are driven to R == U, so MustFillStarters is true in every one and
+	// the only thing separating them is whether there was ever slack to run out.
+	cases := []struct {
+		name   string
+		roster engine.Roster
+		rounds int
+		want   bool
+	}{
+		{"the default nfl shape", engine.Roster{Slots: slots, Bench: 6}, 15, true},
+		{"benchless, with three picks to spare", engine.Roster{Slots: slots, Bench: 0}, 12, true},
+		{"a squad: every pick is a starting slot, from pick one", engine.FPLRoster, 15, false},
+		{"benchless and exactly as long as the lineup", engine.Roster{Slots: slots, Bench: 0}, 9, false},
+	}
+
+	for _, c := range cases {
+		s := testState()
+		s.Roster = c.roster
+		s.Rounds = c.rounds
+		// Walk the clock forward until my remaining picks equal my open starting
+		// slots. Nobody drafts, so the open slots never move and only the picks
+		// left do — which is exactly the state the line describes.
+		for s.PickNo <= s.Teams*s.Rounds && !s.MustFillStarters() {
+			s.PickNo++
+		}
+		if !s.MustFillStarters() {
+			t.Fatalf("%s: fixture never reached R == U, so the case proves nothing", c.name)
+		}
+		b := Board{State: s, Width: 100, Height: 40}
+		if got := b.endgameLine(60) != ""; got != c.want {
+			t.Errorf("%s: line rendered = %v, want %v (at pick %d)", c.name, got, c.want, s.PickNo)
+		}
+	}
+}

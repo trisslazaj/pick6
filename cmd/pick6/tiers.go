@@ -108,7 +108,7 @@ func printPosition(sp sport, pos string, group []*adp.Player) {
 		fmt.Printf("      %s %s  %s  %s\n",
 			style.Render(fmt.Sprintf("%-24s", trunc(strings.ToLower(p.Name), 24))),
 			ui.Dim.Render(p.Team),
-			ui.Dim.Render(fmt.Sprintf("%s "+sp.priceFmt()+" ", sp.priceNoun(), p.ADP)),
+			ui.Dim.Render(fmt.Sprintf("%s "+sp.priceFmt(), sp.priceNoun(), p.ADP)),
 			spreadNote(p))
 	}
 }

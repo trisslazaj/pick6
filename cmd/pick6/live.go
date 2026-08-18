@@ -42,8 +42,8 @@ func runLive(args []string) error {
 	// positional, until nothing is left. Every order works and no flag can be
 	// eaten by an argument's position.
 	var draftID string
-	for rest := args; ; {
-		if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+	for rest := args; len(rest) > 0; {
+		if !strings.HasPrefix(rest[0], "-") {
 			if draftID == "" {
 				draftID = rest[0]
 			}
@@ -53,10 +53,16 @@ func runLive(args []string) error {
 		if err := fs.Parse(rest); err != nil {
 			return err
 		}
-		if fs.NArg() == 0 {
-			break
+		next := fs.Args()
+		if len(next) == len(rest) {
+			// Parse consumed nothing, which means it stopped on something it
+			// treats as a terminating positional while still looking like a
+			// flag — a bare "-". Handing the identical slice back to Parse is
+			// an infinite loop at 100% cpu with no output, which is what this
+			// loop did before the check.
+			return fmt.Errorf("unrecognised argument %q", rest[0])
 		}
-		rest = fs.Args()
+		rest = next
 	}
 	if draftID == "" {
 		return fmt.Errorf("usage: pick6 live <draft_id> [-user <name> | -slot N]\n" +
@@ -67,7 +73,7 @@ func runLive(args []string) error {
 	if err != nil {
 		return err
 	}
-	setup, err := liveSetup(sp, draftID, *user, *slot)
+	setup, err := liveSetup(sp, draftID, *user, *slot, *replay)
 	if err != nil {
 		return err
 	}

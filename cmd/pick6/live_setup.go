@@ -30,9 +30,9 @@ type liveDraft struct {
 	header string
 }
 
-func liveSetup(sp sport, id, user string, slot int) (liveDraft, error) {
+func liveSetup(sp sport, id, user string, slot int, replay bool) (liveDraft, error) {
 	if sp.name == fplSport.name {
-		return fplLive(sp, id, user, slot)
+		return fplLive(sp, id, user, slot, replay)
 	}
 	return sleeperLive(id, user, slot)
 }
@@ -71,7 +71,7 @@ func sleeperLive(id, user string, slot int) (liveDraft, error) {
 // draft/4512/choices returns a real, populated feed — for a stranger's league
 // 4512. It would poll somebody else's draft all night looking exactly like it
 // was working. See fpl.GetChoices.
-func fplLive(sp sport, id, user string, slot int) (liveDraft, error) {
+func fplLive(sp sport, id, user string, slot int, replay bool) (liveDraft, error) {
 	league, err := fpl.GetLeague(id)
 	if err != nil {
 		return liveDraft{}, err
@@ -95,6 +95,19 @@ func fplLive(sp sport, id, user string, slot int) (liveDraft, error) {
 	status := "waiting to start"
 	if league.Complete() {
 		status = "complete"
+		if !replay {
+			// The loudest guard available against the id trap. Passing the DRAFT
+			// id instead of the league id returns a real, populated feed for a
+			// stranger's league with that number — it does not error and it does
+			// not come back empty, so the only tells are the league's NAME in
+			// the header and this. A draft you are about to sit through is not
+			// one that has already finished; if it says complete, you are
+			// pointed at somebody else's.
+			return liveDraft{}, fmt.Errorf(
+				"league %s (%s) has already drafted — check the id, and note that it is the "+
+					"LEAGUE id, not the draft id the league details name. -replay to look at it anyway",
+				id, strings.ToLower(league.Info.Name))
+		}
 	}
 	return liveDraft{
 		teams: teams, rounds: len(roster.Slots), mySlot: mySlot,

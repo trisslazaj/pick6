@@ -1,5 +1,7 @@
 package engine
 
+import "sort"
+
 // positions.go derives the draft's position vocabulary from the roster.
 //
 // It used to be three hardcoded six-string literals — plan.go's planPositions,
@@ -104,4 +106,42 @@ func posIndex(positions []string, pos string) int {
 		}
 	}
 	return len(positions)
+}
+
+// simPositions is Positions plus any position that is on the BOARD without being
+// in the lineup — the opponents' vocabulary rather than the tool's.
+//
+// The difference matters because the two lists answer different questions.
+// Positions is "what may this tool recommend", and a league with no kicker slot
+// should never be told to draft a kicker. The sim's is "what may the room
+// spend a pick on", and the room can spend one on anybody the board holds.
+//
+// Without the extras they all share the pool's "unknown position" bucket, which
+// is priced at the bench weight UNCONDITIONALLY — it never asks opponentNeed,
+// so it never sees the early-draft hold. Measured consequence: in a league whose
+// lineup omits K and DEF (legal, and sleeper reports it), the simulated
+// opponents started drafting kickers in round 4 instead of round 10, and every
+// survival number on the board moved with them. Every position with its own
+// bucket gets asked properly, and the unknown bucket goes back to meaning what
+// it says: a player whose position no source gave us.
+//
+// Sorted, so the extras cannot arrive in map order. Under every roster whose
+// lineup names every position the board holds — which is both shipped ones —
+// nothing is appended and this is Positions exactly.
+func (s *State) simPositions() []string {
+	out := s.Positions()
+	seen := make(map[string]bool, len(out))
+	for _, pos := range out {
+		seen[pos] = true
+	}
+	var extra []string
+	for id, p := range s.Players {
+		if s.Taken[id] || p.Pos == "" || seen[p.Pos] {
+			continue
+		}
+		seen[p.Pos] = true
+		extra = append(extra, p.Pos)
+	}
+	sort.Strings(extra)
+	return append(out, extra...)
 }

@@ -246,7 +246,7 @@ func (c *simCore) fill(ids []string) []string {
 // dead.
 func (s *State) newSimCore(seed int64) *simCore {
 	c := &simCore{s: s, index: map[string]int{}, rng: rand.New(rand.NewSource(seed))}
-	c.pos = s.Positions()
+	c.pos = s.simPositions()
 	c.needPow = make([]float64, len(c.pos)+1)
 	c.legal = make([]bool, len(c.pos)+1)
 	c.legal[len(c.pos)] = true // an unknown position is nobody's quota

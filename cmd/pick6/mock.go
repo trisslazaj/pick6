@@ -22,8 +22,9 @@ import (
 
 func runMock(args []string) error {
 	fs := flagSet("mock")
-	teams := fs.Int("teams", 12, "league size")
-	rounds := fs.Int("rounds", 15, "rounds")
+	sportName := sportFlag(fs)
+	teams := fs.Int("teams", 0, "league size (default 12, or 10 under -sport fpl)")
+	rounds := fs.Int("rounds", 0, "rounds (default: the lineup plus its bench)")
 	slot := fs.Int("slot", 3, "my draft slot, 1-indexed")
 	seed := fs.Int64("seed", 6, "rng seed; same seed replays the same draft")
 	auto := fs.Bool("auto", true, "auto-advance picks")
@@ -43,19 +44,32 @@ func runMock(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	sp, err := resolveSport(*sportName)
+	if err != nil {
+		return err
+	}
+	if *teams == 0 {
+		*teams = sp.teams
+	}
+	if *rounds == 0 {
+		*rounds = len(sp.roster.Slots) + sp.roster.Bench
+	}
 	if *slot < 1 || *slot > *teams {
 		return fmt.Errorf("slot %d is outside a %d-team league", *slot, *teams)
 	}
 
-	players, err := loadBoard(nfl, *room, "")
+	players, err := loadBoard(sp, *room, "")
 	if err != nil {
 		return err
 	}
 	s := engine.New(players, *teams, *rounds, *slot)
-	s.Demand = leagueDemand() // replacement level, from this room's own drafts
+	s.SetRoster(sp.roster)
+	if sp.demand {
+		s.Demand = leagueDemand() // replacement level, from this room's own drafts
+	}
 	// The mock's sim seed is the draft seed: same -seed, same scripted picks AND
 	// the same rollout futures, so a demo frame is reproducible to the pixel.
-	if err := applyBrain(s, nfl, *survival, *scorer, "", *seed); err != nil {
+	if err := applyBrain(s, sp, *survival, *scorer, "", *seed); err != nil {
 		return err
 	}
 	pick := scriptedPicker(*seed)
@@ -72,8 +86,8 @@ func runMock(args []string) error {
 			s.Draft(id)
 		}
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Fresh: loadFreshness(nfl), Notes: ui.Notes{Dir: notesDir(nfl, *notes)},
-			Views: ui.Views{Dir: rankingsDir(nfl, *ranks), Fetched: fetchedRankings(nfl)}}
+			Fresh: loadFreshness(sp), Notes: ui.Notes{Dir: notesDir(sp, *notes)},
+			Views: ui.Views{Dir: rankingsDir(sp, *ranks), Fetched: fetchedRankings(sp)}}
 		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
 			b.Search = ui.Search{Open: true, Query: *search}
@@ -86,7 +100,7 @@ func runMock(args []string) error {
 	}
 
 	p := tea.NewProgram(
-		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness(nfl)).WithNotes(notesDir(nfl, *notes)).WithRankings(rankingsDir(nfl, *ranks), fetchedRankings(nfl)),
+		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness(sp)).WithNotes(notesDir(sp, *notes)).WithRankings(rankingsDir(sp, *ranks), fetchedRankings(sp)),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()
@@ -356,8 +370,22 @@ func scriptedPicker(seed int64) ui.Autopicker {
 				continue
 			}
 			// Nobody drafts a kicker in round 6, and if the mock does it the
-			// board fills with noise. Matches the engine's own suppression.
-			if (p.Pos == "K" || p.Pos == "DEF") && s.RoundsRemaining() > engine.KDefLastRounds {
+			// board fills with noise. Asks the engine rather than re-spelling
+			// the rule: a sport that holds nothing back answers false, and left
+			// as the literal an fpl mock would refuse every defender and keeper
+			// for twelve of fifteen rounds.
+			if s.Suppressed(p.Pos) {
+				continue
+			}
+			// Under a hard quota the room cannot take a sixth midfielder — the
+			// official app refuses it — so the scripted room must not either.
+			// Left out, my own seat finished a 15-round fpl mock with a player
+			// in "bn1" on a squad that has no bench, while three starting slots
+			// sat empty. The picker is deliberately need-BLIND otherwise: it
+			// drafts near the top of remaining adp so real runs emerge, and
+			// giving it a need model would make the mock confirm the board's own
+			// model by construction. This is legality, not preference.
+			if quotaFull(s, s.OnTheClock(), p.Pos) {
 				continue
 			}
 			a := p.ADP
@@ -389,4 +417,20 @@ func scriptedPicker(seed int64) ui.Autopicker {
 		}
 		return avail[idx].id, true
 	}
+}
+
+// quotaFull reports whether a seat has already filled every slot its lineup
+// gives a position. Reads the engine's own assignment rather than counting by
+// hand, so the mock and the board can never disagree about whose squad is full.
+// Always false without a quota — an nfl roster's spare bodies go to the bench.
+func quotaFull(s *engine.State, slot int, pos string) bool {
+	if !s.Roster.Quota {
+		return false
+	}
+	for _, want := range s.UnfilledStarters(slot) {
+		if want == pos {
+			return false
+		}
+	}
+	return true
 }

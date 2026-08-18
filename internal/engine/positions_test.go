@@ -228,3 +228,45 @@ func TestTheSimNeverDraftsPastAQuota(t *testing.T) {
 		t.Fatal("the sim never picked at all, so the test proved nothing")
 	}
 }
+
+// A league whose lineup omits kickers and defenses is legal, and sleeper reports
+// it. Its board still HOLDS them, and the room still drafts them late — so the
+// sim has to be able to ask about a position the lineup never names.
+//
+// The regression this pins: deriving the sim's buckets from the lineup alone put
+// every kicker in the pool's "unknown position" bucket, which is priced at the
+// bench weight unconditionally and never consults opponentNeed. The opponents
+// started taking kickers in round 4 instead of round 10, and every survival
+// number on the board moved with them.
+func TestTheSimAsksAboutPositionsTheLineupDoesNotName(t *testing.T) {
+	board := quotaBoard()
+	for i := 1; i <= 3; i++ {
+		id := "k" + itoa(i)
+		board[id] = Player{ID: id, Name: id, Pos: "K", ADP: float64(i), Sigma: 6, Value: 900}
+	}
+	s := New(board, 10, 15, 1)
+	// No kicker slot anywhere in the lineup.
+	s.Roster = Roster{Slots: []string{"GKP", "DEF", "MID", "FWD"}, Bench: 6}
+
+	if got := s.Positions(); len(got) != 4 {
+		t.Fatalf("Positions() = %v, want the four the lineup names — the tool must not "+
+			"recommend a position with no slot", got)
+	}
+	sim := s.simPositions()
+	if len(sim) != 5 || sim[4] != "K" {
+		t.Fatalf("simPositions() = %v, want the lineup's four plus K — the room can spend a "+
+			"pick on anybody the board holds", sim)
+	}
+	// And it lands in a bucket of its own rather than the unknown one, which is
+	// what makes the hold reachable at all.
+	core := s.newSimCore(1)
+	if pi := posIndex(core.pos, "K"); pi >= len(core.pos) {
+		t.Errorf("K indexed at %d, the unknown bucket — the hold can never be asked about it", pi)
+	}
+	// Deterministic: the extras are sorted, never in map order.
+	for i := 0; i < 50; i++ {
+		if got := s.simPositions(); got[4] != "K" {
+			t.Fatalf("derivation %d put %v last", i, got)
+		}
+	}
+}
