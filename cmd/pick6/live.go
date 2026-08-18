@@ -14,7 +14,8 @@ import (
 
 func runLive(args []string) error {
 	fs := flagSet("live")
-	user := fs.String("user", "", "your sleeper username, to find your draft slot")
+	sportName := sportFlag(fs)
+	user := fs.String("user", "", "your username (sleeper) or manager name (fpl), to find your draft slot")
 	slot := fs.Int("slot", 0, "your draft slot, if you'd rather say it directly")
 	poll := fs.Int("poll", 3, "seconds between polls (sleeper asks for 2-3+)")
 	replay := fs.Bool("replay", false, "load a finished draft once and print one frame (no tui)")
@@ -31,67 +32,77 @@ func runLive(args []string) error {
 	survival, scorer := survivalFlag(fs), scorerFlag(fs)
 	width := fs.Int("width", 92, "board width for replay mode")
 	height := fs.Int("height", 40, "board height for replay mode")
-	// Go's flag package stops parsing at the first positional argument, so
-	// `live <id> -user x` would silently drop every flag. Pull a leading draft id
-	// out first; both orders then work.
+	// Go's flag package stops parsing at the first positional argument, so a
+	// draft id anywhere but the very front silently swallows every flag after
+	// it. Pulling a LEADING id out covered `live <id> -user x` and nothing else:
+	// `live -sport fpl 4250 -slot 3` parsed -sport, stopped dead at 4250, and
+	// ran with -slot at its default while looking like it had worked.
+	//
+	// So: alternate. Take a positional, parse what follows, take the next
+	// positional, until nothing is left. Every order works and no flag can be
+	// eaten by an argument's position.
 	var draftID string
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		draftID, args = args[0], args[1:]
-	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if draftID == "" && fs.NArg() > 0 {
-		draftID = fs.Arg(0)
+	for rest := args; ; {
+		if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+			if draftID == "" {
+				draftID = rest[0]
+			}
+			rest = rest[1:]
+			continue
+		}
+		if err := fs.Parse(rest); err != nil {
+			return err
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		rest = fs.Args()
 	}
 	if draftID == "" {
-		return fmt.Errorf("usage: pick6 live <draft_id> [-user <name> | -slot N]")
+		return fmt.Errorf("usage: pick6 live <draft_id> [-user <name> | -slot N]\n" +
+			"       pick6 live -sport fpl <league_id> -slot N")
 	}
 
-	draft, err := sleeper.GetDraft(draftID)
+	sp, err := resolveSport(*sportName)
 	if err != nil {
 		return err
 	}
-	if err := draft.Validate(); err != nil {
-		return err
-	}
-
-	mySlot, err := resolveSlot(draft, *user, *slot)
+	setup, err := liveSetup(sp, draftID, *user, *slot)
 	if err != nil {
 		return err
 	}
 
 	// The draft id doubles as the room curve's hold-out: -replay over one of this
 	// league's own completed drafts must not price it off itself.
-	players, err := loadBoard(*room, draftID)
+	players, err := loadBoard(sp, *room, draftID)
 	if err != nil {
 		return err
 	}
 
-	s := engine.New(players, draft.Settings.Teams, draft.Settings.Rounds, mySlot)
-	s.Demand = leagueDemand() // replacement level, from this room's own drafts
+	s := engine.New(players, setup.teams, setup.rounds, setup.mySlot)
+	if sp.demand {
+		s.Demand = leagueDemand() // replacement level, from this room's own drafts
+	}
 	// Prefer the league's real lineup over our assumed one — this league runs two
 	// flex slots, which the default shape does not.
-	if slots := draft.RosterSlots(); len(slots) > 0 {
-		s.SetRoster(engine.Roster{Slots: slots, Bench: draft.Settings.SlotsBench})
-	}
+	s.SetRoster(setup.roster)
 	// The draft id is the hold-out for the escape rates exactly as it is for the
 	// room curve, and it seeds the rollouts so a re-render never jiggles.
-	if err := applyBrain(s, *survival, *scorer, draftID, simSeedOf(draftID)); err != nil {
+	if err := applyBrain(s, sp, *survival, *scorer, draftID, simSeedOf(draftID)); err != nil {
 		return err
 	}
 
-	fmt.Printf("draft %s — %d teams, %d rounds, %s\n",
-		draftID, draft.Settings.Teams, draft.Settings.Rounds, draft.Status)
+	fmt.Println(setup.header)
 	// Lowercase like everything else the tool prints; team codes are the only
 	// uppercase text anywhere, and a slot name is not one.
-	fmt.Printf("your slot: %d   lineup: %s\n", mySlot,
+	fmt.Printf("your slot: %d   lineup: %s\n", setup.mySlot,
 		strings.ToLower(strings.Join(s.Roster.Slots, " ")))
 
-	feed := sleeper.NewFeed(draftID)
+	feed := setup.feed
+	draft := setup.draft
 	interval := *poll
 	if interval < 2 {
-		interval = 2 // Sleeper asks callers not to poll harder than this
+		interval = 2 // both apis ask callers not to poll harder than this
 	}
 
 	// Replay loads a finished draft once and prints a single frame. No TUI, so it
@@ -102,31 +113,19 @@ func runLive(args []string) error {
 		if err != nil {
 			return err
 		}
-		for _, p := range snap.Picks {
-			if p.PlayerID == "" {
-				continue
-			}
-			s.EnsurePlayer(engine.Player{
-				ID:   p.PlayerID,
-				Name: strings.TrimSpace(p.Metadata.FirstName + " " + p.Metadata.LastName),
-				Pos:  p.Metadata.Position,
-				Team: p.Metadata.Team,
-			})
-			if err := s.ApplyRemote(engine.RemotePick{
-				PickNo: p.PickNo, Round: p.Round, Slot: p.DraftSlot,
-				OwnerSlot: draft.OwnerSlot(p), PlayerID: p.PlayerID,
-			}); err != nil {
-				return fmt.Errorf("%w\n(this means our draft-order model disagrees with sleeper; "+
-					"the board would be wrong, so it is not shown)", err)
-			}
+		// The same loop the live tui runs, not a copy of it — see ui.ApplySnapshot.
+		applied, err := ui.ApplySnapshot(s, snap, ownerSlotFunc(draft))
+		if err != nil {
+			return fmt.Errorf("%w\n(this means our draft-order model disagrees with the feed; "+
+				"the board would be wrong, so it is not shown)", err)
 		}
-		fmt.Printf("replayed %d picks\n\n", len(snap.Picks))
+		fmt.Printf("replayed %d picks\n\n", applied)
 		// ModeLive, because a replay is the live board with the poll already
 		// finished: the frame you eyeball has to advertise the keys the live
 		// board binds, not the mock's.
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Mode: ui.ModeLive, Fresh: loadFreshness(), Notes: ui.Notes{Dir: notesDir(*notes)},
-			Views: ui.Views{Dir: rankingsDir(*ranks), Fetched: fetchedRankings()}}
+			Mode: ui.ModeLive, Fresh: loadFreshness(sp), Notes: ui.Notes{Dir: notesDir(*notes)},
+			Views: ui.Views{Dir: rankingsDir(sp, *ranks), Fetched: fetchedRankings(sp)}}
 		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
 			b.Search = ui.Search{Open: true, Query: *search}
@@ -141,9 +140,9 @@ func runLive(args []string) error {
 	p := tea.NewProgram(
 		ui.NewLiveModel(s, feed, interval, false).
 			WithDraft(draft).
-			WithFreshness(loadFreshness()).
+			WithFreshness(loadFreshness(sp)).
 			WithNotes(notesDir(*notes)).
-			WithRankings(rankingsDir(*ranks), fetchedRankings()),
+			WithRankings(rankingsDir(sp, *ranks), fetchedRankings(sp)),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()

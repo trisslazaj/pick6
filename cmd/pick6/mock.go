@@ -47,7 +47,7 @@ func runMock(args []string) error {
 		return fmt.Errorf("slot %d is outside a %d-team league", *slot, *teams)
 	}
 
-	players, err := loadBoard(*room, "")
+	players, err := loadBoard(nfl, *room, "")
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func runMock(args []string) error {
 	s.Demand = leagueDemand() // replacement level, from this room's own drafts
 	// The mock's sim seed is the draft seed: same -seed, same scripted picks AND
 	// the same rollout futures, so a demo frame is reproducible to the pixel.
-	if err := applyBrain(s, *survival, *scorer, "", *seed); err != nil {
+	if err := applyBrain(s, nfl, *survival, *scorer, "", *seed); err != nil {
 		return err
 	}
 	pick := scriptedPicker(*seed)
@@ -72,8 +72,8 @@ func runMock(args []string) error {
 			s.Draft(id)
 		}
 		b := ui.Board{State: s, Width: *width, Height: *height, Synced: time.Now(),
-			Fresh: loadFreshness(), Notes: ui.Notes{Dir: notesDir(*notes)},
-			Views: ui.Views{Dir: rankingsDir(*ranks), Fetched: fetchedRankings()}}
+			Fresh: loadFreshness(nfl), Notes: ui.Notes{Dir: notesDir(*notes)},
+			Views: ui.Views{Dir: rankingsDir(nfl, *ranks), Fetched: fetchedRankings(nfl)}}
 		pickTab(&b, *tab, *data, *view)
 		if *search != "" {
 			b.Search = ui.Search{Open: true, Query: *search}
@@ -86,7 +86,7 @@ func runMock(args []string) error {
 	}
 
 	p := tea.NewProgram(
-		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness()).WithNotes(notesDir(*notes)).WithRankings(rankingsDir(*ranks), fetchedRankings()),
+		ui.NewModel(s, pick, *auto).WithFreshness(loadFreshness(nfl)).WithNotes(notesDir(*notes)).WithRankings(rankingsDir(nfl, *ranks), fetchedRankings(nfl)),
 		tea.WithAltScreen(),
 	)
 	_, err = p.Run()
@@ -129,14 +129,14 @@ var leagueDrafts = calibrateDrafts
 //
 // replaying is the draft id being replayed, or "" live and in the mock. It is
 // held out of the curve; see roomWarp.
-func loadBoard(room bool, replaying string) (map[string]engine.Player, error) {
+func loadBoard(sp sport, room bool, replaying string) (map[string]engine.Player, error) {
 	dir, err := cache.Dir()
 	if err != nil {
 		return nil, err
 	}
-	b, err := os.ReadFile(filepath.Join(dir, "players.json"))
+	b, err := os.ReadFile(filepath.Join(dir, sp.board))
 	if err != nil {
-		return nil, fmt.Errorf("no board yet — run `pick6 fetch` first (%w)", err)
+		return nil, fmt.Errorf("no board yet — run %s first (%w)", sp.fetchCmd(), err)
 	}
 	var list []*adp.Player
 	if err := json.Unmarshal(b, &list); err != nil {
@@ -173,10 +173,19 @@ func loadBoard(room bool, replaying string) (map[string]engine.Player, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("board is empty — run `pick6 fetch` first")
+		return nil, fmt.Errorf("board is empty — run %s first", sp.fetchCmd())
 	}
-	if room {
+	switch {
+	case room && sp.room:
 		roomWarp(out, list, replaying)
+	case room:
+		// Answered here rather than by sport-keying the flag's default, so that
+		// an explicit -room=true gets an answer instead of being silently
+		// obeyed. There is no fpl room curve to warp against — the leagues are
+		// per-season with fresh ids and this one has no history yet — and the
+		// curve that does exist is keyed by nfl position, where "DEF" means one
+		// team defense rather than a hundred and eighty-four defenders.
+		note("room", "off", sp.name+" has no room curve — the board stays on "+sp.priceNoun())
 	}
 	return out, nil
 }
@@ -296,7 +305,14 @@ func roomWarp(out map[string]engine.Player, list []*adp.Player, replaying string
 // boards fetched before meta.json existed still draw fine, they just cannot say
 // how old they are. The zero Freshness renders as nothing at all, which beats
 // "adp 0h old" about a board from last week.
-func loadFreshness() ui.Freshness {
+func loadFreshness(sp sport) ui.Freshness {
+	if !sp.meta {
+		// A sport with no meta.json of its own must not read the other one's.
+		// The zero value is already the documented "no meta" state and renders
+		// as nothing, which beats a footer claiming the nfl board's age and the
+		// number of drafts behind an adp this board never used.
+		return ui.Freshness{}
+	}
 	dir, err := cache.Dir()
 	if err != nil {
 		return ui.Freshness{}

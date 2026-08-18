@@ -115,22 +115,11 @@ func (m LiveModel) handlePoll(msg pollMsg) (tea.Model, tea.Cmd) {
 	}
 	m.pollErr = ""
 
-	applied := 0
-	for _, p := range msg.snap.Picks {
-		if p.PlayerID == "" {
-			continue
-		}
-		m.board.State.EnsurePlayer(pickToPlayer(p))
-		if err := m.board.State.ApplyRemote(engine.RemotePick{
-			PickNo: p.PickNo, Round: p.Round, Slot: p.DraftSlot,
-			OwnerSlot: m.ownerSlot(p), PlayerID: p.PlayerID,
-		}); err != nil {
-			// Our model of the draft order disagrees with Sleeper's. Every survival
-			// number downstream would be wrong, so say so loudly and stop applying.
-			m.desync = err.Error()
-			break
-		}
-		applied++
+	applied, err := ApplySnapshot(m.board.State, msg.snap, m.ownerSlot)
+	if err != nil {
+		// Our model of the draft order disagrees with the feed's. Every survival
+		// number downstream would be wrong, so say so loudly and stop applying.
+		m.desync = err.Error()
 	}
 
 	if applied != m.applied {
@@ -199,6 +188,45 @@ func (m LiveModel) trailer() []string {
 
 // Snapshot renders one frame without a TTY, for replaying a finished draft.
 func (m LiveModel) Snapshot() string { return m.View() }
+
+// ApplySnapshot folds a feed's whole pick list into the state, and it is one
+// function because it used to be two.
+//
+// The live tui applied picks here and `live -replay` hand-copied the same loop
+// in cmd, which was survivable while there was one feed — and stopped being so
+// the moment a second sport wanted a third copy. The zero-desync claim the whole
+// live path rests on ("552 replayed real picks, zero mismatches") is a claim
+// about THIS loop, so the loop the replay exercises has to be the loop the draft
+// runs.
+//
+// Whole list every time, and application is idempotent — ApplyRemote returns
+// early on a player already taken — so a dropped poll self-heals on the next one
+// instead of leaving a permanent hole.
+//
+// ownerSlot resolves a traded pick to the roster that receives it; nil means the
+// seat that picks is the seat that keeps, which is fpl's rule always and
+// sleeper's whenever no draft metadata was attached.
+func ApplySnapshot(s *engine.State, snap sleeper.Snapshot, ownerSlot func(sleeper.DraftPick) int) (int, error) {
+	applied := 0
+	for _, p := range snap.Picks {
+		if p.PlayerID == "" {
+			continue
+		}
+		s.EnsurePlayer(pickToPlayer(p))
+		owner := p.DraftSlot
+		if ownerSlot != nil {
+			owner = ownerSlot(p)
+		}
+		if err := s.ApplyRemote(engine.RemotePick{
+			PickNo: p.PickNo, Round: p.Round, Slot: p.DraftSlot,
+			OwnerSlot: owner, PlayerID: p.PlayerID,
+		}); err != nil {
+			return applied, err
+		}
+		applied++
+	}
+	return applied, nil
+}
 
 // pickToPlayer builds a minimal player from what the draft feed tells us, for
 // anyone missing from our board.

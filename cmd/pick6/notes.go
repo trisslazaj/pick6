@@ -36,17 +36,30 @@ func viewFlag(fs *flag.FlagSet) *string {
 	return fs.String("view", "", "with -tab data: which view — value, adp, tiers, or a rankings file's name")
 }
 
-// rankingsDir resolves -rankings the same way notesDir resolves -notes.
-func rankingsDir(flagVal string) string {
+// rankingsDir resolves -rankings the same way notesDir resolves -notes, with a
+// per-sport subfolder past nfl's.
+//
+// Without the split, an fpl board's data tab lists every one of the user's nfl
+// rankings csvs as a view, each rendering nothing but `?` rows — the names are
+// simply not fpl players. A view that claims to show a file verbatim and shows
+// nothing is worse than no view.
+func rankingsDir(sp sport, flagVal string) string {
 	if flagVal != "" {
 		return flagVal
 	}
-	return filepath.Join(filepath.Dir(notesDir("")), "rankings")
+	base := filepath.Join(filepath.Dir(notesDir("")), "rankings")
+	if sp.name == nfl.name {
+		return base
+	}
+	return filepath.Join(base, sp.name)
 }
 
 // fetchedRankings is the file `fetch -rankings` loaded, off meta.json; "" when
-// there wasn't one or there is no meta.
-func fetchedRankings() string {
+// there wasn't one, there is no meta, or this sport doesn't keep one.
+func fetchedRankings(sp sport) string {
+	if !sp.meta {
+		return ""
+	}
 	dir, err := cache.Dir()
 	if err != nil {
 		return ""

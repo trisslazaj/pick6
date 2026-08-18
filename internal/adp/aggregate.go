@@ -432,10 +432,26 @@ func isKDef(pos string) bool { return pos == "K" || pos == "DEF" }
 // somewhere else on the board — it cannot draw a real tier boundary. Tier 0 is
 // also what keeps cliff logic skipping them, and a red "last one in tier 3"
 // about kickers is exactly the kind of alarm this tool must never raise.
-func AssignTiers(players map[string]*Player) {
+func AssignTiers(players map[string]*Player) { assignTiers(players, isKDef) }
+
+// AssignTiersAll is AssignTiers over a board where every position is a real,
+// drafted, tiered player.
+//
+// The nfl entry point zeroes the tier of anything isKDef matches, which is right
+// for a kicker and a team defense and catastrophic for fpl: "DEF" there is a
+// hundred and eighty-four outfield defenders, a third of the pool, and they
+// would arrive on the board untiered — no cliffs, no tier notes, no ladder, and
+// the run banner's "tier broke" clause unable to fire for a third of every
+// draft. Two entry points rather than a parameter because the fifteen existing
+// callers are all nfl and none of them should have to say so.
+func AssignTiersAll(players map[string]*Player) {
+	assignTiers(players, func(string) bool { return false })
+}
+
+func assignTiers(players map[string]*Player, teamUnit func(string) bool) {
 	byPos := map[string][]*Player{}
 	for _, p := range players {
-		if isKDef(p.Pos) {
+		if teamUnit(p.Pos) {
 			p.Tier, p.TierSrc = 0, TierNone
 			continue
 		}
@@ -487,8 +503,21 @@ func assignPositionTiers(group []*Player) {
 		blocks = append(blocks, subdivide(ranked[t])...) // rule 2
 	}
 
-	// Rule 3: value-gap tiers for whatever the file didn't cover.
-	blocks = append(blocks, deriveBlocks(rest)...)
+	// Rule 3: value-gap tiers for whatever the file didn't cover — subdivided by
+	// the same rule 2, because rule 2's argument was never about where the block
+	// came from. "A twenty-one man tier can never trigger a cliff" is as true of
+	// one this file derived as of one a published graphic drew.
+	//
+	// It was a no-op on the nfl board when it landed — the biggest derived block
+	// there is eight, because fantasycalc's imported values are genuinely convex
+	// and the gaps fall out on their own. On a board priced by a smooth curve
+	// over rank it is the whole ballgame: fpl's midfielders derived to two tiers,
+	// one of thirty-nine and one of TWO HUNDRED AND THIRTEEN, and a board with
+	// two tiers per position has no cliffs, no tier notes, no ladder and no "tier
+	// broke" clause for the run banner to fire.
+	for _, b := range deriveBlocks(rest) {
+		blocks = append(blocks, subdivide(b)...)
+	}
 
 	for i, b := range blocks {
 		for _, p := range b {
@@ -500,29 +529,22 @@ func assignPositionTiers(group []*Player) {
 // subdivide splits an oversized block at its largest relative value drops until
 // every piece fits within TierMaxSize. Returns the block untouched if it already
 // fits or if no player in it carries a value to split on.
+// Recursive rather than the old "find the biggest oversized piece and split it"
+// loop, and not for elegance: a piece with nothing to split on used to `return
+// pieces` and abandon every OTHER oversized piece with it. On the nfl board no
+// block is ever flat and the two are identical — each oversized piece is cut at
+// its own biggest drop either way, and the cut point of one piece never depends
+// on another. On the fpl board the deep tail is a long run of equal values,
+// which aborted the whole subdivision and left defenders in a block of 116.
 func subdivide(block []*Player) [][]*Player {
 	if len(block) <= TierMaxSize {
 		return [][]*Player{block}
 	}
-	pieces := [][]*Player{block}
-	for {
-		worst, worstLen := -1, TierMaxSize
-		for i, p := range pieces {
-			if len(p) > worstLen {
-				worst, worstLen = i, len(p)
-			}
-		}
-		if worst < 0 {
-			return pieces
-		}
-		at := biggestDrop(pieces[worst], TierMinSize)
-		if at <= 0 {
-			return pieces // flat values, nothing meaningful to split on
-		}
-		p := pieces[worst]
-		split := [][]*Player{p[:at], p[at:]}
-		pieces = append(pieces[:worst], append(split, pieces[worst+1:]...)...)
+	at := biggestDrop(block, TierMinSize)
+	if at <= 0 {
+		return [][]*Player{block} // flat values, nothing meaningful to split on
 	}
+	return append(subdivide(block[:at]), subdivide(block[at:])...)
 }
 
 // biggestDrop returns the index of the largest relative value drop, considering

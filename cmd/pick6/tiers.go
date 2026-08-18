@@ -12,14 +12,20 @@ import (
 
 	"github.com/trisslazaj/pick6/internal/adp"
 	"github.com/trisslazaj/pick6/internal/cache"
+	"github.com/trisslazaj/pick6/internal/engine"
 	"github.com/trisslazaj/pick6/internal/ui"
 )
 
 func runTiers(args []string) error {
 	fs := flagSet("tiers")
-	only := fs.String("pos", "", "show one position only (qb, rb, wr, te, k, def)")
+	sportName := sportFlag(fs)
+	only := fs.String("pos", "", "show one position only (qb, rb, wr, te, k, def — gkp, def, mid, fwd under -sport fpl)")
 	depth := fs.Int("depth", 0, "max players to show per position (0 = all)")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	sp, err := resolveSport(*sportName)
+	if err != nil {
 		return err
 	}
 
@@ -27,10 +33,14 @@ func runTiers(args []string) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "players.json")
+	// Its own reader rather than loadBoard's, because this command wants the adp
+	// rows and not the engine's players — so it needs the same sport key told to
+	// it twice. A second reader of one filename is how `tiers -sport fpl` ends up
+	// printing the nfl board.
+	path := filepath.Join(dir, sp.board)
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("no board yet — run `pick6 fetch` first (%w)", err)
+		return fmt.Errorf("no board yet — run %s first (%w)", sp.fetchCmd(), err)
 	}
 	var list []*adp.Player
 	if err := json.Unmarshal(b, &list); err != nil {
@@ -42,7 +52,7 @@ func runTiers(args []string) error {
 		byPos[p.Pos] = append(byPos[p.Pos], p)
 	}
 
-	order := []string{"QB", "RB", "WR", "TE", "K", "DEF"}
+	order := engine.RosterPositions(sp.roster)
 	if *only != "" {
 		order = []string{strings.ToUpper(*only)}
 	}

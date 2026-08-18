@@ -1,0 +1,219 @@
+// Package fpl talks to the FPL Draft API. No auth on anything we use, and that
+// is load-bearing rather than lucky: the one endpoint that needs a bearer token
+// (bootstrap-dynamic) only lists which leagues you are in, which is a thing you
+// look up once and write down. Draft night polls with no token, no cookie, and
+// nothing that can expire mid-round.
+package fpl
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"sort"
+	"time"
+
+	"github.com/trisslazaj/pick6/internal/cache"
+)
+
+const apiBase = "https://draft.premierleague.com/api"
+
+// BootstrapCache is the pool's filename in the cache dir. Its own file, never
+// players.json: an fpl fetch eight days before the nfl draft must not be able to
+// clobber the nfl board.
+const BootstrapCache = "fpl_bootstrap.json"
+
+// Element is one player out of bootstrap-static.
+//
+// The fields past Status are a truth layer and nothing more, exactly as in the
+// sleeper dump: they travel to the board so a human can read them, and no math
+// anywhere prices them. "Discount the injured man's value" is as wrong here as
+// it is there — we make no projections of our own.
+type Element struct {
+	ID          int    `json:"id"`
+	WebName     string `json:"web_name"`
+	FirstName   string `json:"first_name"`
+	SecondName  string `json:"second_name"`
+	Team        int    `json:"team"`
+	ElementType int    `json:"element_type"`
+	// DraftRank is FPL's own draft-mode ranking, and it is the price. Populated
+	// on every element, 1..N with no holes, and better than a points sort: it
+	// prices an injury-shortened season back up where the market has it, which
+	// a total_points sort buries a hundred and ten ranks deep.
+	DraftRank   int    `json:"draft_rank"`
+	TotalPoints int    `json:"total_points"`
+	Status      string `json:"status"` // a available, i injured, d doubtful, s suspended, u left the league
+	News        string `json:"news"`
+	// NewsAdded is RFC3339 and null for most of the pool. It is NOT epoch
+	// millis — the sleeper dump's news_updated is, and copying that assumption
+	// here reads every date as 1970.
+	NewsAdded  *time.Time `json:"news_added"`
+	ChanceNext *int       `json:"chance_of_playing_next_round"`
+	ChanceThis *int       `json:"chance_of_playing_this_round"`
+}
+
+// Team is one of the twenty clubs; we want the short name and nothing else.
+type Team struct {
+	ID        int    `json:"id"`
+	ShortName string `json:"short_name"`
+}
+
+// ElementType maps element_type to the position string the whole engine speaks.
+type ElementType struct {
+	ID    int    `json:"id"`
+	Short string `json:"singular_name_short"` // GKP DEF MID FWD
+}
+
+// Squad is the hard quota: fifteen men, and exactly this many at each position.
+// There is no bench and no flex, so a squad slot you have already filled twice
+// is worth nothing rather than "bench depth" — see engine.Roster.Quota.
+type Squad struct {
+	Size int `json:"size"`
+	GKP  int `json:"select_GKP"`
+	DEF  int `json:"select_DEF"`
+	MID  int `json:"select_MID"`
+	FWD  int `json:"select_FWD"`
+}
+
+// Bootstrap is the subset of bootstrap-static we read.
+type Bootstrap struct {
+	Elements     []Element     `json:"elements"`
+	Teams        []Team        `json:"teams"`
+	ElementTypes []ElementType `json:"element_types"`
+	Settings     struct {
+		Squad Squad `json:"squad"`
+	} `json:"settings"`
+}
+
+// GetBootstrap downloads (or reads from cache) the player pool.
+func GetBootstrap(maxAge time.Duration) (*Bootstrap, bool, error) {
+	b, fetched, err := cache.Get(BootstrapCache, apiBase+"/bootstrap-static", maxAge)
+	if err != nil {
+		return nil, false, err
+	}
+	var bs Bootstrap
+	if err := json.Unmarshal(b, &bs); err != nil {
+		return nil, fetched, fmt.Errorf("fpl bootstrap: %w", err)
+	}
+	if len(bs.Elements) == 0 {
+		return nil, fetched, fmt.Errorf("fpl bootstrap: no players")
+	}
+	return &bs, fetched, nil
+}
+
+// Pos is the position string for an element, "" if the type is unknown.
+func (b *Bootstrap) Pos(e Element) string {
+	for _, t := range b.ElementTypes {
+		if t.ID == e.ElementType {
+			return t.Short
+		}
+	}
+	return ""
+}
+
+// TeamCode is the club's short name, "" if the id is unknown.
+func (b *Bootstrap) TeamCode(e Element) string {
+	for _, t := range b.Teams {
+		if t.ID == e.Team {
+			return t.ShortName
+		}
+	}
+	return ""
+}
+
+// Positions is the squad's positions in quota order — the order the roster's
+// slots are built in, and therefore the order every derived position list in the
+// engine comes out in.
+func (b *Bootstrap) Positions() []string {
+	return []string{"GKP", "DEF", "MID", "FWD"}
+}
+
+// Draftable is the pool minus the players nobody can draft.
+//
+// Status "u" means the player has left the league. Thirty-two of them carry a
+// draft_rank like everyone else, and leaving them in would put men who are not
+// in the Premier League on a board that claims to show who is available. An
+// undraftable player is not a player.
+//
+// Sorted by draft_rank, which is the board's order everywhere downstream.
+func (b *Bootstrap) Draftable() []Element {
+	out := make([]Element, 0, len(b.Elements))
+	for _, e := range b.Elements {
+		if e.Status == "u" {
+			continue
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].DraftRank < out[j].DraftRank })
+	return out
+}
+
+// Name is what the board prints. web_name is FPL's own display name and is what
+// the official app shows, so it is what the user will be reading off the phone
+// next to this board.
+//
+// Twelve names repeat across the pool (two Hendersons, three Wilsons), and none
+// of the collisions share a club — every surface that prints a name prints the
+// team code beside it, so the pair disambiguates without lengthening the one
+// column that fights hardest for width.
+func (e Element) Name() string { return e.WebName }
+
+// InjuryChip maps FPL's status letter onto the chip vocabulary the ui already
+// speaks, so nothing in ui/chips.go has to learn a second alphabet.
+//
+// "u" never arrives here — Draftable drops it.
+func (e Element) InjuryChip() string {
+	switch e.Status {
+	case "i":
+		return "Out"
+	case "s":
+		return "Sus"
+	case "d":
+		return "Questionable"
+	}
+	return ""
+}
+
+// NewsMillis is news_added as the epoch-millisecond stamp the board's news chip
+// reads, 0 when there is no news.
+func (e Element) NewsMillis() int64 {
+	if e.NewsAdded == nil {
+		return 0
+	}
+	return e.NewsAdded.UnixMilli()
+}
+
+// ValueTop is where the curve starts, and it exists because Player.Value is an
+// INT.
+//
+// The engine's own rank fallback is ValueBase (250) × exp(-rank/ValueDecay), and
+// 250 is a fine number for a 200-deep nfl board. Over 560 fpl players it is a
+// disaster: rank 300 prices at 0.14 and rounds to zero, so a third of the pool
+// arrives at the board with the value reserved for "nobody ranked him" — no
+// tier, no vor, no place in the plan. Ten thousand puts the curve on the same
+// order of magnitude as fantasycalc's imported values (10465 at rank 1), which
+// is the scale every column width and every threshold in the ui was drawn
+// against.
+const ValueTop = 10000.0
+
+// RankValue is the value curve: the engine's existing convex fallback, run over
+// draft_rank rather than over a rank we invented.
+//
+// Value is only ever compared by differences, so the scale is arbitrary and the
+// CONSISTENCY is the whole point — every fpl player is priced by this one
+// function, so the board can never be in the mode-mixing state the nfl one
+// avoids by anchoring k and def onto the imported curve.
+//
+// Floored at 1 rather than 0 past the point the exponential underflows. Zero is
+// already a sentinel here — it is what a player registered from a pick feed that
+// no source ranked carries, and what RosterValue and vor both read as "worth
+// nothing". Every fpl player IS ranked, so none of them may wear it, however
+// deep. One is a real if tiny number and keeps that distinction honest.
+func RankValue(rank int, decay float64) int {
+	if rank <= 0 {
+		return 0
+	}
+	if v := int(math.Round(ValueTop * math.Exp(-float64(rank)/decay))); v > 0 {
+		return v
+	}
+	return 1
+}
