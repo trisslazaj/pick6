@@ -176,3 +176,69 @@ func TestTeamsCountsSeatsThatExist(t *testing.T) {
 }
 
 var _ sleeper.Feed = (*feed)(nil)
+
+// The status a poll reports decides whether the board keeps polling, and draft
+// night walks all three states in one sitting: empty feed before 02:00, picks
+// arriving for ninety minutes, then done.
+//
+// The trap it guards is the middle one. FPL's own draft_status stays "pre" until
+// the draft ENDS — it never says "drafting" — and we only re-read it every tenth
+// poll, which at 3s is half a minute. Without the between-fetches promotion the
+// header would say nobody has picked while picks scrolled past in the ticker.
+func TestDraftStatusWalksTheNight(t *testing.T) {
+	pre := &League{}
+	pre.Info.DraftStatus = "pre"
+	post := &League{}
+	post.Info.DraftStatus = "post"
+
+	for _, c := range []struct {
+		name  string
+		l     *League
+		picks int
+		want  string
+	}{
+		{"before it starts", pre, 0, "pre_draft"},
+		{"picks are arriving, and fpl still says pre", pre, 7, "drafting"},
+		{"over", post, 150, "complete"},
+	} {
+		if got := draftStatus(c.l, c.picks); got != c.want {
+			t.Errorf("%s: status = %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	// "complete" is the literal the ui compares against; anything else and the
+	// board polls a finished draft forever.
+	var snap sleeper.Snapshot
+	snap.Status = draftStatus(post, 150)
+	if !snap.Complete() {
+		t.Error("the finished draft did not read as complete to the model")
+	}
+}
+
+// The seat map persists across polls and is not rebuilt from scratch each time,
+// because a mid-draft reconnect starts with an empty one and fills it from the
+// feed's own round one — which is still in the feed, since we re-read the whole
+// list every poll.
+func TestSeatsSurviveRepeatedPolls(t *testing.T) {
+	f := &feed{leagueID: "x", seats: map[int]int{}, who: map[int]Named{}}
+	round1 := []Choice{
+		{Index: 1, Round: 1, Pick: 1, Entry: 700, Element: 1},
+		{Index: 2, Round: 1, Pick: 2, Entry: 800, Element: 2},
+	}
+	if _, err := f.toPicks(round1); err != nil {
+		t.Fatal(err)
+	}
+	// A later poll carrying the same round one plus more.
+	all := append(append([]Choice{}, round1...),
+		Choice{Index: 3, Round: 2, Pick: 1, Entry: 800, Element: 3},
+		Choice{Index: 4, Round: 2, Pick: 2, Entry: 700, Element: 4})
+	picks, err := f.toPicks(all)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []int{1, 2, 2, 1} {
+		if picks[i].DraftSlot != want {
+			t.Errorf("pick %d landed at seat %d, want %d", i+1, picks[i].DraftSlot, want)
+		}
+	}
+}
