@@ -39,7 +39,11 @@ func runFetch(args []string) error {
 		// room curve, no escape to measure and nobody to anchor onto a borrowed
 		// value — every fpl player is ranked. What is left is small enough to
 		// read in one sitting.
-		return runFetchFPL(sp, *rankFile, *verbose)
+		teams := *teams
+		if !flagSet0(fs, "teams") {
+			teams = sp.teams // the ffc default is 12; an fpl league is 10
+		}
+		return runFetchFPL(sp, teams, *rankFile, *verbose)
 	}
 
 	// 1. sleeper player pool -------------------------------------------------

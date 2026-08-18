@@ -533,12 +533,13 @@ func (b Board) nameIndex() nameIndex {
 	for _, pos := range b.State.Positions() {
 		ix.has[pos] = true
 	}
-	seen := map[string]int{}
+	seen, seenFull := map[string]int{}, map[string]int{}
 	for _, p := range b.State.Players {
 		n := rankings.Normalize(p.Name)
 		if n == "" {
 			continue
 		}
+		seenFull[n]++
 		ix.full[n] = p
 		toks := strings.Fields(n)
 		l := toks[len(toks)-1]
@@ -548,9 +549,20 @@ func (b Board) nameIndex() nameIndex {
 		seen[l]++
 		ix.last[l] = p
 	}
+	// Both maps drop the ambiguous keys, and full needs it as much as last does
+	// on a board whose names are one word each. Twelve fpl web_names repeat —
+	// three men are called Wilson — and a note saying "wilson" would have
+	// coloured and struck through whichever of them go's map iteration reached
+	// last, differently on different frames of the same draft. An nfl board is
+	// unaffected: "malik nabers" is two words and unique.
 	for l, n := range seen {
 		if n > 1 {
 			delete(ix.last, l)
+		}
+	}
+	for n, k := range seenFull {
+		if k > 1 {
+			delete(ix.full, n)
 		}
 	}
 	return ix

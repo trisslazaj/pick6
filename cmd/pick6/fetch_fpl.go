@@ -30,7 +30,7 @@ const fplMaxAge = 12 * time.Hour
 // fresh ids, so this room has no history yet), no k/def value anchor (every fpl
 // player is ranked, so nobody needs a borrowed value), and no meta.json (an fpl
 // fetch eight days before the nfl draft must not be able to touch that board).
-func runFetchFPL(sp sport, rankFile string, verbose bool) error {
+func runFetchFPL(sp sport, teams int, rankFile string, verbose bool) error {
 	bs, hit, err := fpl.GetBootstrap(fplMaxAge)
 	if err != nil {
 		return err
@@ -114,7 +114,7 @@ func runFetchFPL(sp sport, rankFile string, verbose bool) error {
 	fmt.Printf("\nwrote %s (%d players)\n", path, len(players))
 
 	printFPLTop(sp, players)
-	printFPLReplacement(sp, players)
+	printFPLReplacement(sp, teams, players)
 	return nil
 }
 
@@ -205,12 +205,12 @@ func printFPLTop(sp sport, players map[string]*adp.Player) {
 // last man the room rosters. The nfl board's two-index rule arrives at the same
 // answer here without being told — no position can reach a flex slot, so every
 // one of them indexes at startable slots.
-func printFPLReplacement(sp sport, players map[string]*adp.Player) {
+func printFPLReplacement(sp sport, teams int, players map[string]*adp.Player) {
 	byPos := map[string][]*adp.Player{}
 	for _, p := range players {
 		byPos[p.Pos] = append(byPos[p.Pos], p)
 	}
-	fmt.Println("\nreplacement level — the last man a 10-manager room rosters at each position")
+	fmt.Printf("\nreplacement level — the last man a %d-manager room rosters at each position\n", teams)
 	quota := map[string]int{}
 	for _, slot := range sp.roster.Slots {
 		quota[slot]++
@@ -218,7 +218,7 @@ func printFPLReplacement(sp sport, players map[string]*adp.Player) {
 	for _, pos := range engine.RosterPositions(sp.roster) {
 		list := byPos[pos]
 		sort.Slice(list, func(i, j int) bool { return list[i].ADP < list[j].ADP })
-		d := quota[pos] * sp.teams
+		d := quota[pos] * teams
 		v, name := 0, "—"
 		if d > 0 && d <= len(list) {
 			v, name = list[d-1].Value, strings.ToLower(list[d-1].Name)

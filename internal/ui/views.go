@@ -336,14 +336,25 @@ func (b Board) sheetIndex() sheetIndex {
 		if n == "" {
 			continue
 		}
+		if _, seen := ix.byKey[n+"|"+p.Pos]; seen {
+			dup[n+"|"+p.Pos] = true
+		}
 		ix.byKey[n+"|"+p.Pos] = p
 		if _, seen := ix.byName[n]; seen {
 			dup[n] = true
 		}
 		ix.byName[n] = p
 	}
+	// byKey gets the same duplicate guard byName always had. Name+position is
+	// unique on an nfl board and is NOT on an fpl one — two midfielders called
+	// Sangaré — so a rankings sheet's row for one of them resolved to whichever
+	// go's map iteration reached last, and the index is rebuilt every frame, so
+	// the row's odds and strike-through flickered between renders. Dropped
+	// rather than guessed: an unresolvable row already renders dim with `?` where
+	// its odds go, which is the honest answer.
 	for n := range dup {
 		delete(ix.byName, n)
+		delete(ix.byKey, n)
 	}
 	return ix
 }
