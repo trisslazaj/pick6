@@ -72,15 +72,24 @@ func runTiers(args []string) error {
 			}
 			return group[i].ADP < group[j].ADP
 		})
+		// The tier counts come from the WHOLE position, not from the slice being
+		// printed. `-depth 15` used to truncate first, so a tier with six men in
+		// it printed "2 left — tier ending" in cliff amber because two of them
+		// happened to fall inside the cut. A cheat sheet that invents a cliff is
+		// worse than one that stops early. (Predates fpl; found looking at it.)
+		counts := map[int]int{}
+		for _, p := range group {
+			counts[p.Tier]++
+		}
 		if *depth > 0 && len(group) > *depth {
 			group = group[:*depth]
 		}
-		printPosition(sp, pos, group)
+		printPosition(sp, pos, group, counts)
 	}
 	return nil
 }
 
-func printPosition(sp sport, pos string, group []*adp.Player) {
+func printPosition(sp sport, pos string, group []*adp.Player, counts map[int]int) {
 	// The early-draft hold renders faint, same as the board. Read off the sport's
 	// roster rather than the literal it used to be: fpl holds nothing back, and
 	// its 184 defenders printed greyed-out under a rule about team defenses.
@@ -88,11 +97,6 @@ func printPosition(sp sport, pos string, group []*adp.Player) {
 	style := ui.Pos(pos, suppressed)
 	if sp.roster.Hold != nil {
 		style = ui.PosFPL(pos, suppressed)
-	}
-
-	counts := map[int]int{}
-	for _, p := range group {
-		counts[p.Tier]++
 	}
 
 	fmt.Println()

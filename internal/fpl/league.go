@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"sort"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -90,11 +92,11 @@ type choicesResp struct {
 	Choices []Choice `json:"choices"`
 }
 
-// GetLeague fetches the room. Never cached: pre-draft this is the thing you
-// re-check on draft morning to see whether the order has been published.
+// GetLeague fetches the room. Never cached by us, and bypassed at the edge —
+// see nonced().
 func GetLeague(leagueID string) (*League, error) {
 	var l League
-	if err := getJSON(apiBase+"/league/"+leagueID+"/details", &l); err != nil {
+	if err := getJSON(nonced(apiBase+"/league/"+leagueID+"/details"), &l); err != nil {
 		return nil, err
 	}
 	if len(l.Entries) == 0 {
@@ -113,7 +115,7 @@ func GetLeague(leagueID string) (*League, error) {
 // league id everywhere and never the draft id.
 func GetChoices(leagueID string) ([]Choice, error) {
 	var r choicesResp
-	if err := getJSON(apiBase+"/draft/"+leagueID+"/choices", &r); err != nil {
+	if err := getJSON(nonced(apiBase+"/draft/"+leagueID+"/choices"), &r); err != nil {
 		return nil, err
 	}
 	// Sorted anyway: the feed arrives in order, and one out-of-order pick would
@@ -206,4 +208,36 @@ func getJSON(url string, v any) error {
 		return err
 	}
 	return json.Unmarshal(b, v)
+}
+
+// nonce is the cache-buster's counter, SEEDED RANDOMLY rather than started at
+// zero — the same reasoning the sleeper feed's carries. A counter from zero
+// makes the first request of every process `?_=1`, the same url every time, so
+// a caller that shells out once per poll reads the edge's copy forever. Only a
+// long-lived process increments past it, and headless polling is how this tool
+// gets exercised.
+var nonce atomic.Int64
+
+func init() { nonce.Store(rand.Int64()) }
+
+// nonced appends a unique query parameter, because the fpl edge ignores the
+// request's cache directives AND its own response's.
+//
+// MEASURED 2026-08-18, and this is not the sleeper trick applied on faith.
+// `league/{id}/details` answers `cache-control: max-age=0, no-cache, no-store,
+// must-revalidate` and is then served by varnish with `x-cache: HIT, HIT` and
+// **age: 98211** — twenty-seven hours old. Three requests in a row, three
+// identical stale bodies. So `draft_status` would never have flipped to post,
+// the board would have polled a finished draft forever, and a manager who
+// joined the league that morning would not exist as far as the seat count was
+// concerned. With `?_=<nonce>`: `x-cache: MISS`, `age: 0`.
+//
+// The pick feed measured clean on the same probe (MISS, no age) and gets one
+// anyway. That is a change of prior, not speculation: the same host demonstrably
+// ignores no-store on a sibling path, which path varnish fronts is a config
+// detail nobody publishes, and this is the one endpoint whose staleness would be
+// invisible — a board that is thirty seconds behind looks exactly like a room
+// that is thinking.
+func nonced(url string) string {
+	return url + "?_=" + strconv.FormatInt(nonce.Add(1), 10)
 }

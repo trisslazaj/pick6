@@ -357,6 +357,7 @@ func (c *simCore) oppPick(q int, rosters map[int][]string) (idx int, took, exhau
 		c.head++
 	}
 	c.top = c.top[:0]
+	filtered := false // a legal candidate was skipped, so the board is not empty
 	for i := c.head; i < len(c.pool) && len(c.top) < CandidatePool; i++ {
 		if !c.alive[i] {
 			continue
@@ -368,12 +369,20 @@ func (c *simCore) oppPick(q int, rosters map[int][]string) (idx int, took, exhau
 			// zero-weight guard below exists to rescue a pick whose whole
 			// candidate pool priced at nothing, and it would rescue this one
 			// straight into drafting the illegal man.
+			filtered = true
 			continue
 		}
 		c.top = append(c.top, i)
 	}
 	if len(c.top) == 0 {
-		return 0, false, true
+		// "Exhausted" means the BOARD is empty, and the caller stops the rollout
+		// on it — every later pick in the window then removes nobody and every
+		// survival in those rounds reads ~100%. A quota seat with nothing legal
+		// left is a different thing entirely: the board is full of players, they
+		// are just all at positions this one seat has filled. That is a pick
+		// that removes nobody from the ranked pool, which is exactly the shape
+		// the off-board escape already has.
+		return 0, false, !filtered
 	}
 	total := 0.0
 	for k, i := range c.top {

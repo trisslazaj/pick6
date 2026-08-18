@@ -126,15 +126,20 @@ func fplLive(sp sport, id, user string, slot int, replay bool) (liveDraft, error
 // sleeper draft has, with the same fix. -user works the moment the feed shows
 // that manager picking, which is what a mid-draft reconnect actually needs.
 func fplSlot(league *fpl.League, id, user string, slot, teams int) (int, error) {
-	if slot > 0 {
-		if slot > teams {
-			return 0, fmt.Errorf("slot %d is outside a %d-manager league", slot, teams)
-		}
-		return slot, nil
+	if slot > teams {
+		return 0, fmt.Errorf("slot %d is outside a %d-manager league", slot, teams)
 	}
-	if user == "" {
+	if slot <= 0 && user == "" {
 		return 0, fmt.Errorf("pass -slot N (fpl publishes the draft order only as round one happens) " +
 			"or -user <your name> once you have picked")
+	}
+	if user == "" {
+		// Nothing to check it against. A -slot nobody can verify runs a
+		// confident board off it for 150 picks, which is the residual risk of a
+		// draft order that exists nowhere until it happens — the same one an
+		// unseeded sleeper draft has. Pass -user too once you have made a pick
+		// and the feed settles it.
+		return slot, nil
 	}
 	entry, err := league.FindEntry(user)
 	if err != nil {
@@ -145,11 +150,22 @@ func fplSlot(league *fpl.League, id, user string, slot, teams int) (int, error) 
 		return 0, err
 	}
 	seat, ok := fpl.SeatOfEntry(choices, entry.EntryID)
-	if !ok {
-		return 0, fmt.Errorf("%s has not picked yet, so their seat is not in the feed — pass -slot N",
-			strings.ToLower(entry.Manager()))
+	switch {
+	case ok && slot > 0 && seat != slot:
+		// The one place the seat can be CHECKED rather than believed, and the
+		// disagreement matters more than either answer: every survival number,
+		// every need weight and the whole roster pane hang off which seat is
+		// mine, and being wrong about it is a board that is confidently wrong
+		// all night rather than obviously broken.
+		return 0, fmt.Errorf("-slot %d disagrees with the feed: %s picked at seat %d in round one",
+			slot, strings.ToLower(entry.Manager()), seat)
+	case ok:
+		return seat, nil
+	case slot > 0:
+		return slot, nil // round one has not reached them yet; -slot stands
 	}
-	return seat, nil
+	return 0, fmt.Errorf("%s has not picked yet, so their seat is not in the feed — pass -slot N",
+		strings.ToLower(entry.Manager()))
 }
 
 // fplRoster turns the squad quota into a lineup: every slot dedicated, in

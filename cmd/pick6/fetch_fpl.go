@@ -136,15 +136,37 @@ func applyFPLRankings(players map[string]*adp.Player, path string) (int, []strin
 	if err != nil {
 		return 0, nil, err
 	}
+	// Keyed on name+position AND on name+position+team, because twelve web_names
+	// repeat across the pool and one pair — two midfielders called Sangaré —
+	// repeats on position too. Ranging a go map to build a name+position index
+	// hands that pair's tier to whichever of them the iteration reached last,
+	// differently on different runs. The team column settles it when the file
+	// carries one, and a name+position that is still ambiguous is dropped and
+	// printed rather than guessed at.
 	byKey := map[string]*adp.Player{}
+	dup := map[string]bool{}
 	for _, p := range players {
-		byKey[rankings.Normalize(p.Name)+"|"+p.Pos] = p
+		k := rankings.Normalize(p.Name) + "|" + p.Pos
+		if _, seen := byKey[k]; seen {
+			dup[k] = true
+		}
+		byKey[k] = p
+		byKey[k+"|"+strings.ToUpper(p.Team)] = p
 	}
 	applied := 0
 	var unmatched []string
 	for _, r := range f.Rows {
 		pos := rankings.NormalizePos(r.Pos)
-		p, ok := byKey[rankings.Normalize(r.Name)+"|"+pos]
+		key := rankings.Normalize(r.Name) + "|" + pos
+		p, ok := byKey[key+"|"+strings.ToUpper(r.Team)]
+		if !ok {
+			if dup[key] {
+				unmatched = append(unmatched, r.Name+" ("+strings.ToLower(pos)+
+					") — more than one, add the team column")
+				continue
+			}
+			p, ok = byKey[key]
+		}
 		if !ok {
 			unmatched = append(unmatched, r.Name+" ("+strings.ToLower(pos)+")")
 			continue
