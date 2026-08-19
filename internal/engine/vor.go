@@ -106,6 +106,15 @@ func (s *State) VOR(p Player) float64 {
 // against a measured 58, because rooms hoard backs on the bench and a lineup
 // says nothing about benches. `pick6 fetch` prints which index is in play.
 func (s *State) demandAt(pos string) int {
+	// Under a draft cap the demand is not estimated, it is arithmetic: every seat
+	// must end with exactly its cap at every position, so the room rosters
+	// cap x teams of them and the last one really is the replacement. No
+	// measurement can improve on a rule.
+	if s.Roster.capped() {
+		if max, ok := s.Roster.Max[pos]; ok {
+			return max * s.Teams
+		}
+	}
 	if s.canReachFlex(pos) {
 		if d := s.Demand[pos]; d > 0 {
 			return d
@@ -119,7 +128,7 @@ func (s *State) demandAt(pos string) int {
 // gets.
 func (s *State) canReachFlex(pos string) bool {
 	for _, slot := range s.Roster.Slots {
-		if isFlexSlot(slot) && EligibleFor(slot, pos) {
+		if isFlexSlot(slot) && s.Roster.eligible(slot, pos) {
 			return true
 		}
 	}
@@ -135,8 +144,8 @@ func (s *State) startable(pos string) int {
 		switch {
 		case slot == pos:
 			n += s.Teams
-		case isFlexSlot(slot) && EligibleFor(slot, pos):
-			n += s.Teams / flexEligibleCount(slot)
+		case isFlexSlot(slot) && s.Roster.eligible(slot, pos):
+			n += s.Teams / s.Roster.flexCount(slot)
 		}
 	}
 	return n

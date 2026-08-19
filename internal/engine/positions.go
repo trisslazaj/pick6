@@ -52,8 +52,11 @@ func rosterPositions(r Roster) []string {
 		if !isFlexSlot(slot) {
 			continue
 		}
-		for _, pos := range flexPosOrder {
-			if !seen[pos] && EligibleFor(slot, pos) {
+		// The ROSTER's flex vocabulary, not the package-level one. Asked with
+		// nfl's, an fpl flex slot answers yes to rb, wr and te, and the board's
+		// position list came out [RB WR TE GKP DEF MID FWD].
+		for _, pos := range r.flexOrder() {
+			if !seen[pos] && r.eligible(slot, pos) {
 				seen[pos] = true
 				out = append(out, pos)
 			}

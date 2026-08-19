@@ -77,7 +77,8 @@ func runBoard(args []string) error {
 		if *bench >= 0 {
 			b = *bench
 		}
-		roster = engine.Roster{Slots: slots, Bench: b, Quota: sp.roster.Quota, Hold: sp.roster.Hold}
+		roster = engine.Roster{Slots: slots, Bench: b,
+			Max: sp.roster.Max, Flex: sp.roster.Flex, Hold: sp.roster.Hold}
 	} else if *bench >= 0 {
 		return fmt.Errorf("-bench only means something with -lineup")
 	}

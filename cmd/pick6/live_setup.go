@@ -113,14 +113,18 @@ func fplLive(sp sport, id, user string, slot int, replay bool) (liveDraft, error
 				id, strings.ToLower(league.Info.Name))
 		}
 	}
+	// Rounds is the SQUAD, not the starting eleven: you draft fifteen and start
+	// eleven of them, so the lineup length stopped being the round count the
+	// moment the roster grew a bench.
+	rounds := len(roster.Slots) + roster.Bench
 	return liveDraft{
-		teams: teams, rounds: len(roster.Slots), mySlot: mySlot,
+		teams: teams, rounds: rounds, mySlot: mySlot,
 		roster: roster,
 		feed:   fpl.NewFeed(id, bs.Roll()),
 		draft:  nil, // no trades in an fpl draft: owner is always the seat
 		drop:   bs.Departed(),
 		header: fmt.Sprintf("league %s — %s, %d managers, %d rounds, %s",
-			id, strings.ToLower(league.Info.Name), teams, len(roster.Slots), status),
+			id, strings.ToLower(league.Info.Name), teams, rounds, status),
 	}, nil
 }
 
@@ -173,20 +177,37 @@ func fplSlot(league *fpl.League, id, user string, slot, teams int) (int, error) 
 		strings.ToLower(entry.Manager()))
 }
 
-// fplRoster turns the squad quota into a lineup: every slot dedicated, in
-// position order, no bench and no flex.
+// fplRoster turns fpl's own settings into a lineup: the guaranteed starters as
+// dedicated slots, the rest of the eleven as flex, and whatever the squad holds
+// past eleven as bench.
+//
+// Both halves come from the api rather than a constant, so a rule change moves
+// the board with it. The squad counts (2/5/5/3) become the DRAFT CAP; the
+// formation minimums (1 gkp, 3 def, 2 mid, 1 fwd) become the dedicated slots.
+// The gap between those minimums and the eleven you start is the flex, and the
+// gap between the eleven and the fifteen you own is the bench.
 func fplRoster(sq fpl.Squad) engine.Roster {
-	r := engine.Roster{Bench: 0, Quota: true, Hold: engine.NoHold}
+	r := engine.Roster{
+		Hold: engine.NoHold,
+		Max:  map[string]int{"GKP": sq.GKP, "DEF": sq.DEF, "MID": sq.MID, "FWD": sq.FWD},
+		// A keeper can never fill a flex slot: fpl starts exactly one, so the
+		// second is bench by construction rather than by preference.
+		Flex: map[string]bool{"DEF": true, "MID": true, "FWD": true},
+	}
 	for _, c := range []struct {
 		pos string
 		n   int
-	}{{"GKP", sq.GKP}, {"DEF", sq.DEF}, {"MID", sq.MID}, {"FWD", sq.FWD}} {
+	}{{"GKP", sq.MinGKP}, {"DEF", sq.MinDEF}, {"MID", sq.MinMID}, {"FWD", sq.MinFWD}} {
 		for i := 0; i < c.n; i++ {
 			r.Slots = append(r.Slots, c.pos)
 		}
 	}
-	if len(r.Slots) == 0 {
-		// bootstrap-static has always carried the quota, but a board with no
+	for i := len(r.Slots); i < sq.Play; i++ {
+		r.Slots = append(r.Slots, "FLEX")
+	}
+	r.Bench = sq.Size - len(r.Slots)
+	if len(r.Slots) == 0 || r.Bench < 0 {
+		// bootstrap-static has always carried both halves, but a board with no
 		// lineup has no need weights, no urgency and no roster pane — falling
 		// back to the known shape beats rendering an empty one.
 		return engine.FPLRoster

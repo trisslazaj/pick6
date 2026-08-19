@@ -251,21 +251,39 @@ var DefaultRoster = Roster{
 	Bench: 6,
 }
 
-// FPLRoster is an fpl draft squad: a hard quota of fifteen, no bench, no flex,
-// and nothing held back — every position here is somebody's starter from round
-// one, so there is no kicker to keep quiet about.
+// FPLRoster is an fpl draft squad, and the shape that matters is the STARTING
+// eleven rather than the fifteen you own.
 //
-// Fifteen slots and no bench means the rounds-follow-lineup rule yields exactly
-// fifteen rounds by itself, which is the real shape.
+// You draft 2 gkp / 5 def / 5 mid / 3 fwd, and you start eleven of them under
+// fpl's own formation rules: exactly one keeper, at least three defenders, at
+// least two midfielders, at least one forward. That is seven places spoken for,
+// four more free to come from def, mid or fwd, and four men on the bench.
+//
+// Written as a squad of fifteen dedicated slots — which it was, first time
+// round — every one of those fifteen reads as a starter. The second keeper is
+// the tell: he can never start (max_play_GKP is 1), he is a pure bench body, and
+// the board weighted him exactly like the first one and would have told you to
+// draft him early. Fifteen slots also left the roster with no slack at all, so
+// the endgame guard was in its terminal state from pick one.
+//
+// The draft cap is its own thing and outranks the lineup: a sixth defender is
+// not a bad pick, it is one the official app refuses. Nothing is held back —
+// every position here is somebody's starter, so there is no kicker to keep quiet
+// about.
+//
+// Eleven slots plus four bench is fifteen rounds by the rounds-follow-lineup
+// rule, which is the real shape.
 var FPLRoster = Roster{
 	Slots: []string{
-		"GKP", "GKP",
-		"DEF", "DEF", "DEF", "DEF", "DEF",
-		"MID", "MID", "MID", "MID", "MID",
-		"FWD", "FWD", "FWD",
+		"GKP",
+		"DEF", "DEF", "DEF",
+		"MID", "MID",
+		"FWD",
+		"FLEX", "FLEX", "FLEX", "FLEX",
 	},
-	Bench: 0,
-	Quota: true,
+	Bench: 4,
+	Max:   map[string]int{"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3},
+	Flex:  map[string]bool{"DEF": true, "MID": true, "FWD": true},
 	Hold:  NoHold,
 }
 

@@ -250,7 +250,7 @@ func (s *State) newSimCore(seed int64) *simCore {
 	c.needPow = make([]float64, len(c.pos)+1)
 	c.legal = make([]bool, len(c.pos)+1)
 	c.legal[len(c.pos)] = true // an unknown position is nobody's quota
-	c.quota = s.Roster.Quota
+	c.quota = s.Roster.capped()
 	price := map[string]float64{}
 	for id, p := range s.Players {
 		if s.Taken[id] {
@@ -338,7 +338,7 @@ func (c *simCore) oppPick(q int, rosters map[int][]string) (idx int, took, exhau
 	needPow := c.needPow
 	needPow[len(c.pos)] = powBench // an unknown position prices like a bench pick
 	for pi, pos := range c.pos {
-		need := s.opponentNeed(pos, filled, round)
+		need := s.opponentNeed(pos, rosters[slot], filled, round)
 		c.legal[pi] = need > 0
 		switch need {
 		case 0:
@@ -469,9 +469,9 @@ func (s *State) offBoardRate(q int) float64 {
 // this room drafts its first kicker in round 10. Reusing our own suppression
 // here would keep kickers "available" that were drafted rounds ago, corrupting
 // every survival number downstream.
-func (s *State) opponentNeed(pos string, filled []string, round int) float64 {
+func (s *State) opponentNeed(pos string, ids, filled []string, round int) float64 {
 	if s.Roster.holds(pos) && s.Rounds-round+1 > OpponentKDefLastRounds {
 		return 0
 	}
-	return s.needSlots(pos, filled)
+	return s.needSlots(pos, ids, filled)
 }

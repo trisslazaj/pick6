@@ -295,7 +295,7 @@ func TestOpponentNeedKDefGate(t *testing.T) {
 		{15, NeedStarter}, // the last round is certainly open
 	}
 	for _, c := range cases {
-		if got := s.opponentNeed("K", filled, c.round); got != c.want {
+		if got := s.opponentNeed("K", nil, filled, c.round); got != c.want {
 			t.Errorf("opponentNeed(K, round %d) = %v, want %v", c.round, got, c.want)
 		}
 	}
@@ -305,16 +305,16 @@ func TestOpponentNeedKDefGate(t *testing.T) {
 	// open there — at 6 it wasn't, and the sim kept kickers "available" that
 	// the room had already drafted.
 	s.Rounds = 16
-	if got := s.opponentNeed("K", filled, 10); got != NeedStarter {
+	if got := s.opponentNeed("K", nil, filled, 10); got != NeedStarter {
 		t.Errorf("opponentNeed(K, round 10 of 16) = %v, want %v: the real room drafts kickers here", got, NeedStarter)
 	}
-	if got := s.opponentNeed("K", filled, 9); got != 0 {
+	if got := s.opponentNeed("K", nil, filled, 9); got != 0 {
 		t.Errorf("opponentNeed(K, round 9 of 16) = %v, want 0: still gated", got)
 	}
 	// The gate is the opponents' — our own stricter one must not leak in.
 	// Round 10 leaves 6 rounds: OUR suppression (KDefLastRounds 3) still holds
 	// there, and needFrom would say 0.
-	if got := s.needFrom("K", filled); got != 0 {
+	if got := s.needFrom("K", nil, filled); got != 0 {
 		t.Errorf("needFrom(K) early = %v, want 0: our own gate should still hold", got)
 	}
 }

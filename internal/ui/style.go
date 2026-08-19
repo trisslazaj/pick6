@@ -106,7 +106,7 @@ func PosFPL(pos string, suppressed bool) lipgloss.Style { return posStyle(fplCol
 // the package is a Board method, so this is the one every one of them calls and
 // the package function is left for `pick6 tiers`, which has no board.
 func (b Board) pos(pos string, suppressed bool) lipgloss.Style {
-	if b.State != nil && b.State.Roster.Quota {
+	if b.State != nil && b.State.Capped() {
 		return PosFPL(pos, suppressed)
 	}
 	return Pos(pos, suppressed)
@@ -170,7 +170,7 @@ var (
 // eight print sites is how the verdict says rank and the search overlay says adp
 // about the same number.
 func (b Board) PriceNoun() string {
-	if b.State != nil && b.State.Roster.Quota {
+	if b.State != nil && b.State.Capped() {
 		return "rank"
 	}
 	return "adp"

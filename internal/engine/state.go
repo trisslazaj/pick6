@@ -70,17 +70,21 @@ type Roster struct {
 	Slots []string // e.g. QB, RB, RB, WR, WR, TE, FLEX, K, DEF
 	Bench int
 
-	// Quota marks a squad with a fixed count at every position and no bench at
-	// all — fpl's 2 gkp / 5 def / 5 mid / 3 fwd, fifteen men over fifteen rounds.
-	// A position already filled to its quota is worth NOTHING rather than "bench
-	// depth", because there is no bench for the depth to sit on and the official
-	// app will not let you draft him anyway.
+	// Max is the most players you may DRAFT at a position, which is a different
+	// limit from how many may start. Fpl caps a squad at 2 gkp / 5 def / 5 mid /
+	// 3 fwd; a sixth defender is not a bad pick there, it is one the official app
+	// refuses. nil means no cap, which is every nfl league.
 	//
-	// Its own bit, deliberately, and never read off Bench == 0: `board -lineup
-	// "qb rb rb wr wr te flex k def"` with no -bench is a legal nfl roster with a
-	// zero bench, and inferring the quota rule from the arithmetic would silently
-	// zero that user's bench need too.
-	Quota bool
+	// Deliberately not inferred from the lineup: fpl starts eleven of fifteen, so
+	// "all my def lineup slots are full" and "I may not draft another def" are
+	// four picks apart.
+	Max map[string]int
+
+	// Flex is which positions a FLEX slot takes, when the sport's own answer is
+	// not the nfl one. nil means FlexEligible — rb, wr, te — because every
+	// production site that builds a roster from sleeper metadata writes Slots and
+	// Bench and nothing else.
+	Flex map[string]bool
 
 	// Hold is the set of positions nobody should be drafting early — k and def in
 	// nfl, nothing at all in fpl, where every position is somebody's starter from
@@ -106,6 +110,24 @@ func (r Roster) holds(pos string) bool {
 		return pos == "K" || pos == "DEF"
 	}
 	return r.Hold[pos]
+}
+
+// capped reports whether this roster limits how many of a position you may draft.
+func (r Roster) capped() bool { return len(r.Max) > 0 }
+
+// full reports whether a seat has already drafted every player it is allowed at
+// a position. Always false without a cap.
+func (r Roster) full(pos string, n int) bool {
+	max, ok := r.Max[pos]
+	return ok && n >= max
+}
+
+// flexTakes reports whether a FLEX slot accepts a position on this roster.
+func (r Roster) flexTakes(pos string) bool {
+	if r.Flex == nil {
+		return FlexEligible[pos]
+	}
+	return r.Flex[pos]
 }
 
 // Pick is one completed selection.
@@ -521,7 +543,7 @@ func (s *State) assign(ids []string, filled []string, used []bool, pos []string)
 			continue
 		}
 		for i := range ids {
-			if used[i] || !EligibleFor(want, pos[i]) {
+			if used[i] || !s.Roster.eligible(want, pos[i]) {
 				continue
 			}
 			filled[si] = ids[i]
@@ -604,8 +626,9 @@ func (s *State) MyUpcomingPicks(n int) []int {
 // inside needFrom is what lets the two-pick plan price a pair without it — see
 // BestPlan, where feasibility is modelled exactly instead of approximated.
 func (s *State) Need(pos string) float64 {
+	mine := s.Rosters[s.MySlot]
 	filled, _ := s.FilledSlots(s.MySlot)
-	n := s.needFrom(pos, filled)
+	n := s.needFrom(pos, mine, filled)
 	if n == NeedBench {
 		n *= endgameSlack(s.MyPicksLeft(), unfilledCount(filled))
 	}
@@ -640,7 +663,7 @@ func (s *State) NeedAfter(pos, playerID string) float64 {
 	ids = append(ids, mine...)
 	ids = append(ids, playerID)
 	filled, _ := s.fillSlots(ids)
-	return s.needFrom(pos, filled)
+	return s.needFrom(pos, ids, filled)
 }
 
 // Suppressed reports whether the k/def hold is on: nobody needs a tool to tell
@@ -657,11 +680,11 @@ func (s *State) Suppressed(pos string) bool {
 // needFrom is the need rule itself, over an already-filled lineup. The endgame
 // slack is applied by Need, not here — see NeedAfter for why the plan wants this
 // number without it.
-func (s *State) needFrom(pos string, filled []string) float64 {
+func (s *State) needFrom(pos string, ids, filled []string) float64 {
 	if s.Suppressed(pos) {
 		return 0
 	}
-	return s.needSlots(pos, filled)
+	return s.needSlots(pos, ids, filled)
 }
 
 // needSlots is the roster-shape half of the need rule — what an open slot at
@@ -670,26 +693,38 @@ func (s *State) needFrom(pos string, filled []string) float64 {
 // wraps it with the room's looser one. The split is what keeps two different
 // questions (what the tool recommends, what the room does) from sharing a
 // constant by accident.
-func (s *State) needSlots(pos string, filled []string) float64 {
+func (s *State) needSlots(pos string, ids, filled []string) float64 {
+	// The draft cap first, because it is a different question from the lineup
+	// and it outranks it. Fpl lets you own two keepers and start one, so "every
+	// gkp lineup slot is taken" and "you may not draft another gkp" are a pick
+	// apart — and only the second is a zero. Every consumer that already knows
+	// how to hide a zero-need position (the field, the plan's membership test,
+	// the opponents' sampling) hides an illegal pick for free.
+	if s.Roster.capped() && s.Roster.full(pos, s.countAt(pos, ids)) {
+		return 0
+	}
 	for i, want := range s.Roster.Slots {
 		if want == pos && filled[i] == "" {
 			return NeedStarter
 		}
 	}
 	for i, want := range s.Roster.Slots {
-		if isFlexSlot(want) && filled[i] == "" && EligibleFor(want, pos) {
+		if isFlexSlot(want) && filled[i] == "" && s.Roster.eligible(want, pos) {
 			return NeedFlex
 		}
 	}
-	if s.Roster.Quota {
-		// A hard quota has no bench, so a position whose slots are all filled is
-		// not "depth" at a quarter weight — it is a man you cannot draft. Zero,
-		// and every consumer that already knows how to hide a zero-need position
-		// (the field, the plan's membership test, the opponents' sampling) hides
-		// him for free.
-		return 0
-	}
 	return NeedBench
+}
+
+// countAt is how many of a position a seat already owns.
+func (s *State) countAt(pos string, ids []string) int {
+	n := 0
+	for _, id := range ids {
+		if s.Players[id].Pos == pos {
+			n++
+		}
+	}
+	return n
 }
 
 // endgameSlack is the feasibility guard: late enough in a draft, a bench pick is
@@ -769,4 +804,50 @@ func EligibleFor(slot, pos string) bool {
 	default:
 		return slot == pos
 	}
+}
+
+// eligible is EligibleFor with this roster's own flex vocabulary, which is what
+// every site inside the engine should ask. An fpl flex takes def, mid and fwd;
+// the package-level answer is nfl's and would take none of them.
+func (r Roster) eligible(slot, pos string) bool {
+	if slot == "FLEX" {
+		return r.flexTakes(pos)
+	}
+	return EligibleFor(slot, pos)
+}
+
+// Capped reports whether this roster limits how many of a position you may
+// draft, which is the question the ui asks when it wants to know whether it is
+// drawing a squad or a lineup-plus-bench.
+func (s *State) Capped() bool { return s.Roster.capped() }
+
+// CapReached reports whether a roster has already drafted every player it is
+// allowed at a position. False for any roster with no cap.
+func (s *State) CapReached(pos string, ids []string) bool {
+	return s.Roster.capped() && s.Roster.full(pos, s.countAt(pos, ids))
+}
+
+// flexOrder is the positions a flex slot might take, in a fixed order so the
+// derivation cannot come out of a go map. Nil Flex means nfl's.
+func (r Roster) flexOrder() []string {
+	if r.Flex == nil {
+		return flexPosOrder
+	}
+	out := make([]string, 0, len(r.Flex))
+	for pos := range r.Flex {
+		out = append(out, pos)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// flexCount is how many positions compete for one flex slot on this roster,
+// which is how the startable fallback splits it between them.
+func (r Roster) flexCount(slot string) int {
+	if slot == "FLEX" && r.Flex != nil {
+		if n := len(r.Flex); n > 0 {
+			return n
+		}
+	}
+	return flexEligibleCount(slot)
 }
