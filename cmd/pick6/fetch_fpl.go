@@ -85,7 +85,7 @@ func runFetchFPL(sp sport, teams int, rankFile string, verbose bool) error {
 	// defenders arrive untiered and a third of the board loses its cliffs.
 	tierOrigin := "value gaps"
 	if rankFile != "" {
-		applied, unmatched, err := applyFPLRankings(players, rankFile)
+		applied, unmatched, err := applyFPLRankings(players, pool, bs, rankFile)
 		if err != nil {
 			return err
 		}
@@ -131,44 +131,30 @@ func runFetchFPL(sp sport, teams int, rankFile string, verbose bool) error {
 //
 // So: exact, on normalized name plus position, and anything that misses is
 // printed and dropped. A name with no exact match is one to fix in the csv.
-func applyFPLRankings(players map[string]*adp.Player, path string) (int, []string, error) {
+func applyFPLRankings(players map[string]*adp.Player, pool []fpl.Element, bs *fpl.Bootstrap, path string) (int, []string, error) {
 	f, err := rankings.LoadCSV(path)
 	if err != nil {
 		return 0, nil, err
 	}
-	// Keyed on name+position AND on name+position+team, because twelve web_names
-	// repeat across the pool and one pair — two midfielders called Sangaré —
-	// repeats on position too. Ranging a go map to build a name+position index
-	// hands that pair's tier to whichever of them the iteration reached last,
-	// differently on different runs. The team column settles it when the file
-	// carries one, and a name+position that is still ambiguous is dropped and
-	// printed rather than guessed at.
-	byKey := map[string]*adp.Player{}
-	dup := map[string]bool{}
-	for _, p := range players {
-		k := rankings.Normalize(p.Name) + "|" + p.Pos
-		if _, seen := byKey[k]; seen {
-			dup[k] = true
-		}
-		byKey[k] = p
-		byKey[k+"|"+strings.ToUpper(p.Team)] = p
-	}
+	// A written-down ranking names players the way a person says them, and fpl's
+	// web_name is a DISPLAY name that often isn't the surname at all: Pau Torres
+	// is "Pau", Rúben Dias is "Rúben", Yeremy Pino is "Yeremy". A sheet that says
+	// Torres, Dias and Pino is not wrong, it is just not reading off the same
+	// column. So the index carries every name fpl knows a player by, plus the
+	// bare surname behind an initial (J.Timber is findable as Timber).
+	//
+	// Every alias is EXACT after normalising, and every key that two players
+	// could claim is dropped rather than guessed at — an ambiguous row is
+	// printed and skipped. There is no edit distance anywhere here: this board is
+	// one-word surnames and three men are called Wilson.
+	ix := newAliasIndex(players, pool, bs)
 	applied := 0
 	var unmatched []string
 	for _, r := range f.Rows {
 		pos := rankings.NormalizePos(r.Pos)
-		key := rankings.Normalize(r.Name) + "|" + pos
-		p, ok := byKey[key+"|"+strings.ToUpper(r.Team)]
-		if !ok {
-			if dup[key] {
-				unmatched = append(unmatched, r.Name+" ("+strings.ToLower(pos)+
-					") — more than one, add the team column")
-				continue
-			}
-			p, ok = byKey[key]
-		}
-		if !ok {
-			unmatched = append(unmatched, r.Name+" ("+strings.ToLower(pos)+")")
+		p, why := ix.find(r.Name, pos, r.Team)
+		if p == nil {
+			unmatched = append(unmatched, r.Name+" ("+strings.ToLower(pos)+")"+why)
 			continue
 		}
 		if r.Tier > 0 {

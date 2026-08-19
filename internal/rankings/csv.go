@@ -162,6 +162,24 @@ func normalizeTiers(rows []Row) bool {
 		}
 	}
 	for _, is := range idx {
+		// UNTIERED ROWS STAY UNTIERED. A file may carry rows with a name, a
+		// position and an opinion and no tier at all — that is how the kicker
+		// and defense calls work, and how a "still deciding" column arrives —
+		// and they must not be renumbered into a tier.
+		//
+		// Left in, they sort to the FRONT (tier 0 is the smallest), collect
+		// local tier 1 between them, and push the file's real tier 1 down to 2.
+		// Measured on a real fpl board: eight defenders the sheet had parked
+		// under "still deciding" and "injuries" became tier 1 while the man
+		// actually written in the first column became tier 2, and the cliff
+		// alarms followed them.
+		tiered := is[:0]
+		for _, i := range is {
+			if rows[i].Tier > 0 {
+				tiered = append(tiered, i)
+			}
+		}
+		is = tiered
 		sort.SliceStable(is, func(a, b int) bool {
 			ra, rb := rows[is[a]], rows[is[b]]
 			if ra.Tier != rb.Tier {
