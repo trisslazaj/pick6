@@ -167,3 +167,41 @@ func TestLoadCSVNoNameColumn(t *testing.T) {
 		t.Error("expected an error when no player-name column exists")
 	}
 }
+
+// A file may carry rows with a name, a position and an opinion and no tier: the
+// kicker and defense calls work that way, and so does a "still deciding" column
+// on a hand-built board. Global renumbering must leave those rows alone.
+//
+// Left in the sort they land FIRST, because tier 0 is the smallest number, so
+// they collected local tier 1 and pushed the file's real tier 1 down to 2. On a
+// real fpl sheet that made eight parked defenders the top tier while the man
+// written in the first column dropped behind them, and the cliff alarms went
+// with them.
+func TestGlobalRenumberingLeavesUntieredRowsAlone(t *testing.T) {
+	rows := []Row{
+		// Global numbering: gaps within each position, which is what triggers it.
+		{Name: "alpha", Pos: "RB", Tier: 1, Rank: 1},
+		{Name: "bravo", Pos: "WR", Tier: 2, Rank: 2},
+		{Name: "charlie", Pos: "RB", Tier: 5, Rank: 3},
+		{Name: "delta", Pos: "WR", Tier: 7, Rank: 4},
+		// ...and opinions with no tier at all.
+		{Name: "parked", Pos: "RB", Rank: 5},
+		{Name: "hurt", Pos: "WR", Rank: 6},
+	}
+	if !normalizeTiers(rows) {
+		t.Fatal("gapped per-position numbering was not detected as global")
+	}
+	got := map[string]int{}
+	for _, r := range rows {
+		got[r.Name] = r.Tier
+	}
+	for name, want := range map[string]int{
+		"alpha": 1, "charlie": 2, // rb 1,5 -> 1,2
+		"bravo": 1, "delta": 2, // wr 2,7 -> 1,2
+		"parked": 0, "hurt": 0, // no tier in, no tier out
+	} {
+		if got[name] != want {
+			t.Errorf("%s renumbered to tier %d, want %d", name, got[name], want)
+		}
+	}
+}

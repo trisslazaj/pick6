@@ -22,7 +22,7 @@ var suffixes = map[string]bool{
 // and collapses whitespace. "Marvin Harrison Jr." -> "marvin harrison".
 func Normalize(s string) string {
 	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
+	for _, r := range strings.ToLower(ligatures.Replace(s)) {
 		switch {
 		case unicode.IsLetter(r) || unicode.IsDigit(r):
 			b.WriteRune(fold(r))
@@ -60,8 +60,26 @@ func fold(r rune) rune {
 	if a, ok := accents[r]; ok {
 		return a
 	}
+	if a, ok := letters[r]; ok {
+		return a
+	}
 	return r
 }
+
+// letters are the characters that are not an accented latin base and so survive
+// the accents table untouched: a slashed o is its own letter, not an o with a
+// mark on it, and neither is a dotless i or a turkish g-breve. They reached the
+// board through fpl, where Ødegaard, Kadıoğlu and Groß are all inside the top
+// 400 and a hand-typed sheet spells every one of them without the diacritic.
+var letters = map[rune]rune{
+	'ø': 'o', 'ı': 'i', 'ğ': 'g', 'ş': 's', 'đ': 'd', 'ð': 'd', 'ł': 'l', 'ħ': 'h',
+}
+
+// ligatures are the folds that are one character in and two out, which a rune
+// map cannot express.
+var ligatures = strings.NewReplacer(
+	"ß", "ss", "Ø", "O", "Æ", "AE", "æ", "ae", "Œ", "OE", "œ", "oe", "þ", "th", "Þ", "TH",
+)
 
 // Key is what we match on: normalized name plus position.
 type Key struct {
