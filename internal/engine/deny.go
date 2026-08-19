@@ -28,6 +28,7 @@ func (s *State) Deny() (Player, int, bool) {
 		return Player{}, 0, false
 	}
 
+	mine := s.Rosters[them]
 	filled, _ := s.FilledSlots(them)
 	round := s.Round(next)
 	bestPos, bestNeed := "", 0.0
@@ -35,7 +36,7 @@ func (s *State) Deny() (Player, int, bool) {
 		if _, ok := s.BestNow(pos); !ok {
 			continue // an empty position cannot be denied
 		}
-		if need := s.opponentNeed(pos, filled, round); need > bestNeed {
+		if need := s.opponentNeed(pos, mine, filled, round); need > bestNeed {
 			bestPos, bestNeed = pos, need
 		}
 	}

@@ -73,6 +73,21 @@ type Squad struct {
 	DEF  int `json:"select_DEF"`
 	MID  int `json:"select_MID"`
 	FWD  int `json:"select_FWD"`
+
+	// Play and the min/max pairs are the FORMATION rules, and they are a
+	// different shape from the squad above: you own fifteen and start eleven.
+	// One keeper starts and the second never can, at least three defenders, at
+	// least two midfielders, at least one forward — seven places spoken for, four
+	// free to come from def, mid or fwd, and four men on the bench.
+	Play   int `json:"play"`
+	MinGKP int `json:"min_play_GKP"`
+	MaxGKP int `json:"max_play_GKP"`
+	MinDEF int `json:"min_play_DEF"`
+	MaxDEF int `json:"max_play_DEF"`
+	MinMID int `json:"min_play_MID"`
+	MaxMID int `json:"max_play_MID"`
+	MinFWD int `json:"min_play_FWD"`
+	MaxFWD int `json:"max_play_FWD"`
 }
 
 // Bootstrap is the subset of bootstrap-static we read.

@@ -34,10 +34,14 @@ func TestPositionsAreTheOldLiterals(t *testing.T) {
 		want:     []string{"QB", "RB", "WR", "TE", "K", "DEF"},
 		wantDisp: []string{"QB", "RB", "WR", "TE", "K", "DEF"},
 	}, {
-		name:     "the fpl squad",
-		roster:   FPLRoster,
-		want:     []string{"GKP", "DEF", "MID", "FWD"},
-		wantDisp: []string{"GKP", "DEF", "MID", "FWD"},
+		name:   "the fpl squad",
+		roster: FPLRoster,
+		want:   []string{"GKP", "DEF", "MID", "FWD"}, // lineup order, the tie-break
+		// Reading order puts the three that can fill a flex place first and the
+		// keeper last, which is the same rule that puts nfl's kicker at the back:
+		// you start exactly one keeper and he is the least interesting decision
+		// on the board.
+		wantDisp: []string{"DEF", "MID", "FWD", "GKP"},
 	}}
 
 	for _, c := range cases {
@@ -67,36 +71,97 @@ func TestPositionsAreDeterministicWhenOnlyAFlexNamesAPosition(t *testing.T) {
 	}
 }
 
-// The quota rule, through all four doors need comes in by. A position filled to
-// its quota is not cheap depth, it is a player the official app will not let you
-// draft — and every consumer already knows how to hide a zero.
-func TestQuotaFilledPositionNeedsNothing(t *testing.T) {
+// The draft cap and the formation, which are two different limits and were one
+// limit the first time round.
+//
+// You own fifteen and start eleven, so a position can have every starting slot
+// filled and still be legal to draft — that is what the bench is. The second
+// keeper is the case that proves it and the reason this test exists: fpl starts
+// exactly one keeper, so the second can never start, and a model that gave him a
+// dedicated slot weighted him exactly like the first and would have said to
+// draft him early.
+func TestTheCapAndTheFormationAreDifferentLimits(t *testing.T) {
 	s := New(quotaBoard(), 10, 15, 1)
 	s.Roster = FPLRoster
-	// Two keepers is the whole gkp quota; one forward of three is not.
-	s.Rosters[1] = []string{"gkp1", "gkp2", "fwd1"}
 
+	// One keeper owned: the starting slot is his, and a second is a BENCH body
+	// rather than a starter. He is still legal — the cap is two.
+	s.Rosters[1] = []string{"gkp1"}
+	if n := s.Need("GKP"); n != NeedBench {
+		t.Errorf("the second keeper reads %v, want %v — he can never start", n, NeedBench)
+	}
+	// Three defenders owned fills the three the formation guarantees; a fourth
+	// competes for a flex place in the eleven, which is worth less than a
+	// guaranteed one and more than a bench seat.
+	s.Rosters[1] = []string{"def1", "def2", "def3"}
+	if n := s.Need("DEF"); n != NeedFlex {
+		t.Errorf("the fourth defender reads %v, want %v", n, NeedFlex)
+	}
+	if n := s.Need("MID"); n != NeedStarter {
+		t.Errorf("the first midfielder reads %v, want %v", n, NeedStarter)
+	}
+
+	// Two keepers is the whole cap: a third is not depth, it is a pick the
+	// official app refuses.
+	s.Rosters[1] = []string{"gkp1", "gkp2"}
 	if n := s.Need("GKP"); n != 0 {
-		t.Errorf("Need(GKP) at full quota = %v, want 0", n)
-	}
-	if n := s.Need("FWD"); n != NeedStarter {
-		t.Errorf("Need(FWD) with two slots open = %v, want %v", n, NeedStarter)
-	}
-	if n := s.NeedAfter("FWD", "fwd2"); n != NeedStarter {
-		t.Errorf("NeedAfter(FWD) with one slot still open = %v, want %v", n, NeedStarter)
+		t.Errorf("a third keeper reads %v, want 0 — the cap is two", n)
 	}
 	if n := s.NeedAfter("GKP", "gkp3"); n != 0 {
-		t.Errorf("NeedAfter(GKP) past the quota = %v, want 0", n)
+		t.Errorf("NeedAfter past the cap = %v, want 0", n)
 	}
 	filled, _ := s.FilledSlots(1)
-	if n := s.opponentNeed("GKP", filled, 1); n != 0 {
-		t.Errorf("opponentNeed(GKP) at full quota = %v, want 0", n)
+	if n := s.opponentNeed("GKP", s.Rosters[1], filled, 1); n != 0 {
+		t.Errorf("the opponents would draft past the cap: %v", n)
 	}
-	// And the same roster under nfl's bench rule pays the bench weight instead,
-	// which is what makes this a quota test rather than a lineup test.
-	s.Roster.Quota = false
+	if !s.CapReached("GKP", s.Rosters[1]) {
+		t.Error("CapReached says there is room for a third keeper")
+	}
+
+	// And the same roster with the cap lifted pays the bench weight instead,
+	// which is what makes this a cap test rather than a lineup test.
+	s.Roster.Max = nil
 	if n := s.Need("GKP"); n != NeedBench {
-		t.Errorf("Need(GKP) without the quota bit = %v, want %v (bench depth)", n, NeedBench)
+		t.Errorf("Need(GKP) with no cap = %v, want %v", n, NeedBench)
+	}
+}
+
+// FPLRoster has to be the shape fpl actually plays, because every need weight on
+// the board is read off it.
+func TestFPLRosterIsElevenStartersAndFourBench(t *testing.T) {
+	r := FPLRoster
+	if len(r.Slots) != 11 {
+		t.Errorf("starting slots = %d, want 11", len(r.Slots))
+	}
+	if r.Bench != 4 {
+		t.Errorf("bench = %d, want 4 (one keeper and three outfield)", r.Bench)
+	}
+	if len(r.Slots)+r.Bench != 15 {
+		t.Errorf("squad = %d, want 15", len(r.Slots)+r.Bench)
+	}
+	count := map[string]int{}
+	for _, sl := range r.Slots {
+		count[sl]++
+	}
+	// fpl's own minimums: one keeper, three defenders, two midfielders, one
+	// forward, and the four places left over free to come from def, mid or fwd.
+	for pos, want := range map[string]int{"GKP": 1, "DEF": 3, "MID": 2, "FWD": 1, "FLEX": 4} {
+		if count[pos] != want {
+			t.Errorf("%s slots = %d, want %d", pos, count[pos], want)
+		}
+	}
+	if r.flexTakes("GKP") {
+		t.Error("a keeper can fill a flex place, but fpl starts exactly one")
+	}
+	for _, pos := range []string{"DEF", "MID", "FWD"} {
+		if !r.flexTakes(pos) {
+			t.Errorf("%s cannot fill a flex place", pos)
+		}
+	}
+	for pos, want := range map[string]int{"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3} {
+		if r.Max[pos] != want {
+			t.Errorf("draft cap for %s = %d, want %d", pos, r.Max[pos], want)
+		}
 	}
 }
 

@@ -437,18 +437,15 @@ func scriptedPicker(seed int64) ui.Autopicker {
 	}
 }
 
-// quotaFull reports whether a seat has already filled every slot its lineup
-// gives a position. Reads the engine's own assignment rather than counting by
-// hand, so the mock and the board can never disagree about whose squad is full.
-// Always false without a quota — an nfl roster's spare bodies go to the bench.
+// quotaFull reports whether a seat has already drafted every player it is
+// allowed at a position. Asks the engine, so the mock and the board can never
+// disagree about whose squad is full, and always false without a cap — an nfl
+// roster's spare bodies go to the bench.
+//
+// The DRAFT CAP and not the lineup: fpl starts eleven of fifteen, so a seat with
+// every def starting slot filled may still legally draft another to sit on the
+// bench, and asking the lineup would have stopped the scripted room four picks
+// early at every position.
 func quotaFull(s *engine.State, slot int, pos string) bool {
-	if !s.Roster.Quota {
-		return false
-	}
-	for _, want := range s.UnfilledStarters(slot) {
-		if want == pos {
-			return false
-		}
-	}
-	return true
+	return s.CapReached(pos, s.Rosters[slot])
 }

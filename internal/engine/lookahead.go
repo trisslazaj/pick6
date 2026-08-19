@@ -445,8 +445,8 @@ func (pol *planPolicy) take(s *State, ids []string, round int, mustFill bool) (i
 			continue
 		}
 		pos := pol.core.pos[pi]
-		need := s.needSlots(pos, filled)
-		if need == 0 && s.Roster.Quota {
+		need := s.needSlots(pos, ids, filled)
+		if need == 0 && s.Roster.capped() {
 			// Under a hard quota a filled position is not merely worthless, it
 			// is ILLEGAL — the official app will not let anyone draft a sixth
 			// defender. Without this the walk still takes him whenever he is the

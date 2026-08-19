@@ -1406,6 +1406,11 @@ func TestEndgameLineNeedsSlackToHaveExisted(t *testing.T) {
 
 	// All four are driven to R == U, so MustFillStarters is true in every one and
 	// the only thing separating them is whether there was ever slack to run out.
+	//
+	// An fpl squad HAS slack and wants the line: it owns fifteen and starts
+	// eleven, so four of its picks are bench bodies. It was in this table as a
+	// no-slack case while FPLRoster was fifteen dedicated slots, which was the
+	// wrong shape — see engine.FPLRoster.
 	cases := []struct {
 		name   string
 		roster engine.Roster
@@ -1414,7 +1419,7 @@ func TestEndgameLineNeedsSlackToHaveExisted(t *testing.T) {
 	}{
 		{"the default nfl shape", engine.Roster{Slots: slots, Bench: 6}, 15, true},
 		{"benchless, with three picks to spare", engine.Roster{Slots: slots, Bench: 0}, 12, true},
-		{"a squad: every pick is a starting slot, from pick one", engine.FPLRoster, 15, false},
+		{"an fpl squad, which starts 11 of the 15 it owns", engine.FPLRoster, 15, true},
 		{"benchless and exactly as long as the lineup", engine.Roster{Slots: slots, Bench: 0}, 9, false},
 	}
 

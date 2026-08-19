@@ -385,7 +385,7 @@ func TestPlanLegsPriceAPositionTheSameInEitherOrder(t *testing.T) {
 		{"DEF", "rb1", NeedStarter, NeedStarter},            // the open slot, never discounted
 	}
 	for _, c := range cases {
-		leg1 := s.needFrom(c.pos, filled)
+		leg1 := s.needFrom(c.pos, s.Rosters[s.MySlot], filled)
 		leg2 := s.NeedAfter(c.pos, c.after)
 		if leg1 != leg2 {
 			t.Errorf("%s: leg one pays %v, leg two pays %v — same roster, same weight",

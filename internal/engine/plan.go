@@ -146,9 +146,10 @@ func (s *State) PickChoices() []PickChoice {
 	// reader cannot see. The WEIGHT is the slack-free need, because the second
 	// leg is priced by NeedAfter, which has no slack either; mixing the two made
 	// the score depend on the order of two legs that end at the same roster.
+	squad := s.Rosters[s.MySlot]
 	filled, _ := s.FilledSlots(s.MySlot)
 	candAt := func(pos string, best Player) planCand {
-		c := planCand{pos: pos, best: best, need: s.needFrom(pos, filled)}
+		c := planCand{pos: pos, best: best, need: s.needFrom(pos, squad, filled)}
 		// Need above bench weight IS "this pick takes an open starting slot",
 		// dedicated or flex — that is exactly what needFrom encodes, so asking
 		// it here cannot drift from the need the score is weighted by.
