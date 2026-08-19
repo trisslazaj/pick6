@@ -47,13 +47,41 @@ func Normalize(s string) string {
 
 // accents covers the latin letters that actually show up in NFL rosters.
 // Not a general unicode folder; doesn't need to be.
+// accents folds every latin letter that decomposes to an ascii base plus a
+// combining mark. GENERATED from the unicode tables over Latin-1 Supplement,
+// Latin Extended-A and -B and Latin Extended Additional, because a hand-kept
+// list is a list that is missing something: this one held Latin-1 plus a lone
+// s-caron, which was enough for nfl names and lost Milenković, Muharemović,
+// Petrović and every other slavic surname in a premier league squad.
+//
+// Letters that are NOT an accented base (ø, ı, ß and friends) are not here.
+// They are their own letters and live in `letters` and `ligatures`.
 var accents = map[rune]rune{
-	'à': 'a', 'á': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a', 'å': 'a',
-	'è': 'e', 'é': 'e', 'ê': 'e', 'ë': 'e',
-	'ì': 'i', 'í': 'i', 'î': 'i', 'ï': 'i',
-	'ò': 'o', 'ó': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o',
-	'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u',
-	'ñ': 'n', 'ý': 'y', 'ÿ': 'y', 'ç': 'c', 'š': 's',
+	'à': 'a', 'á': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a', 'å': 'a', 'ç': 'c', 'è': 'e', 'é': 'e', 'ê': 'e',
+	'ë': 'e', 'ì': 'i', 'í': 'i', 'î': 'i', 'ï': 'i', 'ñ': 'n', 'ò': 'o', 'ó': 'o', 'ô': 'o', 'õ': 'o',
+	'ö': 'o', 'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u', 'ý': 'y', 'ÿ': 'y', 'ā': 'a', 'ă': 'a', 'ą': 'a',
+	'ć': 'c', 'ĉ': 'c', 'ċ': 'c', 'č': 'c', 'ď': 'd', 'ē': 'e', 'ĕ': 'e', 'ė': 'e', 'ę': 'e', 'ě': 'e',
+	'ĝ': 'g', 'ğ': 'g', 'ġ': 'g', 'ģ': 'g', 'ĥ': 'h', 'ĩ': 'i', 'ī': 'i', 'ĭ': 'i', 'į': 'i', 'ĵ': 'j',
+	'ķ': 'k', 'ĺ': 'l', 'ļ': 'l', 'ľ': 'l', 'ń': 'n', 'ņ': 'n', 'ň': 'n', 'ō': 'o', 'ŏ': 'o', 'ő': 'o',
+	'ŕ': 'r', 'ŗ': 'r', 'ř': 'r', 'ś': 's', 'ŝ': 's', 'ş': 's', 'š': 's', 'ţ': 't', 'ť': 't', 'ũ': 'u',
+	'ū': 'u', 'ŭ': 'u', 'ů': 'u', 'ű': 'u', 'ų': 'u', 'ŵ': 'w', 'ŷ': 'y', 'ź': 'z', 'ż': 'z', 'ž': 'z',
+	'ơ': 'o', 'ư': 'u', 'ǎ': 'a', 'ǐ': 'i', 'ǒ': 'o', 'ǔ': 'u', 'ǖ': 'u', 'ǘ': 'u', 'ǚ': 'u', 'ǜ': 'u',
+	'ǟ': 'a', 'ǡ': 'a', 'ǧ': 'g', 'ǩ': 'k', 'ǫ': 'o', 'ǭ': 'o', 'ǰ': 'j', 'ǵ': 'g', 'ǹ': 'n', 'ǻ': 'a',
+	'ȁ': 'a', 'ȃ': 'a', 'ȅ': 'e', 'ȇ': 'e', 'ȉ': 'i', 'ȋ': 'i', 'ȍ': 'o', 'ȏ': 'o', 'ȑ': 'r', 'ȓ': 'r',
+	'ȕ': 'u', 'ȗ': 'u', 'ș': 's', 'ț': 't', 'ȟ': 'h', 'ȧ': 'a', 'ȩ': 'e', 'ȫ': 'o', 'ȭ': 'o', 'ȯ': 'o',
+	'ȱ': 'o', 'ȳ': 'y', 'ḁ': 'a', 'ḃ': 'b', 'ḅ': 'b', 'ḇ': 'b', 'ḉ': 'c', 'ḋ': 'd', 'ḍ': 'd', 'ḏ': 'd',
+	'ḑ': 'd', 'ḓ': 'd', 'ḕ': 'e', 'ḗ': 'e', 'ḙ': 'e', 'ḛ': 'e', 'ḝ': 'e', 'ḟ': 'f', 'ḡ': 'g', 'ḣ': 'h',
+	'ḥ': 'h', 'ḧ': 'h', 'ḩ': 'h', 'ḫ': 'h', 'ḭ': 'i', 'ḯ': 'i', 'ḱ': 'k', 'ḳ': 'k', 'ḵ': 'k', 'ḷ': 'l',
+	'ḹ': 'l', 'ḻ': 'l', 'ḽ': 'l', 'ḿ': 'm', 'ṁ': 'm', 'ṃ': 'm', 'ṅ': 'n', 'ṇ': 'n', 'ṉ': 'n', 'ṋ': 'n',
+	'ṍ': 'o', 'ṏ': 'o', 'ṑ': 'o', 'ṓ': 'o', 'ṕ': 'p', 'ṗ': 'p', 'ṙ': 'r', 'ṛ': 'r', 'ṝ': 'r', 'ṟ': 'r',
+	'ṡ': 's', 'ṣ': 's', 'ṥ': 's', 'ṧ': 's', 'ṩ': 's', 'ṫ': 't', 'ṭ': 't', 'ṯ': 't', 'ṱ': 't', 'ṳ': 'u',
+	'ṵ': 'u', 'ṷ': 'u', 'ṹ': 'u', 'ṻ': 'u', 'ṽ': 'v', 'ṿ': 'v', 'ẁ': 'w', 'ẃ': 'w', 'ẅ': 'w', 'ẇ': 'w',
+	'ẉ': 'w', 'ẋ': 'x', 'ẍ': 'x', 'ẏ': 'y', 'ẑ': 'z', 'ẓ': 'z', 'ẕ': 'z', 'ẖ': 'h', 'ẗ': 't', 'ẘ': 'w',
+	'ẙ': 'y', 'ạ': 'a', 'ả': 'a', 'ấ': 'a', 'ầ': 'a', 'ẩ': 'a', 'ẫ': 'a', 'ậ': 'a', 'ắ': 'a', 'ằ': 'a',
+	'ẳ': 'a', 'ẵ': 'a', 'ặ': 'a', 'ẹ': 'e', 'ẻ': 'e', 'ẽ': 'e', 'ế': 'e', 'ề': 'e', 'ể': 'e', 'ễ': 'e',
+	'ệ': 'e', 'ỉ': 'i', 'ị': 'i', 'ọ': 'o', 'ỏ': 'o', 'ố': 'o', 'ồ': 'o', 'ổ': 'o', 'ỗ': 'o', 'ộ': 'o',
+	'ớ': 'o', 'ờ': 'o', 'ở': 'o', 'ỡ': 'o', 'ợ': 'o', 'ụ': 'u', 'ủ': 'u', 'ứ': 'u', 'ừ': 'u', 'ử': 'u',
+	'ữ': 'u', 'ự': 'u', 'ỳ': 'y', 'ỵ': 'y', 'ỷ': 'y', 'ỹ': 'y',
 }
 
 func fold(r rune) rune {
@@ -240,6 +268,13 @@ func (ix *Index) Authoritative(id string) (name, pos, team string, bye int, ok b
 	}
 	return p.Name(), p.Position, p.Team, p.ByeWeek, true
 }
+
+// Distance is levenshtein, exported for ONE purpose: suggesting a correction in
+// an error message. It must never resolve a name. The fpl board is one-word
+// surnames where three men are called Wilson, and an edit distance that is
+// allowed to pick between them will eventually pick wrong and say nothing about
+// it. A suggestion the human reads and approves is a different thing entirely.
+func Distance(a, b string) int { return levenshtein(a, b) }
 
 func levenshtein(a, b string) int {
 	if a == b {
