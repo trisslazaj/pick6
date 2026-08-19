@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/trisslazaj/pick6/internal/adp"
@@ -81,5 +82,41 @@ func TestAStrongNameSurvivesAWeakCollision(t *testing.T) {
 	p, why := ix.find("Jamesy", "DEF", "")
 	if p == nil || p.SleeperID != "1" {
 		t.Fatalf("the man actually called Jamesy did not win his own name (%v)%s", p, why)
+	}
+}
+
+// A miss should say what to do about it, and the three cases are different
+// jobs: fix the spelling, fix the position, or delete the row. Edit distance
+// appears here and ONLY here, as a suggestion a human reads and approves.
+func TestAMissSaysWhichKindOfMissItIs(t *testing.T) {
+	players := map[string]*adp.Player{
+		"1": {SleeperID: "1", Name: "Quandrix", Pos: "DEF", Team: "AAA"},
+		"2": {SleeperID: "2", Name: "Bramwell", Pos: "MID", Team: "BBB"},
+	}
+	pool := []fpl.Element{
+		{ID: 1, WebName: "Quandrix", FirstName: "Odo", SecondName: "Quandrix"},
+		{ID: 2, WebName: "Bramwell", FirstName: "Piet", SecondName: "Bramwell"},
+	}
+	ix := newAliasIndex(players, pool, nil)
+
+	// A typo: close to a real name at the same position.
+	if _, why := ix.find("Quandrixx", "DEF", ""); !strings.Contains(why, "did you mean quandrix") {
+		t.Errorf("a one-letter typo did not suggest the fix, got %q", why)
+	}
+	// The right man, filed under the wrong position.
+	if _, why := ix.find("Bramwell", "DEF", ""); !strings.Contains(why, "as mid") {
+		t.Errorf("a position mismatch was not named, got %q", why)
+	}
+	// Nothing like it anywhere: a row to delete.
+	if _, why := ix.find("Zzyzx", "DEF", ""); !strings.Contains(why, "not in the fpl game") {
+		t.Errorf("an absent player was not reported as absent, got %q", why)
+	}
+	// Two equally close: no guess at all.
+	players["3"] = &adp.Player{SleeperID: "3", Name: "Quandrex", Pos: "DEF", Team: "CCC"}
+	pool = append(pool, fpl.Element{ID: 3, WebName: "Quandrex", FirstName: "Ivo", SecondName: "Quandrex"})
+	ix = newAliasIndex(players, pool, nil)
+	// Quandrox is one edit from each of them, so there is no unique nearest.
+	if _, why := ix.find("Quandrox", "DEF", ""); strings.Contains(why, "did you mean") {
+		t.Errorf("two equally close names still produced a guess: %q", why)
 	}
 }

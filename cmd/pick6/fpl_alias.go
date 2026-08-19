@@ -44,16 +44,19 @@ type aliasIndex struct {
 	// in the game" from "I could not resolve the name". The first is a row to
 	// delete; the second is a row to fix.
 	inGame map[string]bool
+	// every board name by position, for suggesting a correction on a miss.
+	namesByPos map[string][]string
 }
 
 func newAliasIndex(players map[string]*adp.Player, pool []fpl.Element, bs *fpl.Bootstrap) *aliasIndex {
 	ix := &aliasIndex{
-		exact:     map[string]*adp.Player{},
-		alias:     map[string]*adp.Player{},
-		dupExact:  map[string]bool{},
-		dupAlias:  map[string]bool{},
-		bySurname: map[string][]surnameCand{},
-		inGame:    map[string]bool{},
+		exact:      map[string]*adp.Player{},
+		alias:      map[string]*adp.Player{},
+		dupExact:   map[string]bool{},
+		dupAlias:   map[string]bool{},
+		bySurname:  map[string][]surnameCand{},
+		inGame:     map[string]bool{},
+		namesByPos: map[string][]string{},
 	}
 	if bs != nil {
 		for _, e := range bs.Elements {
@@ -108,6 +111,7 @@ func newAliasIndex(players map[string]*adp.Player, pool []fpl.Element, bs *fpl.B
 		}
 		k := n + "|" + p.Pos
 		ix.bySurname[k] = append(ix.bySurname[k], surnameCand{p: p, first: first})
+		ix.namesByPos[p.Pos] = append(ix.namesByPos[p.Pos], n)
 	}
 	seenPos := map[string]bool{}
 	for _, p := range players {
@@ -268,12 +272,57 @@ func (ix *aliasIndex) find(name, pos, team string) (*adp.Player, string) {
 			}
 		}
 	}
+	// A near-miss is almost always a typo, and saying so beats saying "not in
+	// the game" about a man who is very much in it: "M Fernanades" is Matheus
+	// Fernandes, one letter away and playing for spurs. The distance is used to
+	// SUGGEST and never to resolve — a human reads it and edits the row.
+	if near := ix.nearest(n, pos); near != "" {
+		return nil, " — no match, did you mean " + near + "?"
+	}
 	for _, key := range []string{n, dropInitial(n)} {
 		if key != "" && ix.inGame[key] {
 			return nil, "" // known to fpl, just not resolvable here
 		}
 	}
 	return nil, " — not in the fpl game, drop the row"
+}
+
+// nearest is the closest board name at this position within a couple of edits,
+// and "" when nothing is close or two things are equally close. Suggestion only.
+func (ix *aliasIndex) nearest(n, pos string) string {
+	q := n
+	if b := dropInitial(n); b != "" {
+		q = b
+	}
+	// Starts above any distance the per-candidate cap admits, or the widest
+	// match it allows can never become the best one.
+	best, bestD, ties := "", 99, 0
+	for _, cand := range ix.namesByPos[pos] {
+		// A short name is one edit from far too much ("neto" to "nero"), and a
+		// long one absorbs a mangled cluster without becoming a different man:
+		// "Strujic" for Struijk is three edits and obviously the same person.
+		max := 2
+		switch {
+		case len(cand) < 6:
+			max = 1
+		case len(cand) >= 7:
+			max = 3
+		}
+		d := rankings.Distance(q, cand)
+		if d > max {
+			continue
+		}
+		switch {
+		case d < bestD:
+			best, bestD, ties = cand, d, 1
+		case d == bestD:
+			ties++
+		}
+	}
+	if ties != 1 {
+		return ""
+	}
+	return best
 }
 
 // dropInitial strips a leading one-letter token, returning "" when there is not
