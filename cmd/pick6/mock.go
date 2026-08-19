@@ -197,7 +197,15 @@ func loadBoard(sp sport, room bool, replaying string) (map[string]engine.Player,
 		// yet — the opponent model's positional mix is measurably off against
 		// eight completed drafts, and the fix for it is unbuilt. Everything
 		// structural is tested; the calibration is not.
-		note(sp.name, "beta", "graded on nfl, not yet on "+sp.name+" — the room model draws too few keepers and defenders")
+		// Names the MECHANISM, not the pedigree. The first spelling read
+		// "graded on nfl, not yet on fpl — the room model draws too few
+		// keepers and defenders", and a reader took it to mean the nfl room
+		// curve was being applied to his board. It is not — nothing measured
+		// from another sport reaches this one, and the line above says so —
+		// but on the frame a drafter actually reads, "the room model" and
+		// "the room curve" are the same three words.
+		note(sp.name, "beta", "opponents drafted by rank order, not by squad need — "+
+			"gkp and def odds read high, so take them earlier than they say")
 	}
 	switch {
 	case room && sp.room:
