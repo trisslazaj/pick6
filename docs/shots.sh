@@ -4,7 +4,8 @@
 # change re-renders the whole set with one command and the screenshots can never
 # quietly rot out of sync with the board they claim to show.
 #
-# Needs `pick6 fetch` to have run (the frames draw real players from the cache),
+# Needs `pick6 fetch` AND `pick6 fetch -sport fpl` to have run (the frames draw real
+# players from the cache),
 # a pick6 on PATH, and freeze (go install github.com/charmbracelet/freeze@latest).
 #
 # The `script -q /dev/null` wrapper is load-bearing: it hands pick6 a pty inside
@@ -50,3 +51,9 @@ shot notes-tab.svg 2 pick6 mock -slot 12 -seed 5 -snapshot 100 -tab notes -notes
 
 # the tier board, straight from the cache
 shot tiers.svg 0 pick6 tiers -pos wr -depth 15
+
+# fpl: the same board, a different sport. Skip 3 rather than 2 — an fpl frame
+# carries one more preamble line than an nfl one (the beta note), and the tail
+# offset is what keeps the room/survival preamble out of the image.
+# Needs `pick6 fetch -sport fpl` as well as the nfl one.
+shot fpl-board.svg 3 pick6 mock -sport fpl -slot 4 -seed 5 -snapshot 62

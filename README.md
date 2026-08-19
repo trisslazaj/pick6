@@ -112,36 +112,10 @@ came from.
 pick6 board -slot 7 -teams 10 -lineup "qb rb rb wr wr te flex flex k def" -bench 6
 ```
 
-### `pick6 * -sport fpl` — the same war room for an FPL draft *(beta)*
+### `pick6 * -sport fpl` — a different sport, same brain
 
-Fantasy Premier League Draft is a snake draft over a hard-quota squad, so it runs on the same
-engine with nothing turned off but the machinery that only means something in football.
-
-**Beta, and the board says so on every frame.** Everything structural is tested — 105 real picks
-replay across all seven seats of a completed draft with zero desyncs — but the *calibration*
-isn't there yet. NFL survival has a referee (`pick6 calibrate`) and NFL decisions have another
-(`pick6 regret`); FPL has neither. Measured against eight completed public drafts, the room model
-draws too few keepers and defenders and too many midfielders, so a green `safe` tag on a defender
-is right about 60% of the time against 81–85% everywhere else. Read it as a very good tier sheet
-with live odds, and trust the odds a little less on GKP and DEF.
-
-```sh
-pick6 fetch -sport fpl                   # 1. the pool, from bootstrap-static
-pick6 live -sport fpl <league_id> -slot 3 # 2. sync the draft
-```
-
-**The id is your LEAGUE id**, the one in `draft.premierleague.com/…/league/<id>`. FPL publishes
-the draft order nowhere until round one happens, so pass `-slot N` when you see your seat —
-`-user "your name"` works too, from the moment you have made a pick.
-
-Positions are gkp/def/mid/fwd, the squad is 2/5/5/3 with no bench and no flex, and the price is
-FPL's own `draft_rank`. A position you have filled to its quota reads `def full` rather than
-"bench depth", because there is no bench and the app will not let you draft him. No auth,
-nothing to expire mid-round.
-
-`pick6 board -sport fpl` and `pick6 tiers -sport fpl` work the same way. Notes and rankings csvs
-live in `~/.config/pick6/notes/fpl/` and `~/.config/pick6/rankings/fpl/`, so a football seat file
-never turns up on a football board.
+Every command above takes `-sport fpl` and points at a Fantasy Premier League draft instead.
+See [fantasy premier league](#fantasy-premier-league-beta) below.
 
 ### `pick6 mock` — watch it think
 
@@ -224,6 +198,81 @@ team each one walked out with. None of the three is needed to draft.
 | `←` `→` / `e` | switch file / open it in `$EDITOR` (notes tab) |
 | `space` / `a` | step / autoplay (mock mode) |
 | `q` | quit |
+
+## fantasy premier league *(beta)*
+
+FPL Draft is a snake draft over a hard-quota squad, so it runs on the same engine. Nothing is
+turned off but the machinery that only ever meant something in football.
+
+```sh
+pick6 fetch -sport fpl                              # the pool, from bootstrap-static
+pick6 live -sport fpl <league_id> -slot 3           # sync the draft
+```
+
+**The id is your LEAGUE id** — the number in `draft.premierleague.com/…/league/<id>`, *not* the
+draft id your league details mention. That distinction is load-bearing: passing the draft id
+returns a real, populated feed for a *stranger's* league that happens to carry that number. It
+does not error and it does not come back empty. pick6 refuses a league that has already drafted
+and names it, so a typo says `league 4512 (white rose invitational) has already drafted`.
+
+FPL publishes the draft order **nowhere** until round one happens, so pass `-slot N` once you see
+your seat. `-user "your name"` works too, from the moment you have made a pick — and passing both
+is better than either: a disagreement between your flag and the feed becomes a hard error instead
+of a board that is confidently wrong all night.
+
+Everything else you already know how to use. `pick6 board -sport fpl` is the offline war room,
+`pick6 tiers -sport fpl` prints the cheat sheet, `pick6 mock -sport fpl` replays a scripted draft,
+and `tab` still drops to the numbers.
+
+<img src="docs/shots/fpl-board.svg" alt="an fpl draft mid-flight">
+
+Round 7 of a ten-manager squad draft: the field ranked by what the pick is worth, an `out` chip
+on a doubtful midfielder, the tier ladder with the emptied bands collapsed, and a roster pane
+that counts squad slots rather than a lineup plus a bench.
+
+### what's different
+
+|  | nfl | fpl |
+|---|---|---|
+| positions | qb rb wr te k def | gkp def mid fwd |
+| lineup | 9 starters + 6 bench, with flex | a **quota**: 2 / 5 / 5 / 3, no bench, no flex |
+| price | average draft position, in picks | FPL's own `draft_rank`, in rank units |
+| pool | 222 deep against a 192-pick draft | 560 deep against a 150-pick draft |
+| auth | none | none — no token, nothing to expire mid-round |
+
+The quota is a **legality** rule, not a preference. A position you have filled reads `def full`
+rather than "bench depth", because there is no bench and the app will not let you draft him — and
+the simulated opponents obey it too, so nobody in a rollout ever takes a sixth defender.
+
+Because the price is a rank rather than a pick number, the reach chip is gone: on a board where
+only a quarter of the ranked players are ever drafted, "12 picks before his price" is arithmetic
+rather than information. The **faller** flag stays, and that asymmetry is measured — over one
+real 105-pick draft every faller is a midfielder, never a keeper or a defender, because rooms
+take those at or ahead of their rank.
+
+Notes and rankings live in their own folders — `~/.config/pick6/notes/fpl/` and
+`~/.config/pick6/rankings/fpl/` — so a football seat file never turns up on a football board.
+Rankings CSVs work exactly as they do for the NFL board (see
+[bring your own rankings](#bring-your-own-rankings)), with one change: the join is exact on
+name + position + team with no fuzzy matching, because FPL names are one-word surnames and three
+different men are called Wilson.
+
+### what beta means here
+
+The board prints it on every frame, with the reason. What is **tested**: 105 real picks from a
+completed public draft replay across all seven seats with zero desyncs, and the whole engine
+under a quota squad. What is **not calibrated**: the opponent model.
+
+NFL survival has a referee (`pick6 calibrate`) and NFL decisions have another (`pick6 regret`).
+FPL has neither yet, and the one measurement that exists — against eight completed public drafts,
+1,080 picks — says the simulated opponents draft by rank order while a real room drafts by squad
+need. They take too few keepers and defenders and too many midfielders, so a green `safe` tag on
+a defender is right about **60%** of the time against 81–85% for every other position.
+
+**How to read it at the table:** trust the tiers, the value order, the roster pane and who's gone
+completely. Discount the survival odds on GKP and DEF — take your keepers and defenders a little
+earlier than the board suggests. Everything measured from NFL drafts (the room curve, the escape
+rates, the demand table) is switched **off** here rather than borrowed, and the frame says so.
 
 ## bring your own rankings
 
