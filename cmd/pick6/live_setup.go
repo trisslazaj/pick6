@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/trisslazaj/pick6/internal/engine"
 	"github.com/trisslazaj/pick6/internal/fpl"
@@ -32,6 +33,14 @@ type liveDraft struct {
 	// drop is the ids to take OFF the board before the state is built: players
 	// the pool still lists who can no longer be drafted. Empty for sleeper.
 	drop []string
+
+	// sideline is the ids the source now says cannot play and cannot say when
+	// they will. Unlike drop these stay on the board — the room can still take
+	// them — they just stop being candidates for our own recommendation. Read
+	// fresh here rather than trusted from the board file, because an achilles
+	// heals on its own schedule and the fetch may be a week old: a squad that
+	// clears comes back, a squad that tears leaves. Empty for sleeper.
+	sideline map[string]bool
 }
 
 func liveSetup(sp sport, id, user string, slot int, replay bool) (liveDraft, error) {
@@ -119,10 +128,11 @@ func fplLive(sp sport, id, user string, slot int, replay bool) (liveDraft, error
 	rounds := len(roster.Slots) + roster.Bench
 	return liveDraft{
 		teams: teams, rounds: rounds, mySlot: mySlot,
-		roster: roster,
-		feed:   fpl.NewFeed(id, bs.Roll()),
-		draft:  nil, // no trades in an fpl draft: owner is always the seat
-		drop:   bs.Departed(),
+		roster:   roster,
+		feed:     fpl.NewFeed(id, bs.Roll()),
+		draft:    nil, // no trades in an fpl draft: owner is always the seat
+		drop:     bs.Departed(),
+		sideline: bs.SidelinedIDs(time.Now()),
 		header: fmt.Sprintf("league %s — %s, %d managers, %d rounds, %s",
 			id, strings.ToLower(league.Info.Name), teams, rounds, status),
 	}, nil

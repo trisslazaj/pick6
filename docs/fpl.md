@@ -439,3 +439,145 @@ covers the demo need; skip unless it falls out free).
   fpl note only if someone feels like it — it is an NFL paper.
 - After the user's draft on the 19th: save `draft/4250/choices` to the cache — it is
   next season's room-curve seed.
+
+## the room, measured 2026-08-19 (1,080 picks, 8 completed public drafts)
+
+Cached at `fpl_choices_<id>.json` for leagues 100, 500, 1500, 2400, 4000, 4300, 4512, 5000.
+The fpl analogue of CLAUDE.md's "our league" table, and the first thing anyone should read
+before touching the opponent model's open bug.
+
+**Share of each round's picks, pooled:**
+
+```
+round   GKP   DEF   MID   FWD      round   GKP   DEF   MID   FWD
+   1     1%    6%   57%   36%         9     1%   56%   25%   18%
+   2     0%   11%   54%   35%        10    11%   50%   24%   15%
+   3     4%   12%   53%   31%        11    11%   57%   18%   14%
+   4     8%   25%   47%   19%        12    15%   51%   18%   15%
+   5    10%   22%   44%   24%        13    14%   51%   19%   15%
+   6     6%   33%   46%   15%        14    28%   40%   17%   15%
+   7    18%   24%   39%   19%        15    68%   19%    3%   10%
+   8     4%   42%   36%   18%
+```
+
+**Fraction of the room's quota spent by the end of each round** (100% = every seat at its cap,
+so this is normalized across the 7- and 10-manager leagues in the corpus):
+
+```
+round   GKP   DEF   MID   FWD      round   GKP   DEF   MID   FWD
+   3     3%    6%   33%   34%         9    26%   45%   80%   73%
+   5    12%   14%   52%   48%        11    37%   67%   89%   83%
+   7    24%   26%   69%   60%        13    51%   88%   96%   92%
+   8    26%   35%   76%   66%        14    66%   96%   99%   97%
+```
+
+First pick of each position, by round: MID r1 always, FWD r1 always, DEF earliest r1 /
+median r2, **GKP earliest r1 / median r4 / latest r5** — the first keeper is a round-4 event
+in every league in the corpus, not an endgame one.
+
+**Three readings, and the second is the one that matters:**
+
+1. **MID and FWD drain early and evenly** — half of everything the room ever takes at both is
+   gone by round 5, with no concentration spike anywhere. There is no run to be early or late
+   to; the depth is real and the board's pessimism about mid is the safe kind.
+2. **The defender run is rounds 9–13** — DEF goes 45% → 88% of quota in five rounds and is the
+   largest share of every round's picks from r8 on. This is a genuine cliff that no rank-based
+   opponent model can see, because nothing about `draft_rank` changes at round 9; what changes
+   is that ten seats simultaneously still owe three defenders each.
+3. **The keeper cliff is r14–r15** — 51% spent through r13, then all of it. Combined with the
+   median first keeper at r4, GKP is bimodal: one early starter, one endgame scramble for the
+   bench body who can never play.
+
+**This is direct corroboration of the open bug**, and it localizes it. The measured removal
+ratios (GKP 0.42×, DEF 0.58×, MID 1.66×, FWD 1.08×) are an average over the whole draft; this
+table says the DEF error is not spread evenly across it but concentrated in rounds 8–12, where
+the model is still drafting by rank while the room has switched to draining a quota. A fix
+weighting position by open slot count would move exactly these rounds, which makes them the
+cells to grade it on — not the aggregate.
+
+
+## injured players: `Sidelined`, built 2026-08-19 (post-draft)
+
+**The spec said the injury layer is display only and nothing may ever price it. That was
+right about VALUE and wrong about CANDIDACY, and the 2026 draft is the evidence.** Ekitiké
+carried `draft_rank` 19 on draft morning with `status: "i"`, `chance_of_playing_next_round: 0`
+and news reading "Achilles injury - Unknown return date". The board recommended him for
+fifteen rounds. Nothing downstream could argue: value is `RankValue(draft_rank)`, survival is
+the sim over the same ordering, and the `out` chip was display-only by design. The market that
+prices this pool had simply not repriced him, and fpl publishes no second opinion.
+
+`engine.Player.Sidelined` is the fix and it marks nothing down. He comes off **our** board the
+way a drafted player does and stays on **the room's**.
+
+**The rule, from two published facts and no invented number:**
+
+```
+cannot play next round   status i or s, or chance_of_playing_next_round == 0
+AND
+no return inside 4 weeks  news says "Unknown return date", or names a date past the horizon
+                          ("Expected back 28 Nov", "Suspended until 30 Aug" — both parsed;
+                           the string carries no year, so the season-forward year wins)
+```
+
+`fpl.SidelinedWeeks = 4`. On the 2026-08-19 pool that is **42 of 592**, and the set is
+identical at six weeks — two weeks would add only a suspension and an ankle. The short half of
+the `i` bucket is untouched: Baleba (back in 4 days), Andersen, Christie, Fofana, Gelhardt all
+stay draftable, which is right — a four-day ankle at rank 279 is a fine late pick.
+
+**Who it was hiding in plain sight, all inside the top hundred:** Ekitiké 19, J.Timber 36,
+Kulusevski 54, Garner 60, Saliba 66, Minteh 75 (back 28 Nov), Xavi 89, Mitoma 96.
+
+**The split is the design, and it is one predicate.** `State.OffMyBoard(id, p)` gates every
+"what could I take" read; every "what will the room do" read stays spelled `s.Taken[id]`:
+
+| off my board | still the room's |
+|---|---|
+| `Available` → bestNow, EBest, urgency, PickChoices, MarketPick, Deny | the sim pool (`newSimCore`) |
+| `bestTier`, `TierHold`, `TierRemaining`, `TierSize` | the exactly-N tilt's removal budget |
+| `Replacement` (I never settle for a man I cannot pick) | `expectedInWindow`, the run gate |
+| the plan policy's own legs (`pol.rank`) — **found by the diff review** | `RoomForecast` / `expect` |
+| the ui's `likely gone` and the tier ladder | |
+
+The plan-policy row is the one that would have shipped broken: `newPlanPolicy` ranks out of
+`core.pool`, which is shared with the opponents, so **my** second leg could have planned onto
+a torn achilles one row under a verdict that had just refused him. Same rule the leg-2 policy
+already applies to suppressed positions — a rollout must not do what the tool would never
+recommend.
+
+Rooms really do draft injured men: league 2400 took J.Timber at 6.03. A sim that could not
+would spend that pick on somebody else, so the opponents keep the whole pool.
+
+**He is still a player everywhere descriptive.** In `s.Players`, in the feed, in the notes
+prose, on the data tab with his chip — and in the `/` overlay his row prints **`out — off our
+board`** in cliff red where his price and odds would go, because the overlay is where you go
+looking for a man the board stopped offering, and "why isn't he there" is the only question
+being asked.
+
+**`live` re-checks against the fresh bootstrap and it moves BOTH ways** — a squad that clears
+comes back onto the board, a squad that tears leaves it — the same live re-check `Departed`
+gets, and for the same reason: the board file froze this at fetch time and an achilles heals on
+its own schedule. Offline `board -sport fpl` has no bootstrap, so its flags are as old as the
+fetch. `fetch -sport fpl` names everyone it held off, deepest ten as a count.
+
+**Nfl is deliberately untouched.** The mechanism is sport-agnostic and the derivation is not:
+adp reprices an injured player within days and `draft_rank` does not, so `Sidelined` is false
+on every sleeper board and the nfl frame is byte-identical.
+
+## the roster pane under a quota
+
+The sidebar drew the LINEUP — eleven starting slots plus however many spilled onto a bench —
+which is the wrong shape to stare at while drafting a quota. Bench rows appeared one at a time
+as picks fell into them, so a fifteen-man squad rendered as eleven rows that slowly became
+fifteen and **never once showed the four places still to fill**.
+
+`engine.Roster.Squad()` is the other true shape: one entry per place you may OWN, in lineup
+order — `gkp gkp · def×5 · mid×5 · fwd×3` — and **nil without a draft cap**, so every nfl board
+keeps the lineup-plus-bench pane it already had. A capped position the lineup never names still
+gets its rows; map order never decides anything.
+
+Nothing collapses and a drafted man never gives way. The sidebar's existing priority already
+says the ticker is what yields on a short terminal — and the ticker section now **drops whole
+rather than orphaning its header**, which is what a 24-row frame started doing once the pane
+grew four rows. Which of the fifteen START is a separate question, and the `need` line
+underneath still answers it off the same engine call the urgency weights read; two lineups on
+one thirty-cell pane would just be the frame arguing with itself.

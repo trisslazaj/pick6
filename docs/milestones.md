@@ -743,5 +743,65 @@ read it before re-litigating a decision, not before writing code. specs live bes
      signal is binary under a quota (`NeedStarter` or 0, with no flex or bench tier to grade),
      which is a modelling gap with **no fold to grade a fix against** — so it stays written down
      rather than guessed at.
+9b. **The post-draft pass: what fifteen rounds against a real room found — BUILT
+   (2026-08-19).** The user drafted league 4250 on the 19th. It went well; two things came
+   back.
+
+   - **THE BUG, and the whole point of drafting with it: the board recommended a man who
+     cannot play for months, for fifteen rounds.** Ekitiké carried `draft_rank` **19** on
+     draft morning with `status: "i"`, `chance_of_playing_next_round: 0` and news reading
+     *"Achilles injury - Unknown return date"*. Nothing downstream could argue — value is
+     `RankValue(draft_rank)`, survival is the sim over the same ordering, and the `out` chip
+     was **display only by design**, a rule inherited from the nfl side and written into three
+     separate comments. The rule was right about VALUE and wrong about CANDIDACY, and the
+     difference only shows up where the market does not reprice: adp moves an injured player
+     within days, `draft_rank` does not move at all.
+   - **`engine.Player.Sidelined` marks nothing down.** It takes a man off OUR board and leaves
+     him on the room's, exactly the way `Taken` does. Two published facts, no invented number:
+     he cannot play the next round (`status i`/`s`, or `chance == 0`) AND fpl either names a
+     return past `fpl.SidelinedWeeks` (4) or says *"Unknown return date"* in its own news line.
+     **42 of 592** on the 2026-08-19 pool, and the set is byte-identical at a six-week horizon
+     — two weeks would add only a suspension and an ankle, so the constant is not load-bearing.
+     Eight were inside the top hundred: Ekitiké 19, J.Timber 36, Kulusevski 54, Garner 60,
+     Saliba 66, Minteh 75 (*back 28 Nov*, the only one dated), Xavi 89, Mitoma 96.
+   - **The split is one predicate and that is the design.** `State.OffMyBoard` gates every
+     *what could I take* read — `Available`, `bestTier`, `TierHold`, `TierRemaining`/`TierSize`,
+     `Replacement`, the ui's ladder and likely-gone. Every *what will the room do* read is still
+     spelled `s.Taken[id]` on its own: the sim pool, the tilt's removal budget, the run
+     forecast. **Rooms really do draft injured men** — league 2400 took J.Timber at 6.03 — and
+     a sim that could not would spend that pick on somebody else.
+   - **The adversarial diff pass earned its keep again, on the one site that is neither.**
+     `newPlanPolicy` ranks MY legs out of `core.pool`, which is shared with the opponents, so
+     the plan's second leg could have landed on a torn achilles one row under a verdict that
+     had just refused him. Same rule the leg-2 policy already applies to suppressed positions:
+     *a rollout must not do what the tool would never recommend.* Caught before it shipped;
+     nothing else in the diff survived the pass.
+   - **He stays a player everywhere descriptive** — `s.Players`, the feed, the notes prose, the
+     data tab with his chip. In the `/` overlay his row prints **`out — off our board`** in
+     cliff red where his price and odds would go, because the overlay is where you go looking
+     for a man the board stopped offering and *"why isn't he there"* is the only question being
+     asked. `live` re-checks against the fresh bootstrap and it moves **both ways**: a squad
+     that clears comes back on, a squad that tears leaves. Offline `board` has no bootstrap, so
+     its flags are as old as the fetch.
+   - **Nfl is byte-identical and deliberately so.** The mechanism is sport-agnostic, the
+     derivation is not, and `Sidelined` is false on every sleeper board. Verified across the
+     mock frames at heights 20/24/28 and the golden tables.
+   - **The second thing: the roster pane was drawing the wrong one of two true shapes.** Under
+     a quota the sidebar showed the LINEUP — eleven starting slots plus however many spilled —
+     so bench rows appeared one at a time as picks fell into them, a fifteen-man squad rendered
+     as eleven rows that slowly became fifteen, and **the places still to fill were never once
+     on screen**. `engine.Roster.Squad()` is the other shape: one row per place you may own, in
+     lineup order, `gkp gkp · def×5 · mid×5 · fwd×3`. **nil without a draft cap**, so every nfl
+     board keeps the pane it had.
+   - Nothing collapses and a drafted man never gives way — the sidebar's own priority already
+     says the ticker is what yields. What did change: **the ticker section now drops WHOLE
+     rather than orphaning its header**, which is what a 24-row frame started doing once the
+     pane grew four rows. That tidied the nfl frame at height 20 as a side effect.
+   - *Nine tests, each verified to fail without its fix* (`internal/engine/sidelined_test.go`,
+     the fpl date-parse table, the fetch report). *Left open, found while shipping and not
+     touched*: `printFPLReplacement` indexes at lineup × teams (10/30/20/10) while `demandAt`
+     indexes at cap × teams (20/50/50/30) — a printout that re-derived the index, which is the
+     exact drift `ReplacementIndex`'s own comment exists to prevent.
+
 10. Investigate having a global store of data + allowing new users to upload their own, without for example my own league barging into it --> lowish priority since im focusing on my own draft, but a cool thought.
 11. Using Claude to rate everyones draft on a letter grade scale

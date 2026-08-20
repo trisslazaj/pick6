@@ -63,6 +63,23 @@ type Player struct {
 	InjuryStatus string // "" is the normal case; "" in Status means unknown, not hurt
 	Status       string
 	NewsUpdated  int64 // epoch milliseconds, 0 when unknown
+
+	// Sidelined is the one injury fact that DOES reach the engine, and it is not
+	// a value judgement — it is "he cannot play, and the source cannot say when
+	// he will". Nothing is marked down: he is simply not a candidate for my own
+	// board, the way a drafted player is not.
+	//
+	// The exception exists because a market can fail to reprice. Fpl's
+	// draft_rank had Ekitiké at 19 on draft morning with an achilles tear and no
+	// return date, so the recommendation led with him for fifteen rounds and
+	// nothing downstream could argue: value came from the rank, survival came
+	// from the rank, and every chip on him was display-only by design. Set by
+	// fpl.Element.Sidelined; false everywhere in nfl, where adp does reprice.
+	//
+	// It takes him off MY board and not off the room's. Opponents still draft
+	// him in the sim (they really do draft him), the feed still registers him,
+	// search still finds him, and the data tab still lists him. See State.OffMyBoard.
+	Sidelined bool
 }
 
 // Roster describes a league's starting lineup.
@@ -114,6 +131,51 @@ func (r Roster) holds(pos string) bool {
 
 // capped reports whether this roster limits how many of a position you may draft.
 func (r Roster) capped() bool { return len(r.Max) > 0 }
+
+// Squad is the roster as one entry per player you may OWN — 2 gkp, 5 def, 5 mid,
+// 3 fwd under fpl — rather than per lineup slot. nil when the roster has no
+// draft cap, which is every nfl league: there the lineup plus a bench count IS
+// the shape, and there is no second answer to give.
+//
+// It exists for the sidebar, and the reason is that a capped roster has two
+// true shapes and the lineup is the less useful one to stare at while drafting.
+// Eleven starting slots plus "however many spilled" means the bench rows appear
+// one at a time as you draft into them, so the pane grew from eleven rows to
+// fifteen over the back half of a draft and never once showed you the four
+// empty squad places you still had to fill. The quota is the thing a capped
+// draft is actually spending.
+//
+// Order is first appearance in Slots, so it comes out in lineup order — gkp,
+// def, mid, fwd — rather than in map order, which would reshuffle the pane
+// between renders. A capped position the lineup never names is appended in
+// sorted order for the same reason.
+func (r Roster) Squad() []string {
+	if !r.capped() {
+		return nil
+	}
+	var order []string
+	seen := map[string]bool{}
+	for _, slot := range r.Slots {
+		if isFlexSlot(slot) || seen[slot] || r.Max[slot] == 0 {
+			continue
+		}
+		order, seen[slot] = append(order, slot), true
+	}
+	var rest []string
+	for pos := range r.Max {
+		if !seen[pos] {
+			rest = append(rest, pos)
+		}
+	}
+	sort.Strings(rest)
+	var out []string
+	for _, pos := range append(order, rest...) {
+		for i := 0; i < r.Max[pos]; i++ {
+			out = append(out, pos)
+		}
+	}
+	return out
+}
 
 // full reports whether a seat has already drafted every player it is allowed at
 // a position. Always false without a cap.
@@ -420,11 +482,22 @@ func (s *State) Undo() {
 
 // ---- queries ----
 
+// OffMyBoard reports whether a player is out of my own consideration: drafted,
+// or sidelined long enough that recommending him would be absurd.
+//
+// One predicate rather than a check per site, because the frame is not allowed
+// to disagree with itself — a man the row order skips while the tier count
+// still holds a place for him prints "3 left in tier 2" over two names. Every
+// "what could I take" read goes through here; every "what will the room do"
+// read deliberately does not, and those are the ones spelled `s.Taken[id]` on
+// their own (the sim pool, the tilt's removal budget, the run forecast).
+func (s *State) OffMyBoard(id string, p Player) bool { return s.Taken[id] || p.Sidelined }
+
 // Available returns every undrafted player at a position, best value first.
 func (s *State) Available(pos string) []Player {
 	var out []Player
 	for id, p := range s.Players {
-		if p.Pos == pos && !s.Taken[id] {
+		if p.Pos == pos && !s.OffMyBoard(id, p) {
 			out = append(out, p)
 		}
 	}
@@ -457,7 +530,7 @@ func (s *State) TierRemaining(pos string, tier int) int {
 	}
 	n := 0
 	for id, p := range s.Players {
-		if p.Pos == pos && p.Tier == tier && !s.Taken[id] {
+		if p.Pos == pos && p.Tier == tier && !s.OffMyBoard(id, p) {
 			n++
 		}
 	}
@@ -466,13 +539,18 @@ func (s *State) TierRemaining(pos string, tier int) int {
 
 // TierSize counts every player in a position's tier, drafted or not. Used to
 // tell a tier that is emptying from one that was always small.
+//
+// Sidelined men are not counted, and the pairing with TierRemaining is why: a
+// tier that never offered him has not lost him, and counting him here while
+// TierRemaining skips him makes an untouched tier look eaten and fires a cliff
+// on pick 1.01.
 func (s *State) TierSize(pos string, tier int) int {
 	if tier == 0 {
 		return 0
 	}
 	n := 0
 	for _, p := range s.Players {
-		if p.Pos == pos && p.Tier == tier {
+		if p.Pos == pos && p.Tier == tier && !p.Sidelined {
 			n++
 		}
 	}

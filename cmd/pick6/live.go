@@ -100,6 +100,26 @@ func runLive(args []string) error {
 				"%d players have left the league since the last fetch — dropped", gone))
 		}
 	}
+	// Sidelined is the softer half of the same re-check and moves BOTH ways: a
+	// board frozen a week ago has men who have since torn something and men who
+	// have since come back, and the stale answer is wrong in a different
+	// direction each time. They stay on the board either way — the room drafts
+	// injured players and the sim has to let it — they only stop leading ours.
+	if len(setup.sideline) > 0 || sp.name == fplSport.name {
+		changed := 0
+		for id, p := range players {
+			if out := setup.sideline[id]; out != p.Sidelined {
+				p.Sidelined = out
+				players[id] = p
+				changed++
+			}
+		}
+		if changed > 0 {
+			note("board", "current", fmt.Sprintf(
+				"%d players' injury status moved since the last fetch — %d now off our board",
+				changed, len(setup.sideline)))
+		}
+	}
 
 	s := engine.New(players, setup.teams, setup.rounds, setup.mySlot)
 	if sp.demand {

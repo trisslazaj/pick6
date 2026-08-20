@@ -109,6 +109,12 @@ type Player struct {
 	Status       string
 	NewsUpdated  int64 // epoch milliseconds, 0 when the dump had no news for him
 
+	// Sidelined is the one injury fact that is NOT display only — see
+	// engine.Player.Sidelined for why it earns the exception. Fpl sets it; the
+	// nfl fetch leaves it false, because adp reprices an injured player and
+	// draft_rank does not. Absent from an older board file, which reads false.
+	Sidelined bool
+
 	// FormatSpread is the largest gap in picks between the primary format's ADP
 	// and any cross-checked format. High spread means the player's draft cost is
 	// sensitive to scoring rules — a receiving back, or a superflex quarterback.

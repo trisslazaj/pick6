@@ -294,14 +294,22 @@ func (b Board) searchRow(m searchMatch, cursor bool, w int) string {
 	// off the same styler, so a player looked up here and read off the data tab
 	// cannot carry two different numbers.
 	var facts string
-	if m.taken {
+	switch {
+	case m.taken:
 		gone := "taken"
 		if m.pick > 0 {
 			gone = "taken " + b.pickLabel(m.pick)
 		}
 		facts = Dim.Render(gone)
 		style = style.Faint(true)
-	} else {
+	case m.Sidelined:
+		// The overlay is where you come looking for a man the board stopped
+		// offering, so it is where the board owes you the reason. His price and
+		// his odds are both true and neither answers the question being asked —
+		// "why isn't he there" — so they give way to the one that does.
+		facts = Cliff.Render("out — off our board")
+		style = style.Faint(true)
+	default:
 		var parts []string
 		if m.Tier > 0 {
 			parts = append(parts, fmt.Sprintf("tier %d", m.Tier))
@@ -345,7 +353,12 @@ func (b Board) selectedLine(w int) string {
 	// At 80 columns the untrimmed line ran a cell over and jammed itself against
 	// the hint, which is the rendering fault every other pane already avoids.
 	var lefts []string
-	if b.State.Taken[b.Selected] {
+	switch {
+	case p.Sidelined && !b.State.Taken[b.Selected]:
+		// Same answer the result row gave, so a man selected out of the overlay
+		// does not lose the only clause that explained him.
+		lefts = []string{id + Cliff.Render(" · out — off our board"), id}
+	case b.State.Taken[b.Selected]:
 		// The same clause the row he was selected FROM carried. It said "taken
 		// 1.01" there and "already taken" here, about one man in one frame.
 		gone := " · already taken"
@@ -353,7 +366,7 @@ func (b Board) selectedLine(w int) string {
 			gone = " · taken " + b.pickLabel(at)
 		}
 		lefts = []string{id + Dim.Render(gone), id}
-	} else {
+	default:
 		surv := Dim.Render(" · ") + b.survStyle(p).Render(pct(b.State.PSurviveTilted(p)))
 		tier, adp := "", ""
 		if p.Tier > 0 {
