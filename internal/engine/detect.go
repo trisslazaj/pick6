@@ -29,7 +29,7 @@ const (
 func (s *State) bestTier(pos string) (int, bool) {
 	best, found := 0, false
 	for id, p := range s.Players {
-		if s.Taken[id] || p.Pos != pos || p.Tier == 0 {
+		if s.OffMyBoard(id, p) || p.Pos != pos || p.Tier == 0 {
 			continue
 		}
 		if !found || p.Tier < best {
@@ -65,7 +65,7 @@ func (s *State) TierHold(pos string) (float64, bool) {
 	f := s.survivalAt(s.ActPick())
 	allGone := 1.0
 	for id, p := range s.Players {
-		if s.Taken[id] || p.Pos != pos || p.Tier != tier {
+		if s.OffMyBoard(id, p) || p.Pos != pos || p.Tier != tier {
 			continue
 		}
 		allGone *= 1 - f(p)

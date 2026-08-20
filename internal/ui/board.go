@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -1591,15 +1592,29 @@ func (b Board) sidebar(w int) string {
 	// bench depth is the least useful thing on screen at that moment — you know
 	// who you drafted.
 	insight := b.insight(w)
-	fixed := 1 + len(b.State.Roster.Slots) + strings.Count(insight, "\n") + 2
+	// A capped roster draws one row per squad place and has no separate bench,
+	// so its row count is the quota rather than the lineup.
+	rows := len(b.State.Roster.Slots)
+	if squad := b.State.Roster.Squad(); squad != nil {
+		rows = len(squad)
+	}
+	fixed := 1 + rows + strings.Count(insight, "\n") + 2
 	benchCap := b.bodyRows() - fixed - MinTickerN
 
 	var sb strings.Builder
 	sb.WriteString(sectionHead("your roster", w-2) + "\n")
 	sb.WriteString(b.roster(w, benchCap))
 	sb.WriteString(insight)
-	sb.WriteString("\n" + sectionHead("recent picks", w-2) + "\n")
-	sb.WriteString(b.ticker(w))
+	// A head over nothing is worse than no section: on a 24-row terminal a
+	// fifteen-place squad plus the insight lines leaves the ticker no rows at
+	// all, and the frame clamp cuts from the bottom, so "recent picks ───" was
+	// landing as the last line of the pane with the picks it names cut off
+	// underneath it. Drop the section whole instead — the same rule the alert
+	// banner and the two field blocks already follow.
+	if benchCap+MinTickerN >= 2 {
+		sb.WriteString("\n" + sectionHead("recent picks", w-2) + "\n")
+		sb.WriteString(b.ticker(w))
+	}
 	return sb.String()
 }
 
@@ -1731,6 +1746,9 @@ func (b Board) insight(w int) string {
 
 func (b Board) roster(w, benchCap int) string {
 	s := b.State
+	if squad := s.Roster.Squad(); squad != nil {
+		return b.squadRoster(w, squad)
+	}
 	filled, bench := s.FilledSlots(s.MySlot)
 
 	// Row budget: 2 indent + 2 pane padding + label(6) + name + "  bye 11"(8).
@@ -1777,6 +1795,84 @@ func (b Board) roster(w, benchCap int) string {
 	if hidden := len(bench) - shown; hidden > 0 {
 		sb.WriteString(fmt.Sprintf("  %s\n",
 			Dim.Render(fmt.Sprintf("+%d more on the bench", hidden))))
+	}
+	return sb.String()
+}
+
+// squadRoster is the roster pane for a draft with a per-position cap: every
+// place you own, filled or not, in quota order.
+//
+// It replaces the lineup-plus-spill shape rather than sitting beside it, and
+// the fpl draft it was written for is why. There the pane showed one keeper,
+// three defenders, two midfielders, a forward and four flex slots, then grew a
+// bench row each time a pick spilled — so a fifteen-man squad rendered as
+// eleven rows that slowly became fifteen, and the four squad places you had
+// left to fill were never once on screen. The quota is a fixed shape from pick
+// one, which is what makes it worth looking at: gkp gkp, five def, five mid,
+// three fwd, and the holes are the picks you still owe.
+//
+// Which of them start is a real question and it is answered elsewhere — the
+// need line under this pane lists the unfilled STARTING slots, off the same
+// engine call the urgency weights use. Two lineups on one pane would just be
+// the frame arguing with itself in a thirty-cell column.
+func (b Board) squadRoster(w int, squad []string) string {
+	s := b.State
+
+	// Same budget the lineup rows use: label, name, and the bye column nfl fills
+	// and fpl leaves empty.
+	nameW := w - 18
+	if nameW < 16 {
+		nameW = 16
+	}
+	if nameW > 24 {
+		nameW = 24
+	}
+
+	// My picks by position, in the order I made them, so the rows read as a
+	// draft history down each block rather than reshuffling on value.
+	mine := map[string][]string{}
+	for _, id := range s.Rosters[s.MySlot] {
+		pos := s.Players[id].Pos
+		mine[pos] = append(mine[pos], id)
+	}
+
+	var sb strings.Builder
+	used := map[string]int{}
+	row := func(pos, id string) {
+		label := Dim.Render(fmt.Sprintf("%-5s", strings.ToLower(pos)))
+		if id == "" {
+			sb.WriteString(fmt.Sprintf("  %s %s\n", label, Dim.Render("—")))
+			return
+		}
+		sb.WriteString(fmt.Sprintf("  %s %s\n", label,
+			b.pos(pos, false).Render(trunc(strings.ToLower(s.Players[id].Name), nameW))))
+	}
+	// Every place, filled or not. Nothing collapses: a fixed shape is the whole
+	// point of this pane, and the sidebar's priority order already says what
+	// gives when the terminal is short — the ticker does, exactly as it does for
+	// a long lineup.
+	for _, pos := range squad {
+		id := ""
+		if ids := mine[pos]; used[pos] < len(ids) {
+			id = ids[used[pos]]
+			used[pos]++
+		}
+		row(pos, id)
+	}
+	// Anyone the quota has no place for. The engine will not draft past a cap
+	// and the official app will not let the room do it either, so this is only
+	// ever a player the feed registered at a position the roster never named —
+	// but a man on my roster who appears nowhere on my roster pane is the worst
+	// possible way to find that out.
+	spare := make([]string, 0, len(mine))
+	for pos := range mine {
+		spare = append(spare, pos)
+	}
+	sort.Strings(spare) // map order must not decide what a frame looks like
+	for _, pos := range spare {
+		for _, id := range mine[pos][min(used[pos], len(mine[pos])):] {
+			row(pos, id)
+		}
 	}
 	return sb.String()
 }

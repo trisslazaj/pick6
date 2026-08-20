@@ -80,7 +80,9 @@ func (b Board) roomBlock(w int) string {
 	// the names are what the picks mean.
 	var gone []engine.Player
 	for _, p := range s.Players {
-		if s.Taken[p.ID] || s.Suppressed(p.Pos) {
+		// OffMyBoard rather than Taken: a sidelined man leaving the room's board
+		// is not news to a reader who was never being offered him.
+		if s.OffMyBoard(p.ID, p) || s.Suppressed(p.Pos) {
 			continue
 		}
 		gone = append(gone, p)
@@ -193,7 +195,11 @@ func (b Board) ladderRow(pos string, w int) string {
 	left := map[int]int{}
 	maxTier := 0
 	for id, p := range s.Players {
-		if p.Pos != pos || p.Tier == 0 {
+		// Sidelined men are skipped on both counts, exactly as TierSize and
+		// TierRemaining skip them — the hollow dots take their alarm colour off
+		// s.Cliff, so a ladder counting a man the cliff math does not would
+		// paint a full tier red.
+		if p.Pos != pos || p.Tier == 0 || p.Sidelined {
 			continue
 		}
 		size[p.Tier]++

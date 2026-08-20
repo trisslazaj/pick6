@@ -56,7 +56,10 @@ func (s *State) Replacement(pos string) float64 {
 	}
 	vals := make([]int, 0, 64)
 	for _, p := range s.Players {
-		if p.Pos == pos && p.Value > 0 {
+		// Sidelined men are not on my board, so they are not what I settle for
+		// either. Skipping them keeps R static in the sense that matters — the
+		// flag is fixed for the whole draft, set before the state is built.
+		if p.Pos == pos && p.Value > 0 && !p.Sidelined {
 			vals = append(vals, p.Value)
 		}
 	}

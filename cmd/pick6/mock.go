@@ -184,6 +184,7 @@ func loadBoard(sp sport, room bool, replaying string) (map[string]engine.Player,
 			InjuryStatus: p.InjuryStatus,
 			Status:       p.Status,
 			NewsUpdated:  p.NewsUpdated,
+			Sidelined:    p.Sidelined,
 		}
 	}
 	if len(out) == 0 {

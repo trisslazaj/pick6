@@ -44,6 +44,8 @@ func runFetchFPL(sp sport, teams int, rankFile string, verbose bool) error {
 	players := map[string]*adp.Player{}
 	byPos := map[string]int{}
 	injured := map[string]int{}
+	var sidelined []fpl.Element
+	now := time.Now()
 	for _, e := range pool {
 		pos := bs.Pos(e)
 		if pos == "" {
@@ -68,17 +70,27 @@ func runFetchFPL(sp sport, teams int, rankFile string, verbose bool) error {
 
 			InjuryStatus: e.InjuryChip(),
 			NewsUpdated:  e.NewsMillis(),
+
+			// The one injury fact with teeth, and it marks nothing down: it
+			// takes a man who cannot play and has no return date off OUR board
+			// while leaving him on the room's. draft_rank does not reprice for
+			// this — see fpl.Element.Sidelined.
+			Sidelined: e.Sidelined(now),
 		}
 		players[p.SleeperID] = p
 		byPos[pos]++
 		if p.InjuryStatus != "" {
 			injured[pos]++
 		}
+		if p.Sidelined {
+			sidelined = append(sidelined, e)
+		}
 	}
 	note("pool", "ranked", posSummary(sp, byPos))
 	if len(injured) > 0 {
-		note("flags", "injury", posSummary(sp, injured)+" — display only, no value is ever marked down")
+		note("flags", "injury", posSummary(sp, injured)+" — chips only, no value is ever marked down")
 	}
+	printSidelined(sidelined, now, verbose)
 
 	// Tiers: the file's if there is one, derived from the value curve for
 	// everyone it missed. AssignTiersAll rather than AssignTiers, or all 184
@@ -210,5 +222,30 @@ func printFPLReplacement(sp sport, teams int, players map[string]*adp.Player) {
 			v, name = list[d-1].Value, strings.ToLower(list[d-1].Name)
 		}
 		fmt.Printf("  %-4s %3d st  %6d  %s\n", strings.ToLower(pos), d, v, name)
+	}
+}
+
+// printSidelined names the men held off the board, because a player vanishing
+// from a recommendation is the kind of thing you want to have been told about
+// once rather than to discover mid-draft. The deep ones are a count: past rank
+// 200 nobody was going to be offered them anyway.
+func printSidelined(out []fpl.Element, now time.Time, verbose bool) {
+	if len(out) == 0 {
+		return
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].DraftRank < out[j].DraftRank })
+	note("flags", "out", fmt.Sprintf(
+		"%d cannot play and have no return inside %d weeks — off our board, still on the room's",
+		len(out), fpl.SidelinedWeeks))
+	for i, e := range out {
+		if i >= 10 && !verbose {
+			fmt.Printf("    +%d more, all past rank %d\n", len(out)-i, out[i].DraftRank)
+			break
+		}
+		when := "no return date"
+		if back, ok := e.ReturnDate(now); ok {
+			when = "back " + strings.ToLower(back.Format("2 Jan"))
+		}
+		fmt.Printf("    rank %-4d %-16s %s\n", e.DraftRank, strings.ToLower(e.Name()), when)
 	}
 }

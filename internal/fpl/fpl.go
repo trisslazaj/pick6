@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/trisslazaj/pick6/internal/cache"
@@ -257,5 +259,112 @@ func (b *Bootstrap) Departed() []string {
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// SidelinedWeeks is how far out a return has to be before a player stops being
+// a candidate for OUR board. Four is a gameweek-shaped number and the corpus is
+// insensitive to it: on the 2026-08-19 bootstrap the set is identical at four
+// weeks and at six, and moving it to two only adds a suspension and an ankle.
+const SidelinedWeeks = 4
+
+// returnPat pulls the date out of fpl's own news line. Two phrasings carry one,
+// measured across the pool: "Achilles injury - Expected back 28 Nov" and
+// "Suspended until 30 Aug". Everything else says "Unknown return date", which
+// is not a missing field — it is fpl saying nobody knows.
+var returnPat = regexp.MustCompile(`(?i)(?:expected back|suspended until)\s+(\d{1,2})\s+([a-z]{3})`)
+
+// ReturnDate is when fpl says he is back, if it says at all.
+//
+// The string carries no year, and it has to: a season runs august to may, so a
+// "10 Feb" read in september is next year's and a "28 Nov" read in september is
+// this one's. The rule is the first year that puts the date inside the season
+// ahead — within thirty days behind us, since a return date drifts a little
+// past before somebody updates it.
+func (e Element) ReturnDate(now time.Time) (time.Time, bool) {
+	m := returnPat.FindStringSubmatch(e.News)
+	if m == nil {
+		return time.Time{}, false
+	}
+	day, err := strconv.Atoi(m[1])
+	if err != nil {
+		return time.Time{}, false
+	}
+	mon, ok := months[strings.ToLower(m[2])]
+	if !ok {
+		return time.Time{}, false
+	}
+	for _, year := range []int{now.Year(), now.Year() + 1} {
+		d := time.Date(year, mon, day, 0, 0, 0, 0, now.Location())
+		// Reject a rolled-over day (31 Feb) rather than letting time.Date
+		// normalise it into march and report a confident wrong date.
+		if d.Day() != day {
+			return time.Time{}, false
+		}
+		if d.After(now.AddDate(0, 0, -30)) {
+			return d, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// Sidelined reports a player who cannot play now and will not be back soon —
+// the state fpl's own draft_rank refuses to price.
+//
+// This is the one injury fact that reaches the engine, and it earns the
+// exception by not being a projection. Marking a man down because he is
+// questionable would be inventing a number about a real person; this reads two
+// published facts (he cannot play the next round, and fpl either names a return
+// past the horizon or says nobody knows) and answers the only question the
+// board asks, which is whether to put him at the top of a recommendation.
+//
+// It matters here in a way it does not in nfl because draft_rank does not move
+// for it. Ekitiké sat at rank 19 on draft morning with an achilles and no
+// return date, so the board led with him for fifteen rounds — the market that
+// prices this pool had simply not repriced him, and nothing downstream could.
+// He stays ON the board as a player: the room can still draft him, the sim
+// still lets opponents take him, and search still finds him.
+func (e Element) Sidelined(now time.Time) bool {
+	if !e.cannotPlay() {
+		return false
+	}
+	back, ok := e.ReturnDate(now)
+	if !ok {
+		return true // "unknown return date" — fpl's words, not an absent field
+	}
+	return back.After(now.AddDate(0, 0, 7*SidelinedWeeks))
+}
+
+// cannotPlay is "he is not available for the next round", off both fields that
+// say so. Status is the primary — i is injured, s is suspended — and the chance
+// arm catches the case where fpl zeroes a doubtful player without moving him.
+// Measured on the 2026-08-19 pool the two agree exactly: 87 elements at chance
+// 0, and the same 87 carry i, s or u.
+func (e Element) cannotPlay() bool {
+	if e.Status == "i" || e.Status == "s" {
+		return true
+	}
+	return e.ChanceNext != nil && *e.ChanceNext == 0
+}
+
+var months = map[string]time.Month{
+	"jan": time.January, "feb": time.February, "mar": time.March,
+	"apr": time.April, "may": time.May, "jun": time.June,
+	"jul": time.July, "aug": time.August, "sep": time.September,
+	"oct": time.October, "nov": time.November, "dec": time.December,
+}
+
+// SidelinedIDs is the stringified ids of pool players who are sidelined right
+// now — the same live re-check Departed gets, for the same reason. The board
+// froze this at fetch time and an achilles heals on its own schedule; a squad
+// that clears between the fetch and the draft has to come back onto the board,
+// and one that tears has to leave it.
+func (b *Bootstrap) SidelinedIDs(now time.Time) map[string]bool {
+	out := map[string]bool{}
+	for _, e := range b.Elements {
+		if e.Status != "u" && e.Sidelined(now) {
+			out[strconv.Itoa(e.ID)] = true
+		}
+	}
 	return out
 }

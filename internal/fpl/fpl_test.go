@@ -3,6 +3,7 @@ package fpl
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/trisslazaj/pick6/internal/sleeper"
 )
@@ -240,5 +241,73 @@ func TestSeatsSurviveRepeatedPolls(t *testing.T) {
 		if picks[i].DraftSlot != want {
 			t.Errorf("pick %d landed at seat %d, want %d", i+1, picks[i].DraftSlot, want)
 		}
+	}
+}
+
+// The one injury fact that reaches the engine, over the exact phrasings fpl
+// publishes. Names are fake; the news strings are copied verbatim from the
+// 2026-08-19 pool, which is the half that has to keep parsing.
+//
+// The horizon is what separates the two halves of the `i` bucket: a four-day
+// ankle is a fine late pick and a torn achilles with no return date is the
+// player the board led with for fifteen rounds.
+func TestSidelined(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	zero, seventyFive := 0, 75
+	cases := []struct {
+		name   string
+		status string
+		chance *int
+		news   string
+		want   bool
+		back   string // "" means fpl named no date
+	}{
+		{"healthy", "a", nil, "", false, ""},
+		{"achilles, no date", "i", &zero, "Achilles injury - Unknown return date", true, ""},
+		{"back inside the horizon", "i", &zero, "Ankle injury - Expected back 23 Aug", false, "2026-08-23"},
+		{"back past the horizon", "i", &zero, "Leg injury - Expected back 28 Nov", true, "2026-11-28"},
+		{"suspended, short", "s", &zero, "Suspended until 30 Aug", false, "2026-08-30"},
+		{"doubtful is not out", "d", &seventyFive, "Calf injury - 75% chance of playing", false, ""},
+		// A february return read in august is next season's, and the wrong year
+		// makes a five-month absence look like one that ended in the spring.
+		{"return rolls into next year", "i", &zero, "Knee injury - Expected back 10 Feb", true, "2027-02-10"},
+		// The chance arm, for the day fpl zeroes somebody without moving status.
+		{"zero chance, status unmoved", "d", &zero, "Unspecified injury - Unknown return date", true, ""},
+	}
+	for _, c := range cases {
+		e := Element{Status: c.status, ChanceNext: c.chance, News: c.news}
+		if got := e.Sidelined(now); got != c.want {
+			t.Errorf("%s: Sidelined = %v, want %v", c.name, got, c.want)
+		}
+		back, ok := e.ReturnDate(now)
+		if (c.back != "") != ok {
+			t.Errorf("%s: ReturnDate ok = %v, want %v", c.name, ok, c.back != "")
+			continue
+		}
+		if ok && back.Format("2006-01-02") != c.back {
+			t.Errorf("%s: ReturnDate = %s, want %s", c.name, back.Format("2006-01-02"), c.back)
+		}
+	}
+}
+
+// A player who has left the league is already off the board by Draftable, so
+// SidelinedIDs must not also claim him — the two lists mean different things to
+// `live` (one deletes, one flags) and a man on both would be deleted and then
+// looked up.
+func TestSidelinedIDsSkipsTheDeparted(t *testing.T) {
+	var bs Bootstrap
+	if err := json.Unmarshal([]byte(bootstrapJSON), &bs); err != nil {
+		t.Fatal(err)
+	}
+	out := bs.SidelinedIDs(time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC))
+	for _, id := range bs.Departed() {
+		if out[id] {
+			t.Errorf("player %s is both departed and sidelined", id)
+		}
+	}
+	// "Cha" carries status i with no news at all, which is fpl saying he cannot
+	// play and cannot say when — the Ekitiké state with the sentence left off.
+	if !out["13"] {
+		t.Errorf("status i with no return date was not sidelined: %v", out)
 	}
 }

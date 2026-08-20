@@ -411,6 +411,16 @@ func (s *State) newPlanPolicy(core *simCore, allowed map[string]bool, roster boo
 		if v := float64(s.Players[cand.id].Value) - repl[pi]; v > 0 {
 			pol.vor[i] = v
 		}
+		// MY legs, so my board's rules: a sidelined man is not offered here for
+		// the same reason a suppressed position is not. The pool he is being
+		// filtered out of is shared with the opponents and stays whole — they
+		// draft injured players and the sim has to let them — but a plan line
+		// that spends my round-two pick on a torn achilles is the tool
+		// recommending, in its own words, what it just refused to recommend one
+		// row above.
+		if s.Players[cand.id].Sidelined {
+			continue
+		}
 		pol.rank[pi] = append(pol.rank[pi], i)
 	}
 	// Stable over a price-ordered pool, so equal weights — everybody at or
