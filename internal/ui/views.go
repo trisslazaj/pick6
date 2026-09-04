@@ -249,21 +249,36 @@ func (b Board) sheetRows(v view) ([]sheetRow, error) {
 			return nil, err
 		}
 		ix := b.sheetIndex()
-		for _, r := range f.Rows {
+		ents := make([]sheetEnt, 0, len(f.Rows))
+		for i, r := range f.Rows {
 			pos := r.Pos
 			p, ok := ix.find(r)
 			if pos == "" && ok {
 				pos = p.Pos
 			}
-			if _, seen := groups[pos]; !seen {
-				order = append(order, pos)
-			}
 			team := r.Team
 			if team == "" && ok {
 				team = p.Team
 			}
-			groups[pos] = append(groups[pos], sheetEnt{row: sheetRow{pos: pos, rank: len(groups[pos]) + 1,
-				name: r.Name, team: team, sentiment: r.Sentiment, p: p, ok: ok}, tier: r.Tier})
+			// The file's own number, and the row's place in the file when it
+			// gave none. Only the flat view prints it; a positional block
+			// renumbers within the position below, the way it always has.
+			rank := r.Rank
+			if rank <= 0 {
+				rank = i + 1
+			}
+			ents = append(ents, sheetEnt{row: sheetRow{pos: pos, rank: rank, name: r.Name,
+				team: team, sentiment: r.Sentiment, p: p, ok: ok}, tier: r.Tier})
+		}
+		if isOverall(ents) {
+			return b.overallRows(ents), nil
+		}
+		for _, e := range ents {
+			if _, seen := groups[e.row.pos]; !seen {
+				order = append(order, e.row.pos)
+			}
+			e.row.rank = len(groups[e.row.pos]) + 1
+			groups[e.row.pos] = append(groups[e.row.pos], e)
 		}
 	}
 
@@ -283,6 +298,88 @@ func (b Board) sheetRows(v view) ([]sheetRow, error) {
 		}
 	}
 	return out, nil
+}
+
+// isOverall reports whether a file is a BIG BOARD — one overall order with the
+// positions mixed — rather than a positional sheet. It is measured by how often
+// the position changes down the file: a positional sheet has exactly one run
+// per position, a big board starts a run every few rows.
+//
+// The bar is two runs per position, not one, so that a stray row out of place
+// in a positional file doesn't flip the whole sheet flat. Smyth's own guide
+// ships both shapes, which is why the tab has to tell them apart rather than
+// being told: 4 runs over 4 positions is his positional rankings, 111 runs over
+// 4 is his half-ppr big board.
+func isOverall(ents []sheetEnt) bool {
+	runs, seen := 0, map[string]bool{}
+	prev := "\x00"
+	for _, e := range ents {
+		if e.row.pos == "" {
+			continue
+		}
+		if e.row.pos != prev {
+			runs++
+			prev = e.row.pos
+		}
+		seen[e.row.pos] = true
+	}
+	return len(seen) >= 2 && runs >= 2*len(seen)
+}
+
+// overallRows lays a big board out flat — the file's order, the file's numbers,
+// every position mixed, which is the only thing a big board says and the thing
+// filing it under position heads would destroy. The p filter still works and
+// keeps the overall numbers, so "wr only" reads as the receivers' places on the
+// whole board rather than a positional list wearing a different hat.
+//
+// Tiers head their own blocks if the file drew any; a big board usually draws
+// none, and then the count over the lot is the whole header.
+func (b Board) overallRows(ents []sheetEnt) []sheetRow {
+	kept := make([]sheetEnt, 0, len(ents))
+	for _, e := range ents {
+		if b.DataFilter != "" && e.row.pos != b.DataFilter {
+			continue
+		}
+		kept = append(kept, e)
+	}
+	// "overall order" under either filter: the title line above already says
+	// "wr only", and naming the position twice reads as two different claims.
+	// What the head is for is the # column — those are places on the whole
+	// board, and a filtered sheet is exactly where that stops being obvious.
+	const label = "overall order"
+	var out []sheetRow
+	lastTier := -1
+	for i, e := range kept {
+		if i == 0 || e.tier != lastTier {
+			out = append(out, sheetRow{head: b.overallHead(label, e.tier, kept)})
+			lastTier = e.tier
+		}
+		out = append(out, e.row)
+	}
+	return out
+}
+
+// overallHead is the flat view's group header. Same counting rule as sheetHead:
+// only men the board knows are counted, since a ? row is neither gone nor left.
+func (b Board) overallHead(label string, tier int, es []sheetEnt) string {
+	s := label
+	if tier > 0 {
+		s = fmt.Sprintf("%s · tier %d", label, tier)
+	}
+	total, left := 0, 0
+	for _, e := range es {
+		if e.tier != tier || !e.row.ok {
+			continue
+		}
+		total++
+		if !b.State.Taken[e.row.p.ID] {
+			left++
+		}
+	}
+	if total == 0 {
+		return s
+	}
+	return fmt.Sprintf("%s · %d of %d left", s, left, total)
 }
 
 // sheetHead is a group's header — "rb · tier 2 · 3 of 7 left". Untiered blocks

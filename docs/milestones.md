@@ -803,5 +803,15 @@ read it before re-litigating a decision, not before writing code. specs live bes
      indexes at cap × teams (20/50/50/30) — a printout that re-derived the index, which is the
      exact drift `ReplacementIndex`'s own comment exists to prevent.
 
+9c. **Drafted with it. v1.0.0 (2026-09-04).** Every 2026 league — the three nfl redraft rooms
+   and fpl 4250 — was drafted off this board. The verdict, verbatim: *"fine more or less. cant
+   say i agreed with it most of the time but it was good enough and it helped overall."* That
+   is the honest grade for a tool whose whole pitch is arguing with the drafter, and it is the
+   one this log closes on. Shipped in the same pass: the data tab's big-board shape — a file
+   whose positions interleave prints flat, in its own order with its own numbers, detected by
+   runs (two per position) rather than declared. Built before the draft, committed after.
+   Parked until the next draft. What a season of waivers and lineups would want is scoped in
+   `backlog.md` under *in-season*: the endpoints probed and recorded, nothing built.
+
 10. Investigate having a global store of data + allowing new users to upload their own, without for example my own league barging into it --> lowish priority since im focusing on my own draft, but a cool thought.
 11. Using Claude to rate everyones draft on a letter grade scale

@@ -176,3 +176,78 @@ func TestFetchedFileIsAlwaysAView(t *testing.T) {
 		t.Errorf("a missing fetched file is skipped, got %d views", n)
 	}
 }
+
+// A big board is one overall order with the positions mixed, and the tab has
+// to recognize it rather than be told: filing it under position heads would
+// destroy the only thing the file says. The file's own numbers survive, and so
+// does the p filter — "wr only" reads as the receivers' places on the whole
+// board, not a positional list wearing a different hat.
+func bigBoardDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	csv := "rank,name,position\n" +
+		"1,Fake Rb00,RB\n" +
+		"2,Fake Wr00,WR\n" +
+		"3,Fake Rb01,RB\n" +
+		"4,Fake Wr01,WR\n" +
+		"5,Fake Te00,TE\n" +
+		"6,Fake Rb02,RB\n" +
+		"7,Fake Wr02,WR\n" +
+		"8,Fake Te01,TE\n"
+	if err := os.WriteFile(filepath.Join(dir, "guru-big.csv"), []byte(csv), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestBigBoardRendersFlatInFileOrder(t *testing.T) {
+	s := testState()
+	s.Draft("RB01") // 1.01 takes him
+	b := Board{State: s, Width: 100, Height: 40, Tab: 1, Views: Views{Dir: bigBoardDir(t)}}
+	b.SelectView("guru-big")
+	view := ansi.ReplaceAllString(b.View(), "")
+
+	if strings.Contains(view, "· tier") {
+		t.Errorf("a big board draws no tiers, so it should head no tier blocks:\n%s", view)
+	}
+	if !strings.Contains(view, "overall order · 7 of 8 left") {
+		t.Errorf("want one head over the lot with the count:\n%s", view)
+	}
+	// The file's order, not the board's positions: rb00 opens, wr00 follows.
+	i, j := strings.Index(view, "fake rb00"), strings.Index(view, "fake wr00")
+	if i < 0 || j < 0 || i > j {
+		t.Errorf("rows should run in the file's order, rb00 then wr00:\n%s", view)
+	}
+	// ...and the file's own numbers, not a per-position count.
+	for _, want := range []string{"  2  fake wr00", "  7  fake wr02", "  8  fake te01"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("want the file's overall number %q:\n%s", want, view)
+		}
+	}
+
+	b.DataFilter = "WR"
+	view = ansi.ReplaceAllString(b.View(), "")
+	if !strings.Contains(view, "overall order · 3 of 3 left") {
+		t.Errorf("the filtered head should still say the numbers are overall places:\n%s", view)
+	}
+	if strings.Contains(view, "fake rb00") {
+		t.Errorf("the p filter should drop the other positions:\n%s", view)
+	}
+	if !strings.Contains(view, "  2  fake wr00") || !strings.Contains(view, "  7  fake wr02") {
+		t.Errorf("filtering should keep the overall numbers:\n%s", view)
+	}
+}
+
+// The other half of the same claim: a positional sheet stays grouped. Runs of
+// one position each are exactly what the detector must not read as mixed.
+func TestPositionalFileStaysGrouped(t *testing.T) {
+	b := Board{State: testState(), Width: 100, Height: 40, Tab: 1, Views: Views{Dir: fakeRankingsDir(t)}}
+	b.SelectView("guru-2026")
+	view := ansi.ReplaceAllString(b.View(), "")
+	if !strings.Contains(view, "wr · tier 1") {
+		t.Errorf("a positional file should keep its position heads:\n%s", view)
+	}
+	if strings.Contains(view, "overall order") {
+		t.Errorf("a positional file is not a big board:\n%s", view)
+	}
+}
