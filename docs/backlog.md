@@ -74,6 +74,66 @@ lenses — treat that as a signal.
     reliability table; baselines: constant rate and SigmaDefault-only. Turns every tuning.go
     constant from vibes into measurement, and gates which of the ideas above actually stay.
 
+## in-season — managing the team (scoped 2026-09-04, unbuilt)
+
+Drafted with pick6 in every 2026 league and the verdict was *"fine more or less — didn't agree
+with it most of the time, good enough, helped overall."* v1.0.0 is that board. The draft is
+three hours a year; the season is seventeen weeks of waivers, lineups and trades, and the tool
+goes quiet the moment the last pick lands. This is the note for what would fill those weeks,
+written so the next pass starts from measured shapes rather than guesses. Nothing here is
+built, and it would live under the same rules — no projections of our own, one binary, no
+server, lowercase.
+
+**The data is there, all of it unauthenticated (probed 2026-09-04).** Sleeper, per league:
+`/v1/league/<id>/rosters` (every team's `players`/`starters` — 16 and 10 in the user's rooms —
+plus `waiver_position`, `waiver_budget_used`, `total_moves`), `/matchups/<week>` (`starters`,
+`points`, `players_points`), `/transactions/<round>` (12 on file in round 1 of 2026 already:
+`type` free_agent/waiver/trade, `adds`/`drops` keyed player → roster, `settings.waiver_bid` for
+faab), `/users`, `/v1/state/nfl` (the current week) and `/v1/players/nfl/trending/add` — the
+market's own waiver signal, 643k adds on the top man in 24h. `settings.waiver_type` is 0 in two
+of the user's rooms and 2 in the third; read it, don't assume. The 2026 redraft rooms are
+`1389721431385845760`, `1388044281582743552`, `1388043417581285376`, each carrying a
+`previous_league_id` back to its 2025 room — seasons chain now, which the 2025 rooms never did.
+Two dynasty leagues besides, one full-ppr.
+
+Fpl draft, same host as the pick feed, nonce on every request as before:
+`league/{id}/element-status` (who owns whom, 44 kB), `draft/league/{id}/transactions` (the
+waiver and free-agent log: `element_in`/`element_out`/`entry`/`event`/`kind` f|w/`result` —
+note the path: `draft/{id}/transactions` and `league/{id}/transactions` both 404),
+`entry/{entry_id}/event/{gw}` (ANY manager's lineup, captain flags and all — public),
+`entry/{entry_id}/public`, `event/{gw}/live` (every player's points by stat, 411 kB), `game`
+(`current_event`, `waivers_processed`), `pl/event-status`. Only `entry/{id}/my-team` wants a
+token (403). One surprise, recorded not explained: `league/4250/details` answered
+`draft_status: "pre"` two weeks after the draft, with fifteen rounds of transactions on file.
+
+**What would earn its place, in the order it would help:**
+
+1. **`waivers`** — the free-agent pool ranked the way the board ranks the draft: value over
+   replacement × need, where need reads MY REAL ROSTER off the rosters endpoint rather than the
+   draft feed. The need/vor machinery exists; what's missing is a roster source that isn't a
+   draft and a value source that isn't draft morning. FantasyCalc's `values/current` reprices
+   weekly, and trending adds are the market's forecast of the window — the run detector's idea,
+   one week wide. Fpl's `draft_rank` does not reprice in-season (known); `event/{gw}/live`
+   totals are a published fact and the honest substitute, not a projection.
+2. **A lineup CHECKER, not an optimizer** — an empty starting slot, a starter on bye, a starter
+   whose `injury_status` is out, a starter fpl marks `i`/`s` or `chance_of_playing_next_round`
+   0. All published facts, and `Sidelined` already reads the fpl half. Start/sit by projection
+   is a projection in a trench coat and stays a non-goal.
+3. **Bye-week planner** — starters sharing a bye per week. `ByeConflictThreshold` is already the
+   sidebar's count; this is the same count with a week axis.
+4. **Trade pricing** — both sides on FantasyCalc value, which the board already imports. A
+   number, never a verdict.
+5. **Fpl waiver order** — `waiver_pick` per entry is in league details, `transaction_mode` says
+   waivers vs free-for-all, and the transactions log says what the room reaches for.
+
+**And a referee exists for the first time.** A waiver claim has a label the draft never had —
+what the man actually scored after it, public in `players_points` and `event/{gw}/live` by the
+following week, and nflverse season stats close the nfl side (see the parked over/under model
+below). So `waivers` could be graded the way `calibrate` graded survival, and should be, before
+its ranking is trusted.
+
+Not this: a start/sit model, a roster grade, anything that needs the user logged in.
+
 ## explicitly still parked
 
 - **ADP over/under-performance model** — labels now sourceable (nflverse public season

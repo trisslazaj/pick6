@@ -151,7 +151,8 @@ through; and **every rankings csv** in `~/.config/pick6/rankings/` (or `-ranking
 view of its own, shown exactly as the file ranks them: its order, its tiers, its opinions,
 with nothing added but each man's odds of reaching your pick and a strike once he is gone. The
 file you gave `fetch -rankings` is always there. A name the board does not know gets a `?`,
-not dropped.
+not dropped. A big board — one overall order with the positions mixed — prints flat in the
+file's order with the file's own numbers, and `p` filters it without renumbering.
 
 <img src="docs/shots/data-tab.svg" alt="the data tab">
 
